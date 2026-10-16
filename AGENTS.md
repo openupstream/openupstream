@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 Guidance for agents working in this repository. Human contributors: see
 CONTRIBUTING.md.
@@ -35,3 +35,6 @@ terms consistently in code, docs and issues.
 - Commit messages: imperative, summary under 72 characters.
 - The GitHub repository is public. Issues, PRs and comments are visible to
   everyone; do not create them without the maintainer's go-ahead.
+- After completing a task, recommend one concrete next step, usually the
+  next item in the build order in `ARCHITECTURE.md` or a follow-up the task
+  turned up.
