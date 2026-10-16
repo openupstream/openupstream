@@ -1,0 +1,172 @@
+/**
+ * The objects of the openupstream API. Terms follow GLOSSARY.md; the control
+ * plane's schema (control-plane/migrations) stores exactly these.
+ *
+ * Ids are UUIDs, timestamps RFC 3339 strings.
+ */
+
+export type Id = string;
+export type Timestamp = string;
+
+/** Compute Sites, where Databases and Services run. Both are in Germany. */
+export const COMPUTE_SITES = ['hetzner-fsn1', 'ovh-lim'] as const;
+export type Site = (typeof COMPUTE_SITES)[number];
+
+/** The customer: pays, receives one invoice, owns Projects. */
+export interface Account {
+    id: Id;
+    name: string;
+    createdAt: Timestamp;
+}
+
+/** A person who can sign in to an Account. Sign-in is madAuth's. */
+export interface Member {
+    id: Id;
+    accountId: Id;
+    /** The madAuth subject this Member signs in as. */
+    authSubject: string;
+    email: string;
+    createdAt: Timestamp;
+}
+
+/** The unit of isolation and lifecycle; deleting it deletes everything in it. */
+export interface Project {
+    id: Id;
+    accountId: Id;
+    /** DNS label, unique within the Account. */
+    name: string;
+    createdAt: Timestamp;
+}
+
+/** Postgres always runs with at least this much memory. */
+export const DATABASE_MIN_MEMORY_MB = 256;
+
+export interface Database {
+    id: Id;
+    projectId: Id;
+    /** DNS label, unique within the Project. */
+    name: string;
+    /** Where the primary runs when nothing has failed. */
+    homeSite: Site;
+    memoryMb: number;
+    storageGb: number;
+    createdAt: Timestamp;
+}
+
+export interface Bucket {
+    id: Id;
+    projectId: Id;
+    /** Globally unique: it is the hostname `<name>.s3.<customer domain>`. */
+    name: string;
+    createdAt: Timestamp;
+}
+
+export interface Service {
+    id: Id;
+    projectId: Id;
+    /** DNS label, unique within the Project. */
+    name: string;
+    /** The image reference as given, from any registry. */
+    image: string;
+    /** `sha256:…`, pinned when the image is deployed; null before the first deploy. */
+    imageDigest: string | null;
+    replicas: number;
+    memoryMb: number;
+    cpuMillicores: number;
+    /** The HTTP port the container listens on. */
+    port: number;
+    createdAt: Timestamp;
+}
+
+/**
+ * A Secret's value is write-only: the API accepts it and hands it to the
+ * Project's Services and jobs as an environment variable, but never returns it.
+ */
+export interface Secret {
+    id: Id;
+    projectId: Id;
+    /** Environment variable name, unique within the Project. */
+    name: string;
+    createdAt: Timestamp;
+    updatedAt: Timestamp;
+}
+
+export interface SecretInput {
+    name: string;
+    value: string;
+}
+
+/** The TXT record that proves an Account owns a custom domain. */
+export interface TxtRecord {
+    name: string;
+    value: string;
+}
+
+export type DomainVerification =
+    | { state: 'pending'; txtRecord: TxtRecord }
+    | { state: 'verified'; verifiedAt: Timestamp };
+
+interface DomainBase {
+    id: Id;
+    projectId: Id;
+    /** Lowercase hostname. Only one verified Domain per hostname exists. */
+    hostname: string;
+    createdAt: Timestamp;
+}
+
+/** The Project's hostname under the platform's customer domain; always routed. */
+export interface DefaultDomain extends DomainBase {
+    kind: 'default';
+}
+
+/**
+ * A hostname the Account claims. Routed only once verified; any number of
+ * Projects can hold a pending claim, the first proof wins.
+ */
+export interface CustomDomain extends DomainBase {
+    kind: 'custom';
+    verification: DomainVerification;
+}
+
+export type Domain = DefaultDomain | CustomDomain;
+
+/** Where the TXT ownership proof for `hostname` has to be published. */
+export function txtRecordName(hostname: string): string {
+    return `_openupstream.${hostname}`;
+}
+
+export type RouteTarget =
+    | { kind: 'bucket'; bucketId: Id; spaFallback: boolean }
+    | { kind: 'service'; serviceId: Id };
+
+/**
+ * One entry under a Domain: everything below `pathPrefix` goes to a Bucket or
+ * a Service of the Domain's Project.
+ */
+export interface Route {
+    id: Id;
+    domainId: Id;
+    /** `/` or `/segment[/segment…]`, no trailing slash. Unique per Domain. */
+    pathPrefix: string;
+    target: RouteTarget;
+    createdAt: Timestamp;
+}
+
+export const RESOURCE_KINDS = ['database', 'bucket', 'service'] as const;
+export type ResourceKind = (typeof RESOURCE_KINDS)[number];
+
+export const USAGE_UNITS = ['cpu_seconds', 'memory_gb_hours', 'storage_gb_hours', 'egress_gb'] as const;
+export type UsageUnit = (typeof USAGE_UNITS)[number];
+
+/** A Resource consumed `quantity` of `unit` between `intervalStart` and `intervalEnd`. */
+export interface UsageEvent {
+    id: string;
+    accountId: Id;
+    projectId: Id;
+    resource: { kind: ResourceKind; id: Id };
+    unit: UsageUnit;
+    quantity: number;
+    intervalStart: Timestamp;
+    intervalEnd: Timestamp;
+    recordedAt: Timestamp;
+}

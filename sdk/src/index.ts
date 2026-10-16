@@ -10,15 +10,7 @@
 
 export const SDK_VERSION = '0.0.0';
 
-/** Compute sites, where databases and services run. Both are in Germany. */
-export type Site = 'hetzner-fsn1' | 'ovh-lim';
-
-/** A route table entry: everything under `prefix` on `domain` goes to `target`. */
-export interface Route {
-    domain: string;
-    prefix: string;
-    target: { kind: 'service'; service: string } | { kind: 'bucket'; bucket: string; spaFallback?: boolean };
-}
+export * from './model.js';
 
 export interface ClientOptions {
     baseUrl?: string;

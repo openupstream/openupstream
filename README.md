@@ -62,6 +62,9 @@ npm run build
 npm test
 ```
 
+The control plane's tests need Docker, or a Postgres server in
+`TEST_DATABASE_URL`; see [control-plane/README.md](control-plane/README.md).
+
 Each workspace has its own README with the parts that are specific to it.
 
 ## License

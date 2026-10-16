@@ -7,15 +7,27 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist",
+    "migrations"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test --import tsx src/"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "test": "node --test --import tsx 'src/**/*.test.ts'",
+    "migrate": "node-pg-migrate --migrations-dir migrations --migrations-table pgmigrations",
+    "migrate:create": "node-pg-migrate create --migrations-dir migrations --migration-file-language sql"
   },
   "devDependencies": {
+    "@testcontainers/postgresql": "^12.2.1",
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.23.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@openupstream/sdk": "^0.0.0",
+    "node-pg-migrate": "^9.0.0",
+    "pg": "^8.23.1"
   }
 }
