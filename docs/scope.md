@@ -14,8 +14,10 @@ deletes it all.
 
 1. **Postgres**: one Postgres instance per Database via CloudNativePG, the
    primary in its Home site (Falkenstein by default) and a streaming standby
-   in the Frankfurt region (async), automatic failover, PgBouncer, always on
-   with a 256 MB floor, backups and point-in-time recovery, pgvector enabled.
+   in the Frankfurt region (async), automatic failover, PgBouncer
+   (transaction pooling; session features such as `LISTEN` need a direct
+   connection), always on with a 256 MB floor, backups and point-in-time
+   recovery, pgvector enabled.
 2. **Object storage**: S3-compatible Buckets (Garage), every object stored in
    three Sites. Reads and writes keep working when one Site is down.
 3. **Static sites**: a public Bucket served at a Domain through the routing

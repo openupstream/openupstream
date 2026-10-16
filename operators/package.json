@@ -7,15 +7,23 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test --import tsx 'src/**/*.test.ts'"
+    "generate": "tsx scripts/generate-crd-types.ts",
+    "build": "npm run generate && tsc -p tsconfig.json",
+    "typecheck": "npm run generate && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "test": "npm run generate && node --test --import tsx 'src/**/*.test.ts'"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "json-schema-to-typescript": "^16.0.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "yaml": "^2.9.1"
+  },
+  "dependencies": {
+    "@openupstream/sdk": "^0.0.0"
   }
 }

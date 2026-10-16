@@ -150,6 +150,14 @@ Thin reconcilers for the things no off-the-shelf operator does:
   PgBouncer `Pooler`, backup schedule
 - Secrets → a Kubernetes `Secret` in the Project's namespace
 
+The step from a control plane row to Kubernetes objects is a pure function
+that returns the objects or a list of errors; the reconcile loop around it
+only applies and compares. The CRDs of CloudNativePG and the Barman Cloud
+Plugin are vendored in `operators/crds` at the versions we run, and their
+TypeScript types are generated from them at build time (not checked in), so
+a misspelt or removed field fails the typecheck. There is no Kubernetes
+client library yet; it is chosen with the reconcile loop.
+
 ## Products
 
 ### Postgres
@@ -157,10 +165,20 @@ Thin reconcilers for the things no off-the-shelf operator does:
 - One CloudNativePG `Cluster` per Database, two instances: the primary in the
   Database's Home site (`hetzner-fsn1` by default), a streaming standby in
   the other compute Site. Required pod anti-affinity on
-  `topology.kubernetes.io/zone`, where each Site is one zone.
-- The third Site's node carries a `NoSchedule` taint, and Databases and
-  Services have required node affinity to compute Sites, so nothing customer
-  facing ever lands on it, even when a compute Site is full or down.
+  `topology.kubernetes.io/zone`, where each Site is one zone. CloudNativePG
+  cannot place one instance on its own; it creates the primary first, and a
+  preferred node affinity for the Home site puts it there, so the
+  anti-affinity puts the standby in the other Site.
+- The third Site's node carries the taint
+  `openupstream.io/third-site=true:NoSchedule`, and Databases and Services
+  have required node affinity to compute Sites, so nothing customer facing
+  ever lands on it, even when a compute Site is full or down.
+- Kubernetes objects are named by id, not by name: the Cluster is
+  `db-<database id>` in the namespace `project-<project id>`. Project and
+  Database names are in the labels `openupstream.io/project-name` and
+  `openupstream.io/database-name`, next to `…/project-id` and
+  `…/database-id`; the Cluster passes all four on to its pods, Services and
+  volumes, so usage can be attributed to the Database.
 - Failover is automatic inside the one k3s cluster. CloudNativePG's primary
   isolation check (on by default) shuts down a primary that can reach neither
   the API server nor its standby. There is no CloudNativePG replica cluster.
@@ -169,10 +187,15 @@ Thin reconcilers for the things no off-the-shelf operator does:
 - Storage is local NVMe through TopoLVM, which enforces the requested volume
   size and supports resizing.
 - PgBouncer through a CloudNativePG `Pooler` of type `rw`, so it follows the
-  primary.
-- Always on, 256 MB memory floor, pgvector enabled. The image is ours
-  (`images/postgres`), so the DB tier does not run under gVisor; only the
-  customer's SQL runs inside.
+  primary: `db-<database id>-pooler`, two instances with one per compute
+  Site, transaction pooling with `max_prepared_statements` so drivers'
+  prepared statements work. Session features (`LISTEN`, advisory locks,
+  `SET`) need a direct connection to the Cluster.
+- Always on, 256 MB memory floor, pgvector enabled (created in the
+  application database at bootstrap). The memory limit is also the request;
+  `shared_buffers` is a quarter of it. The image is ours (`images/postgres`),
+  so the DB tier does not run under gVisor; only the customer's SQL runs
+  inside.
 
 ### Object storage
 
@@ -240,7 +263,8 @@ Thin reconcilers for the things no off-the-shelf operator does:
 
 ## Project isolation
 
-- One Kubernetes namespace per Project, default-deny NetworkPolicy, also
+- One Kubernetes namespace per Project, `project-<project id>` (Project names
+  are only unique per Account and can change), default-deny NetworkPolicy, also
   between Projects of the same Account. Ingress only from Traefik; Projects
   reach each other only through public Routes.
 - Egress to the internet is allowed, with a per-pod bandwidth limit.
@@ -306,6 +330,12 @@ Thin reconcilers for the things no off-the-shelf operator does:
   encryption; whether SSE-C works on Hetzner Object Storage is an open
   question.
 - Retention covers a few weeks of point-in-time recovery.
+- Each Database has its own `ObjectStore` with the plugin as its WAL
+  archiver, archiving to `s3://<bucket>/project-<project id>/db-<database
+  id>/`. Ids, not names: a new Database under an old name never finds the old
+  one's archive. The credentials are a Secret in the Project's namespace.
+- A `ScheduledBackup` takes base backups, the first right after creation,
+  from the standby when there is one.
 
 ## Observability and customer logs
 
@@ -359,6 +389,12 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 37 | Pending custom-domain claims do not reserve a hostname; only verified and default Domains are unique | first claim reserves the hostname | a reservation without proof would let anyone block a hostname they do not own |
 | 38 | Usage events have no foreign keys, carry the Account and outlive their Project; one event per Resource, unit and interval start | cascade with the Project; no uniqueness | usage between the last rollup and a deletion must still be billed; append-only rows cannot be corrected, so a retried emit must not create a second one |
 | 39 | Secrets: AES-256-GCM for both layers, associated data binding values to Project and name, KEK id stored per data key | one KEK-encrypted value per Secret; libsodium | `node:crypto` only; the binding stops copied rows from decrypting elsewhere; the id allows KEK rotation by rewrapping |
+| 40 | CRD types generated with json-schema-to-typescript from upstream CRDs vendored in `operators/crds`; generated code not checked in | hand-written types; generated code checked in; `@kubernetes-models` classes | field names and enums come from the version we run, and typos fail the typecheck; types only, no runtime dependency; an upgrade is reviewed as a CRD diff, not thousands of generated lines |
+| 41 | No Kubernetes client library until the reconcile loop | `@kubernetes/client-node` now | the first part of each operator is pure functions returning plain objects; the client is picked when there is a cluster to test it against |
+| 42 | Kubernetes objects named by id (`project-<project id>`, `db-<database id>`); names only in labels | names in object names; a Service named after the Database as an alias | Project names are only unique per Account and can change; CloudNativePG caps Cluster names at 50 characters; a new Database under an old name must not reuse the old backup folder |
+| 43 | PgBouncer in transaction mode with `max_prepared_statements`, one Pooler instance per compute Site | session mode; a single Pooler instance | pooling only saves connections in transaction mode, which matters at a 256 MB floor; one instance per Site keeps the Pooler up when a Site fails |
+| 44 | Primary placed in the Home site by a preferred node affinity; required anti-affinity on the zone places the standby | per-instance placement (CloudNativePG has none); a switchover after creation | CloudNativePG creates the primary first, so the preference decides where it lands |
+| 45 | The third Site's taint is `openupstream.io/third-site=true:NoSchedule`; customer workloads never tolerate it and require a compute Site | node affinity alone | either one alone keeps customer pods off the third Site; both guard against a mistake in the other |
 
 ## Open questions
 
@@ -396,7 +432,11 @@ Decisions table once it is settled.
    step 1 on. Done: `sdk/src/model.ts`, `control-plane/migrations`,
    `control-plane/src/secrets`.
 1. Postgres: CloudNativePG, PgBouncer, backups to Hetzner Object Storage, a
-   tested failover (a whole Site down) and a tested restore.
+   tested failover (a whole Site down) and a tested restore. Started: the
+   manifests for a Database (`operators/src/databases`). Next, with a
+   cluster: install CloudNativePG and the Barman Cloud Plugin, the reconcile
+   loop and the backup credentials Secret per Project namespace, then the
+   failover and restore tests.
 2. Object storage and static sites: Garage, routing table, Traefik,
    cert-manager.
 3. Containers, Service mode.
