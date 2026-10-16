@@ -35,7 +35,7 @@ sdk/             @openupstream/sdk, TypeScript client used by cli and dashboard
 operators/       Kubernetes reconcilers (routing table → IngressRoutes, tenant → CloudNativePG)
 images/          Dockerfiles for our own images (tenant Postgres, PgBouncer)
 infra/           The cluster itself: Terraform for Hetzner, Helm values, Garage config
-docs/            Architecture, decisions, runbooks
+docs/            Architecture, decision records (adr/), runbooks
 ```
 
 ## Stack

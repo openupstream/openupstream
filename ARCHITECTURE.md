@@ -89,7 +89,7 @@ Client-side encryption; retention long enough for a few weeks of PITR.
 
 ## Decisions
 
-Short form here; longer ADRs go in `docs/decisions/`.
+Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 
 | # | Decision | Alternatives considered | Why |
 | --- | --- | --- | --- |
@@ -103,7 +103,14 @@ Short form here; longer ADRs go in `docs/decisions/`.
 | 8 | No queue product | SQS-like service | `SKIP LOCKED` on the customer's Postgres covers the volume of the target customers and gives transactional enqueue for free |
 | 9 | Static sites as a bucket feature | separate product, dropping it | avoids CORS for every SPA+API customer; it is a Caddy/Traefik rule on top of storage that exists anyway |
 | 10 | CockroachDB, Nomad for DB, Redis, Elastic excluded | — | their licenses forbid offering them as a managed service |
-| 11 | AGPL-3.0-only | Apache-2.0 | the business is running this code as a service; AGPL keeps a larger hoster from doing the same without contributing back |
+| 11 | AGPL-3.0-only ([ADR-0001](docs/adr/0001-agpl-license.md)) | Apache-2.0 | the business is running this code as a service; AGPL keeps a larger hoster from doing the same without contributing back |
+
+## Open questions
+
+Undecided points that block or shape the design. Each one moves to the
+Decisions table once it is settled.
+
+None recorded yet.
 
 ## Build order
 
