@@ -44,7 +44,7 @@ CONTRIBUTING.md. The repository layout is in README.md.
 ## Glossary
 
 `GLOSSARY.md` at the repository root holds the domain language (account,
-tenant, routing table, …). Terms only, no implementation details. Use these
+project, routing table, …). Terms only, no implementation details. Use these
 terms consistently in code, docs and issues.
 
 ## Workflow

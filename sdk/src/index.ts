@@ -10,8 +10,8 @@
 
 export const SDK_VERSION = '0.0.0';
 
-/** Regions are Hetzner datacenters. Both are in Germany. */
-export type Region = 'fsn1' | 'nbg1';
+/** Compute sites, where databases and services run. Both are in Germany. */
+export type Site = 'hetzner-fsn1' | 'ovh-lim';
 
 /** A route table entry: everything under `prefix` on `domain` goes to `target`. */
 export interface Route {

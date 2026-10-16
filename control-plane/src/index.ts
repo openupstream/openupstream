@@ -1,7 +1,7 @@
 /**
  * openupstream control plane.
  *
- * Owns accounts, tenants, databases, buckets, services, the routing table,
+ * Owns accounts, projects, databases, buckets, services, the routing table,
  * secrets, API keys and usage events. Provisions by writing Kubernetes
  * objects and leaving reconciliation to the operators.
  *
