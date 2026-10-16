@@ -87,8 +87,11 @@ Germany.
   IPs with flannel's `wireguard-native` backend (MTU 1420), so all pod traffic
   between Sites is encrypted. NetworkPolicy is enforced by k3s's built-in
   controller.
-- A host firewall on every node allows only WireGuard, 80/443 and Tailscale
-  from the internet.
+- A host firewall on every node allows WireGuard, 80/443 and Tailscale from
+  the internet, and the node-to-node ports (k3s API 6443, etcd 2379–2380,
+  kubelet 10250, Garage RPC 3901) only from the other two nodes' public IPs.
+  These control-plane connections are TLS (k3s, etcd) or Garage's own
+  encrypted RPC; flannel's WireGuard carries pod traffic only.
 - gVisor (`runsc`) is added by hand to k3s's containerd config template and
   exposed as the `gvisor` RuntimeClass; k3s does not detect it on its own.
 - Tailscale is for admin access only (Kubernetes API, SSH, Grafana). It is
@@ -99,7 +102,10 @@ Germany.
 - Traefik serves traffic in both compute Sites at the same time
   (active-active). Either one routes to Services and Buckets in either Site.
 - `ingress.<customer domain>` has A and AAAA records for both compute Sites,
-  TTL 60 s. Custom domains CNAME to it; apex domains copy its A/AAAA records.
+  TTL 60 s. Custom domains CNAME to it. An apex domain cannot be a CNAME, and
+  A/AAAA records copied into the customer's zone would never drop a failed
+  Site, so apex domains need CNAME flattening (ALIAS/ANAME) at the customer's
+  DNS provider, or a `www` Domain with the apex redirecting to it.
 - bunny.net DNS health-checks both Sites over HTTP every 30 s from three
   regions and drops a failed Site's records. The checks run outside our
   Sites and do not depend on any hosting provider's API.
@@ -144,6 +150,9 @@ Thin reconcilers for the things no off-the-shelf operator does:
   Database's Home site (`hetzner-fsn1` by default), a streaming standby in
   the other compute Site. Required pod anti-affinity on
   `topology.kubernetes.io/zone`, where each Site is one zone.
+- The third Site's node carries a `NoSchedule` taint, and Databases and
+  Services have required node affinity to compute Sites, so nothing customer
+  facing ever lands on it, even when a compute Site is full or down.
 - Failover is automatic inside the one k3s cluster. CloudNativePG's primary
   isolation check (on by default) shuts down a primary that can reach neither
   the API server nor its standby. There is no CloudNativePG replica cluster.

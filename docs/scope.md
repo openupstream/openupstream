@@ -3,7 +3,8 @@
 Terms are defined in [GLOSSARY.md](../GLOSSARY.md). Customer data stays in
 the EU; today everything runs in Germany, in three Sites at three providers
 (Falkenstein, Frankfurt region, Nuremberg). Losing any one of them does not
-stop your Databases, Buckets or Services.
+stop your Databases or Buckets, nor Services with two or more replicas;
+single-replica Services restart in the other Site.
 
 ## Offered
 

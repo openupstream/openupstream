@@ -99,5 +99,5 @@ over a time interval.
 
 **Egress**:
 Bytes the platform sends to the internet in HTTP responses for a Project's
-Domains. Traffic inside the platform and connections a Service opens to the
-internet are not Egress.
+Domains and Buckets. Traffic inside the platform and connections a Service
+opens to the internet are not Egress.
