@@ -127,6 +127,14 @@ usage events. Provisioning is done by writing Kubernetes objects
 and letting the operators and controllers reconcile. State lives in its own
 Database on the cluster, provisioned the same way as a customer's.
 
+The schema is plain SQL migrations in `control-plane/migrations`, applied with
+node-pg-migrate; queries go through `pg` (node-postgres). The schema enforces
+the data model's invariants itself: a hostname is routed for at most one
+Domain, Routes only target Resources of their Domain's Project, deleting a
+Project cascades to everything in it, an Account with Projects cannot be
+deleted, and usage events are append-only. Its tests run against a real
+Postgres in Docker. The API types are in `sdk/src/model.ts`.
+
 The dashboard (`dashboard/`) is a Next.js app on the same API.
 
 Sign-in for Members and API keys for `oup` and the SDK come from
@@ -174,7 +182,8 @@ Thin reconcilers for the things no off-the-shelf operator does:
   API.
 - The S3 API is served through Traefik, virtual-hosted style only
   (`<bucket>.s3.<customer domain>`), so every request is attributable to one
-  Bucket for metering.
+  Bucket for metering. Bucket names are hostnames, so they are unique across
+  all Projects.
 - No bucket event notifications (Garage does not implement them).
 
 ### Static sites
@@ -219,6 +228,13 @@ Thin reconcilers for the things no off-the-shelf operator does:
 - A custom domain is routed and gets a certificate only after the Account
   proves ownership with a TXT record at `_openupstream.<domain>`. A Domain
   appears in the routing table at most once; a new claim needs a new proof.
+  A pending claim does not reserve the hostname: several Projects may claim
+  it, the first to publish the proof gets it, so nobody can squat a hostname
+  they do not own.
+- A Route sends a path prefix (`/` or `/a/b`, no trailing slash) to a Bucket,
+  optionally with SPA fallback, or to a Service. A Bucket or Service that a
+  Route still targets cannot be deleted; deleting a Domain deletes its
+  Routes.
 - Traefik and cert-manager do ingress and TLS; certificates for custom
   domains use HTTP-01.
 
@@ -231,12 +247,18 @@ Thin reconcilers for the things no off-the-shelf operator does:
 - One-off jobs are an API call; customers cannot spawn containers from inside
   containers.
 - Deleting a Project deletes its namespace and every Resource, Secret and
-  Domain in it.
+  Domain in it. Its usage events are kept for billing. An Account can only be
+  deleted once it has no Projects left.
 
 ## Secrets
 
 - Stored in the control plane's Database, each value encrypted with a
   per-Project data key; data keys are wrapped by one key-encryption key.
+  Both layers are AES-256-GCM. The associated data binds a wrapped data key
+  to its Project and a value to its Project and name, so copying rows
+  between Projects does not make them readable. Each wrapped data key
+  records the id of its key-encryption key, so the key-encryption key can be
+  rotated by rewrapping the data keys without touching the values.
 - The key-encryption key is a Kubernetes Secret in the control plane's
   namespace; k3s secrets encryption at rest is on.
 - The Secrets operator renders a Kubernetes `Secret` into the Project's
@@ -250,7 +272,9 @@ Thin reconcilers for the things no off-the-shelf operator does:
 
 - Usage events are written from the first deployment on, even with a single
   customer, to an append-only table in the control plane's Database, keyed by
-  Project and Resource.
+  Project and Resource. A trigger rejects updates, deletes and truncation.
+  Events have no foreign keys and carry the Account: the last hours of a
+  deleted Resource or Project are still billed.
 - Units:
   - `cpu_seconds`: actual consumption, summed over all pods of a Resource
     (both Database instances, all replicas of a Service).
@@ -328,6 +352,11 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 32 | bunny.net DNS for our zones, with its health checks | Hetzner DNS plus our own watcher; Cloudflare | health checks run outside our Sites and outside every hosting provider's API; EU company; about $1/month. A cert-manager DNS-01 webhook for bunny.net is checked in build step 2 |
 | 33 | Before revenue: cloud VMs created and destroyed per working session; the target setup (about €150–165/month) from when the demo apps pass or the first customer arrives | dedicated servers from day one | the cluster does not need to run 24/7 while it is being built; hourly billing keeps the cost down |
 | 34 | Ingress is active-active: A/AAAA records for both compute Sites, failed Site dropped by DNS health checks | failover IP (Hetzner Floating or Robot IP), BGP anycast, Cloudflare Load Balancing | an IP cannot move between providers; anycast needs a leased /24 (about €150/month); Cloudflare would terminate every customer's TLS in a US company; AWS's own load balancers use the same multi-A pattern |
+| 35 | Control plane schema as plain SQL migrations run by node-pg-migrate; `pg` as the Postgres client | own migration runner, Drizzle, Kysely | triggers, partial unique indexes and composite foreign keys are written in SQL anyway; node-pg-migrate adds locking, ordering checks and a CLI on top of `pg`, the standard driver |
+| 36 | Invariants enforced in the schema, tested against real Postgres in Docker (testcontainers locally, a service container in CI) | enforce in application code; PGlite in-process | constraints hold for every writer, including future operators and hand-run SQL; the tests exercise the Postgres version we run |
+| 37 | Pending custom-domain claims do not reserve a hostname; only verified and default Domains are unique | first claim reserves the hostname | a reservation without proof would let anyone block a hostname they do not own |
+| 38 | Usage events have no foreign keys, carry the Account and outlive their Project | cascade with the Project | usage between the last rollup and a deletion must still be billed |
+| 39 | Secrets: AES-256-GCM for both layers, associated data binding values to Project and name, KEK id stored per data key | one KEK-encrypted value per Secret; libsodium | `node:crypto` only; the binding stops copied rows from decrypting elsewhere; the id allows KEK rotation by rewrapping |
 
 ## Open questions
 
@@ -354,12 +383,16 @@ Decisions table once it is settled.
 7. **Project deletion grace period** and backup retention window, in days.
 8. **What ProjectMatch needs beyond v1**: an encrypt-only/decrypt-only key
    split like its KMS setup, and alerting to replace its CloudWatch alarm.
+9. **Member roles.** Every Member can act on all of the Account's Projects
+   today; whether there are roles (owner, billing, read-only) or per-Project
+   access is not decided.
 
 ## Build order
 
 0. Data model for Accounts and Projects, the routing table schema and the
    Secrets store. Everything hangs off them. Usage events are emitted from
-   step 1 on.
+   step 1 on. Done: `sdk/src/model.ts`, `control-plane/migrations`,
+   `control-plane/src/secrets`.
 1. Postgres: CloudNativePG, PgBouncer, backups to Hetzner Object Storage, a
    tested failover (a whole Site down) and a tested restore.
 2. Object storage and static sites: Garage, routing table, Traefik,

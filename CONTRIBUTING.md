@@ -25,6 +25,9 @@ npm run build
 npm test
 ```
 
+`npm test` needs Docker running (or a Postgres in `TEST_DATABASE_URL`) for the
+control plane's database tests; see `control-plane/README.md`.
+
 ## Commit messages
 
 Imperative mood, one line summary under 72 characters, body if the why is not
