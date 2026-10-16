@@ -11,7 +11,7 @@ mistakes in `ARCHITECTURE.md` and `docs/`, and small, focused pull requests.
   one large one.
 - Every change that alters behaviour comes with a test.
 - Changes to architecture update `ARCHITECTURE.md` or add a record under
-  `docs/decisions/` in the same PR.
+  `docs/adr/` in the same PR.
 - By contributing you agree that your contribution is licensed under the
   AGPL-3.0-only, like the rest of the project.
 

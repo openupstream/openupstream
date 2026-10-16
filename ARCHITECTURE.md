@@ -89,7 +89,7 @@ Client-side encryption; retention long enough for a few weeks of PITR.
 
 ## Decisions
 
-Short form here; longer ADRs go in `docs/decisions/`.
+Short form here; longer ADRs go in `docs/adr/`.
 
 | # | Decision | Alternatives considered | Why |
 | --- | --- | --- | --- |
