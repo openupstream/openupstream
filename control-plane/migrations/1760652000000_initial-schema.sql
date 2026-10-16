@@ -79,14 +79,17 @@ create table project_data_keys (
     created_at timestamptz not null default now()
 );
 
+-- A data key that still protects Secrets cannot be deleted (checked at commit,
+-- so deleting the Project, which removes both, is not refused).
 create table secrets (
     id uuid primary key default gen_random_uuid(),
-    project_id uuid not null references project_data_keys (project_id) on delete cascade,
+    project_id uuid not null references projects (id) on delete cascade,
     name text not null check (name ~ '^[A-Za-z_][A-Za-z0-9_]{0,254}$'),
     ciphertext bytea not null,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now(),
-    unique (project_id, name)
+    unique (project_id, name),
+    foreign key (project_id) references project_data_keys (project_id) deferrable initially deferred
 );
 
 -- A Domain is either the Project's default hostname (always verified) or a
@@ -145,7 +148,8 @@ create index routes_service_id_idx on routes (service_id) where service_id is no
 -- Usage events are append-only and outlive their Project and Resource: the
 -- last hours of a deleted Resource are still billed. account_id is kept so the
 -- rollup can bill an Account after the Project is gone. No foreign keys, on
--- purpose.
+-- purpose. One event per Resource, unit and interval start, so an emitter
+-- that retries (insert … on conflict do nothing) cannot bill twice.
 create table usage_events (
     id bigint generated always as identity primary key,
     account_id uuid not null,
@@ -157,7 +161,8 @@ create table usage_events (
     interval_start timestamptz not null,
     interval_end timestamptz not null,
     recorded_at timestamptz not null default now(),
-    check (interval_end > interval_start)
+    check (interval_end > interval_start),
+    unique (resource_id, unit, interval_start)
 );
 
 create index usage_events_interval_start_idx on usage_events (interval_start);

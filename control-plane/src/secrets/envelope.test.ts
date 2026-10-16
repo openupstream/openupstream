@@ -107,4 +107,6 @@ test('a KEK must be 32 bytes and have an id', () => {
     assert.equal(parseKeyEncryptionKey('kek-1', valid).ok, true);
     assert.equal(parseKeyEncryptionKey('', valid).ok, false);
     assert.equal(parseKeyEncryptionKey('kek-1', randomBytes(16).toString('base64')).ok, false);
+    assert.equal(parseKeyEncryptionKey('kek-1', `${valid.slice(0, 10)}!${valid.slice(10)}`).ok, false);
+    assert.equal(parseKeyEncryptionKey('kek-1', randomBytes(32).toString('base64url')).ok, false);
 });

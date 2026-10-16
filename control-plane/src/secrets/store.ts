@@ -68,7 +68,11 @@ async function readDataKey(
     return dataKey.ok ? dataKey : err({ kind: 'envelope', projectId, error: dataKey.error });
 }
 
-/** The Project's data key, created on first use. Safe against concurrent first use. */
+/**
+ * The Project's data key, created on first use. Safe against concurrent first
+ * use. A Project that does not exist gets no key; one deleted concurrently can
+ * still make a later statement fail with a foreign key error.
+ */
 async function dataKeyFor(db: Db, kek: KeyEncryptionKey, projectId: string): Promise<Result<DataKey, SecretStoreError>> {
     const existing = await readDataKey(db, kek, projectId);
     if (!existing.ok) {
@@ -79,7 +83,8 @@ async function dataKeyFor(db: Db, kek: KeyEncryptionKey, projectId: string): Pro
     }
     const wrapped = wrapDataKey(kek, generateDataKey(), projectId);
     await db.query(
-        `insert into project_data_keys (project_id, kek_id, wrapped_key) values ($1, $2, $3)
+        `insert into project_data_keys (project_id, kek_id, wrapped_key)
+         select id, $2, $3 from projects where id = $1
          on conflict (project_id) do nothing`,
         [projectId, wrapped.kekId, wrapped.wrapped],
     );
@@ -99,9 +104,6 @@ export async function putSecret(
 ): Promise<Result<Secret, SecretStoreError>> {
     if (!SECRET_NAME.test(input.name)) {
         return err({ kind: 'invalid-name', name: input.name });
-    }
-    if (!(await projectExists(db, projectId))) {
-        return err({ kind: 'project-not-found', projectId });
     }
     const dataKey = await dataKeyFor(db, kek, projectId);
     if (!dataKey.ok) {
@@ -144,7 +146,7 @@ export async function readSecretValues(
         return dataKey;
     }
     if (!dataKey.value) {
-        return ok(new Map());
+        return (await projectExists(db, projectId)) ? ok(new Map()) : err({ kind: 'project-not-found', projectId });
     }
     const result = await db.query<{ name: string; ciphertext: Buffer }>(
         'select name, ciphertext from secrets where project_id = $1 order by name',

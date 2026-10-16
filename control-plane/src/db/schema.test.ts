@@ -332,6 +332,17 @@ describe('Usage events', () => {
         await rejectsWith(insertEvent('cpu_seconds', 1, 'service', "interval '0'"), CHECK_VIOLATION);
     });
 
+    test('an event is recorded once per Resource, unit and interval start', async () => {
+        const insert = () =>
+            db.pool.query(
+                `insert into usage_events (account_id, project_id, resource_kind, resource_id, unit, quantity, interval_start, interval_end)
+                 values ($1, $1, 'service', $1, 'cpu_seconds', 3, '2026-10-17T10:00:00Z', '2026-10-17T11:00:00Z')`,
+                ['6a1d1f9e-0c55-4b8e-9d0c-3c7a2e1f5b00'],
+            );
+        await insert();
+        await rejectsWith(insert(), UNIQUE_VIOLATION);
+    });
+
     test('usage events are append-only', async () => {
         await insertEvent('egress_gb', 2);
         await rejectsWith(db.pool.query('update usage_events set quantity = 0'), RESTRICT_VIOLATION);

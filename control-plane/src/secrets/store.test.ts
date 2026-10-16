@@ -1,6 +1,7 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
+import pg from 'pg';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
 import type { KeyEncryptionKey } from './envelope.js';
 import { deleteSecret, listSecrets, putSecret, readSecretValues } from './store.js';
@@ -99,10 +100,21 @@ test('a Secret needs an environment variable name and an existing Project', asyn
         error: { kind: 'invalid-name', name: '1PASSWORD' },
     });
     const missing = randomUUID();
-    assert.deepEqual(await putSecret(db.pool, kek, missing, { name: 'TOKEN', value: 'x' }), {
-        ok: false,
-        error: { kind: 'project-not-found', projectId: missing },
-    });
+    const notFound = { ok: false, error: { kind: 'project-not-found', projectId: missing } };
+    assert.deepEqual(await putSecret(db.pool, kek, missing, { name: 'TOKEN', value: 'x' }), notFound);
+    assert.deepEqual(await readSecretValues(db.pool, kek, missing), notFound);
+    const keys = await db.pool.query('select 1 from project_data_keys where project_id = $1', [missing]);
+    assert.equal(keys.rowCount, 0);
+});
+
+test('a data key that still protects Secrets cannot be deleted', async () => {
+    const projectId = await createProject();
+    await putSecret(db.pool, kek, projectId, { name: 'TOKEN', value: 'x' });
+    await assert.rejects(
+        db.pool.query('delete from project_data_keys where project_id = $1', [projectId]),
+        (error: unknown) => error instanceof pg.DatabaseError && error.code === '23503',
+    );
+    assert.equal((await listSecrets(db.pool, projectId)).length, 1);
 });
 
 test('a Project without Secrets reads as empty; deleted Secrets are gone', async () => {

@@ -274,7 +274,9 @@ Thin reconcilers for the things no off-the-shelf operator does:
   customer, to an append-only table in the control plane's Database, keyed by
   Project and Resource. A trigger rejects updates, deletes and truncation.
   Events have no foreign keys and carry the Account: the last hours of a
-  deleted Resource or Project are still billed.
+  deleted Resource or Project are still billed. There is at most one event
+  per Resource, unit and interval start, so an emitter can retry without
+  billing twice.
 - Units:
   - `cpu_seconds`: actual consumption, summed over all pods of a Resource
     (both Database instances, all replicas of a Service).
@@ -355,7 +357,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 35 | Control plane schema as plain SQL migrations run by node-pg-migrate; `pg` as the Postgres client | own migration runner, Drizzle, Kysely | triggers, partial unique indexes and composite foreign keys are written in SQL anyway; node-pg-migrate adds locking, ordering checks and a CLI on top of `pg`, the standard driver |
 | 36 | Invariants enforced in the schema, tested against real Postgres in Docker (testcontainers locally, a service container in CI) | enforce in application code; PGlite in-process | constraints hold for every writer, including future operators and hand-run SQL; the tests exercise the Postgres version we run |
 | 37 | Pending custom-domain claims do not reserve a hostname; only verified and default Domains are unique | first claim reserves the hostname | a reservation without proof would let anyone block a hostname they do not own |
-| 38 | Usage events have no foreign keys, carry the Account and outlive their Project | cascade with the Project | usage between the last rollup and a deletion must still be billed |
+| 38 | Usage events have no foreign keys, carry the Account and outlive their Project; one event per Resource, unit and interval start | cascade with the Project; no uniqueness | usage between the last rollup and a deletion must still be billed; append-only rows cannot be corrected, so a retried emit must not create a second one |
 | 39 | Secrets: AES-256-GCM for both layers, associated data binding values to Project and name, KEK id stored per data key | one KEK-encrypted value per Secret; libsodium | `node:crypto` only; the binding stops copied rows from decrypting elsewhere; the id allows KEK rotation by rewrapping |
 
 ## Open questions

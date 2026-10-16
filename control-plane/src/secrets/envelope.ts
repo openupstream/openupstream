@@ -20,6 +20,8 @@ const KEY_BYTES = 32;
 const NONCE_BYTES = 12;
 const TAG_BYTES = 16;
 const FORMAT_VERSION = 1;
+/** 32 bytes in standard base64: 43 characters and one `=`. */
+const KEK_BASE64 = /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/;
 
 export interface KeyEncryptionKey {
     /** Stored next to every data key it wraps, so the KEK can be rotated. */
@@ -50,14 +52,15 @@ export type EnvelopeError =
 
 /** Reads a KEK from its base64 encoding (32 random bytes). */
 export function parseKeyEncryptionKey(id: string, base64: string): Result<KeyEncryptionKey, EnvelopeError> {
-    const key = Buffer.from(base64, 'base64');
     if (id.length === 0) {
         return err({ kind: 'invalid-key', message: 'the key-encryption key needs an id' });
     }
-    if (key.length !== KEY_BYTES) {
-        return err({ kind: 'invalid-key', message: `the key-encryption key must be ${KEY_BYTES} bytes, got ${key.length}` });
+    // Buffer.from skips characters that are not base64, so check the encoding
+    // first: a mangled key must not decode to a different valid one.
+    if (!KEK_BASE64.test(base64)) {
+        return err({ kind: 'invalid-key', message: `the key-encryption key must be ${KEY_BYTES} bytes in standard base64` });
     }
-    return ok({ id, key });
+    return ok({ id, key: Buffer.from(base64, 'base64') });
 }
 
 export function generateDataKey(): DataKey {
@@ -130,8 +133,10 @@ function open(key: Buffer, sealed: Buffer, aad: Buffer): Result<Buffer, Envelope
         .setAAD(aad)
         .setAuthTag(tag);
     const plaintext = decipher.update(ciphertext);
-    // node:crypto reports a failed GCM check only by throwing from final();
-    // this is the one place that turns it into a result.
+    // node:crypto has no non-throwing GCM verify: it reports a failed check
+    // only by throwing from final(). This is the one accepted exception to the
+    // no-try-catch-for-branching rule in AGENTS.md; it turns the throw into a
+    // result right here.
     try {
         return ok(Buffer.concat([plaintext, decipher.final()]));
     } catch {
