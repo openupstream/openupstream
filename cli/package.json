@@ -1,0 +1,29 @@
+{
+  "name": "@openupstream/cli",
+  "version": "0.0.0",
+  "description": "oup, the openupstream command line tool",
+  "license": "AGPL-3.0-only",
+  "private": false,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --import tsx src/"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "bin": {
+    "oup": "dist/index.js"
+  },
+  "dependencies": {
+    "@openupstream/sdk": "0.0.0"
+  }
+}

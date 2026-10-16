@@ -1,0 +1,10 @@
+{
+  "name": "@openupstream/dashboard",
+  "version": "0.0.0",
+  "description": "openupstream web dashboard",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "scripts": {
+    "build": "echo 'dashboard: not scaffolded yet (Next.js lands with the Postgres product)'"
+  }
+}

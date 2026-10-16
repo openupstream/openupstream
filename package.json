@@ -1,0 +1,23 @@
+{
+  "name": "openupstream-workspace",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "sdk",
+    "control-plane",
+    "operators",
+    "cli",
+    "dashboard"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:control-plane": "npm run dev -w control-plane",
+    "dev:dashboard": "npm run dev -w dashboard"
+  }
+}
