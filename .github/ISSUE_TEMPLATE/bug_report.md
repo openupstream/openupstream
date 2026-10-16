@@ -11,4 +11,4 @@ about: Something does not work as documented
 
 **How to reproduce**
 
-**Versions** (CLI version, Node version, region):
+**Versions** (CLI version, Node version, site):

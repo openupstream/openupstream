@@ -1,4 +1,4 @@
-# Tenant Postgres image: CloudNativePG's PostgreSQL image + pgvector.
+# Customer database Postgres image: CloudNativePG's PostgreSQL image + pgvector.
 # Pin the tag before first use; see https://github.com/cloudnative-pg/postgres-containers
 ARG PG_MAJOR=17
 FROM ghcr.io/cloudnative-pg/postgresql:${PG_MAJOR}

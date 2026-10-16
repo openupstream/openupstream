@@ -6,8 +6,8 @@
  *   oup login
  *   oup pg create|list|connect|backups
  *   oup bucket create|list|sync
- *   oup site create|deploy
- *   oup deploy          (build + run an HTTP service from the current dir)
+ *   oup site create|deploy   (deploy sets cache headers per file)
+ *   oup deploy <image>  (run an HTTP service from an image in any registry)
  *   oup run <image>     (one-off job)
  *   oup cron ...
  *   oup routes ...
