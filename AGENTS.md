@@ -25,9 +25,10 @@ CONTRIBUTING.md. The repository layout is in README.md.
   change without a matching docs update is incomplete work. Never leave the
   docs describing behavior that no longer exists.
 - The "Decisions" table in `ARCHITECTURE.md` is the index of all decisions.
-  Every new decision gets a row there, whether or not it also gets an ADR.
-- Open questions that are not decided yet are written down as open questions
-  in `ARCHITECTURE.md`, not as decisions.
+  Every new decision gets a row there, whether or not it also gets an ADR; a
+  row with an ADR links to it.
+- Questions that are not decided yet go in the "Open questions" section of
+  `ARCHITECTURE.md`, not in the Decisions table.
 - If a change contradicts an existing decision, say so explicitly instead of
   silently overriding it.
 
@@ -73,8 +74,10 @@ terms consistently in code, docs and issues.
   the conventions `main` introduced in the meantime, don't just splice the
   textual halves together. Re-run the checks after the merge, then push.
 - **Then review the pull request as a real GitHub code review**, not just a
-  summary comment. Run `/code-review medium --comment`, which posts each
-  finding as an inline review comment anchored to the exact file and line.
+  summary comment. In Claude Code run `/code-review medium --comment`, which
+  posts each finding as an inline review comment anchored to the exact file
+  and line; other agents post the same kind of review with
+  `gh api repos/openupstream/openupstream/pulls/<PR#>/reviews`.
   Address any findings before considering the work done.
   - **Keep review feedback concise:** one sentence per finding — state the
     problem and its impact, no preamble. Only report real issues; no "looks
@@ -118,5 +121,4 @@ change that alters behavior comes with a test.
 
 - Imperative mood, summary under 72 characters, body if the why is not
   obvious from the diff.
-- Update docs **in the same commit** as the change they describe.
 - Do not amend commits; create a new commit instead.

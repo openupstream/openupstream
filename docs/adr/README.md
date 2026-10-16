@@ -6,10 +6,10 @@ gets a note pointing at the one that replaced it.
 Template:
 
 ```
-# ADR-000: Title
+# ADR-NNNN: Title
 
 Date: YYYY-MM-DD
-Status: proposed | accepted | superseded by ADR-NNN
+Status: proposed | accepted | superseded by ADR-NNNN
 
 ## Context
 ## Decision

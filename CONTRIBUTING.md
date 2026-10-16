@@ -10,8 +10,9 @@ mistakes in `ARCHITECTURE.md` and `docs/`, and small, focused pull requests.
 - Keep pull requests to one topic. Several small PRs are easier to review than
   one large one.
 - Every change that alters behaviour comes with a test.
-- Changes to architecture update `ARCHITECTURE.md` or add a record under
-  `docs/adr/` in the same PR.
+- Changes to architecture update `ARCHITECTURE.md` (including a row in its
+  Decisions table) in the same PR, plus a record under `docs/adr/` when the
+  reasoning does not fit in one row.
 - By contributing you agree that your contribution is licensed under the
   AGPL-3.0-only, like the rest of the project.
 
