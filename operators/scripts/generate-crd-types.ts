@@ -6,7 +6,7 @@
  * Run with `npm run generate -w operators`; build, typecheck and test run it
  * first.
  */
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { compile, type JSONSchema } from 'json-schema-to-typescript';
 import { parse } from 'yaml';
@@ -26,6 +26,16 @@ const root = join(import.meta.dirname, '..');
 const crdDir = join(root, 'crds');
 const outDir = join(root, 'src', 'generated');
 
+/**
+ * Replaces a file atomically, so a concurrent build or test that reads the
+ * generated types never sees a missing or half-written file.
+ */
+const writeAtomically = async (path: string, content: string): Promise<void> => {
+    const temporary = `${path}.${process.pid}.tmp`;
+    await writeFile(temporary, content);
+    await rename(temporary, path);
+};
+
 const banner = (file: string, crd: Crd, version: string): string =>
     `/* Generated from crds/${file} (${crd.spec.group}/${version}) by scripts/generate-crd-types.ts. Do not edit. */`;
 
@@ -42,13 +52,16 @@ const generate = async (file: string): Promise<{ kind: string; module: string }>
         strictIndexSignatures: true,
     });
     const module = basename(file, '.yaml');
-    await writeFile(join(outDir, `${module}.ts`), source);
+    await writeAtomically(join(outDir, `${module}.ts`), source);
     return { kind, module };
 };
 
-await rm(outDir, { recursive: true, force: true });
 await mkdir(outDir, { recursive: true });
 const files = (await readdir(crdDir)).filter((f) => f.endsWith('.yaml')).sort();
 const generated = await Promise.all(files.map(generate));
 const index = generated.map(({ kind, module }) => `export type { ${kind} } from './${module}.js';`).join('\n');
-await writeFile(join(outDir, 'index.ts'), `${index}\n`);
+await writeAtomically(join(outDir, 'index.ts'), `${index}\n`);
+// Drop the types of CRDs that were removed from crds/.
+const current = new Set(['index.ts', ...generated.map(({ module }) => `${module}.ts`)]);
+const stale = (await readdir(outDir)).filter((f) => f.endsWith('.ts') && !current.has(f));
+await Promise.all(stale.map((f) => rm(join(outDir, f))));

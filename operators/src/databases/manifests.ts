@@ -76,6 +76,7 @@ export type DatabaseManifestError =
     | { readonly kind: 'invalid-name'; readonly field: 'project.name' | 'database.name'; readonly value: string }
     | { readonly kind: 'project-mismatch'; readonly projectId: string; readonly databaseProjectId: string }
     | { readonly kind: 'not-a-compute-site'; readonly value: string }
+    | { readonly kind: 'invalid-memory'; readonly memoryMb: number }
     | { readonly kind: 'memory-below-floor'; readonly memoryMb: number; readonly minimumMb: number }
     | { readonly kind: 'invalid-storage'; readonly storageGb: number };
 
@@ -99,8 +100,9 @@ const validate = (project: Project, database: Database): DatabaseManifestError[]
             { kind: 'project-mismatch', projectId: project.id, databaseProjectId: database.projectId },
         ],
         [isComputeSite(database.homeSite), { kind: 'not-a-compute-site', value: database.homeSite }],
+        [Number.isInteger(database.memoryMb), { kind: 'invalid-memory', memoryMb: database.memoryMb }],
         [
-            Number.isInteger(database.memoryMb) && database.memoryMb >= DATABASE_MIN_MEMORY_MB,
+            !(database.memoryMb < DATABASE_MIN_MEMORY_MB),
             { kind: 'memory-below-floor', memoryMb: database.memoryMb, minimumMb: DATABASE_MIN_MEMORY_MB },
         ],
         [
@@ -118,6 +120,13 @@ const labelsFor = (project: Project, database: Database): Record<string, string>
     [LABELS.databaseName]: database.name,
     [LABELS.managedBy]: MANAGED_BY,
 });
+
+/**
+ * Labels for what CloudNativePG creates (pods, Services, PVCs): without
+ * managed-by, which CloudNativePG sets on those itself.
+ */
+const inheritedLabels = (meta: ObjectMeta): Record<string, string> =>
+    Object.fromEntries(Object.entries(meta.labels).filter(([key]) => key !== LABELS.managedBy));
 
 const objectStoreFor = (meta: ObjectMeta, config: DatabaseConfig): ObjectStoreManifest => ({
     apiVersion: 'barmancloud.cnpg.io/v1',
@@ -153,7 +162,7 @@ const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig
         imageName: config.postgresImage,
         // Pods, Services and PVCs carry the labels too, so usage can be
         // attributed to the Database.
-        inheritedMetadata: { labels: meta.labels },
+        inheritedMetadata: { labels: inheritedLabels(meta) },
         affinity: {
             // One instance per Site, never both in one.
             enablePodAntiAffinity: true,
@@ -215,7 +224,7 @@ const poolerFor = (meta: ObjectMeta, cluster: string): PoolerManifest => ({
             parameters: { max_prepared_statements: '200' },
         },
         template: {
-            metadata: { labels: meta.labels },
+            metadata: { labels: inheritedLabels(meta) },
             spec: {
                 // Required by the PodSpec schema; CloudNativePG fills it in.
                 containers: [],

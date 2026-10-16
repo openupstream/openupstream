@@ -127,7 +127,8 @@ test('memory is reserved at the configured size and buffers scale with it', () =
 test('256 MB is the memory floor', () => {
     assert.deepEqual(manifestsFor({ memoryMb: 256 }).cluster.spec.resources?.limits, { memory: '256Mi' });
     assert.deepEqual(errorsFor({ memoryMb: 255 }), [{ kind: 'memory-below-floor', memoryMb: 255, minimumMb: 256 }]);
-    assert.deepEqual(errorsFor({ memoryMb: 256.5 }), [{ kind: 'memory-below-floor', memoryMb: 256.5, minimumMb: 256 }]);
+    assert.deepEqual(errorsFor({ memoryMb: 1024.5 }), [{ kind: 'invalid-memory', memoryMb: 1024.5 }]);
+    assert.deepEqual(errorsFor({ memoryMb: Number.NaN }), [{ kind: 'invalid-memory', memoryMb: Number.NaN }]);
 });
 
 test('storage is a resizable TopoLVM volume of the configured size', () => {
@@ -213,8 +214,11 @@ test("everything lives in the Project's namespace, named by ids, labelled with n
     }
     assert.equal(manifests.cluster.metadata.name, `db-${database.id}`);
     assert.equal(manifests.pooler.metadata.name, `db-${database.id}-pooler`);
-    assert.deepEqual(manifests.cluster.spec.inheritedMetadata?.labels, manifests.cluster.metadata.labels);
-    assert.deepEqual(manifests.pooler.spec.template?.metadata?.labels, manifests.pooler.metadata.labels);
+    assert.equal(manifests.cluster.metadata.labels[LABELS.managedBy], 'openupstream-operators');
+    // CloudNativePG sets managed-by on what it creates; everything else is passed on.
+    const { [LABELS.managedBy]: _, ...passedOn } = manifests.cluster.metadata.labels;
+    assert.deepEqual(manifests.cluster.spec.inheritedMetadata?.labels, passedOn);
+    assert.deepEqual(manifests.pooler.spec.template?.metadata?.labels, passedOn);
 });
 
 test('names stay within the Kubernetes and CloudNativePG limits', () => {
