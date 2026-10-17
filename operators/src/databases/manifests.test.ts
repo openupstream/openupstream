@@ -9,6 +9,7 @@ import {
     type DatabaseConfig,
     type DatabaseManifests,
     databaseManifests,
+    restoredDatabaseManifests,
 } from './manifests.js';
 
 const project: Project = {
@@ -159,6 +160,16 @@ test('PgBouncer follows the primary, one per Site', () => {
     ]);
 });
 
+test('PgBouncer drops connections to a primary in a dark Site within seconds', () => {
+    const parameters = manifestsFor().pooler.spec.pgbouncer.parameters ?? {};
+    assert.equal(parameters.max_prepared_statements, '200');
+    assert.equal(parameters.tcp_keepalive, '1');
+    // Idle: probes after 10 s, every 5 s, 3 misses: dropped after 25 s.
+    assert.equal(Number(parameters.tcp_keepidle) + Number(parameters.tcp_keepintvl) * Number(parameters.tcp_keepcnt), 25);
+    assert.equal(parameters.tcp_user_timeout, '10000');
+    assert.equal(parameters.server_connect_timeout, '5');
+});
+
 test("the Pooler's name clashes with none of the Cluster's", () => {
     const { cluster, pooler } = manifestsFor();
     const clusterServices = ['rw', 'ro', 'r'].map((suffix) => `${cluster.metadata.name}-${suffix}`);
@@ -259,4 +270,63 @@ test('the same Database always gives the same objects and is left untouched', ()
     const first = databaseManifests(project, frozen, config);
     assert.deepEqual(databaseManifests(project, frozen, config), first);
     assert.deepEqual(frozen, database);
+});
+
+const restoredDatabase: Database = { ...database, id: 'a7c4e2f1-3d5b-4c6e-8f9a-0b1c2d3e4f5a', name: 'orders-restored' };
+const source = { databaseId: database.id, targetTime: '2026-10-17T10:30:00Z' };
+
+test("a restored Database replays the source's archive up to the target time", () => {
+    const result = restoredDatabaseManifests(project, restoredDatabase, config, source);
+    assert.ok(result.ok, JSON.stringify(!result.ok && result.error));
+    const { cluster, objectStore } = result.value;
+    assert.deepEqual(cluster.spec.bootstrap, {
+        recovery: { source: 'origin', recoveryTarget: { targetTime: '2026-10-17T10:30:00Z' } },
+    });
+    assert.deepEqual(cluster.spec.externalClusters, [
+        {
+            name: 'origin',
+            plugin: {
+                name: BARMAN_CLOUD_PLUGIN,
+                parameters: { barmanObjectName: `db-${database.id}`, serverName: `db-${database.id}` },
+            },
+        },
+    ]);
+    // It archives into its own folder, never into the source's.
+    assert.equal(objectStore.metadata.name, `db-${restoredDatabase.id}`);
+    assert.deepEqual(cluster.spec.plugins?.[0]?.parameters, { barmanObjectName: `db-${restoredDatabase.id}` });
+});
+
+test('everything else about a restored Database is that of a new one', () => {
+    const restored = restoredDatabaseManifests(project, restoredDatabase, config, source);
+    const fresh = databaseManifests(project, restoredDatabase, config);
+    assert.ok(restored.ok && fresh.ok);
+    const { bootstrap: _restoredBootstrap, externalClusters: _sources, ...restoredSpec } = restored.value.cluster.spec;
+    const { bootstrap: _freshBootstrap, ...freshSpec } = fresh.value.cluster.spec;
+    assert.deepEqual(restoredSpec, freshSpec);
+    assert.deepEqual(restored.value.pooler, fresh.value.pooler);
+    assert.deepEqual(restored.value.scheduledBackup, fresh.value.scheduledBackup);
+});
+
+test('a restore cannot target its own source, a malformed id or a time without a zone', () => {
+    const result = restoredDatabaseManifests(project, database, config, {
+        databaseId: database.id,
+        targetTime: '2026-10-17 10:30:00',
+    });
+    assert.deepEqual(result.ok ? [] : result.error, [
+        { kind: 'restore-into-source', databaseId: database.id },
+        { kind: 'invalid-target-time', value: '2026-10-17 10:30:00' },
+    ]);
+    const badId = restoredDatabaseManifests(project, restoredDatabase, config, { ...source, databaseId: 'orders' });
+    assert.deepEqual(badId.ok ? [] : badId.error, [{ kind: 'invalid-id', field: 'source.databaseId', value: 'orders' }]);
+});
+
+test("a restored Database's own problems are reported with the source's", () => {
+    const result = restoredDatabaseManifests(project, { ...restoredDatabase, memoryMb: 128 }, config, {
+        ...source,
+        targetTime: 'yesterday',
+    });
+    assert.deepEqual(
+        result.ok ? [] : result.error.map((error) => error.kind),
+        ['memory-below-floor', 'invalid-target-time'],
+    );
 });
