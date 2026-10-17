@@ -15,7 +15,7 @@ local-path provisioner, not TopoLVM.
 
 ## Use
 
-Needs `hcloud` with a context for the dev Cloud project, `kubectl`, and the
+Needs `hcloud` with a context for the dev Cloud project, `kubectl`, `jq`, Node, and the
 AWS CLI profile `openupstream-backup` with the S3 keys of the backup project
 on Hetzner Object Storage.
 
@@ -37,7 +37,20 @@ flannel `wireguard-native`. `operators.sh` installs cert-manager,
 CloudNativePG and the Barman Cloud Plugin at the versions in
 `operators/crds`, spreads CoreDNS and the CloudNativePG operator over the
 compute Sites, and creates the backup credentials Secret in
-`openupstream-system`. Then, from `operators/`:
+`openupstream-system`. Then:
+
+```bash
+./platform.sh
+```
+
+It creates the control plane's own Database (the platform Project's), runs
+the control plane next to it and starts the Databases operator, with the
+GHCR images of the current commit pinned by digest (`IMAGE_TAG` to choose
+others; the commit must be pushed and its Images workflow done). The
+DatabaseConfig is `database-config.json`. A Database row inserted into the
+control plane's Database is running about a minute later.
+
+Without the control plane, one pass from this machine, from `operators/`:
 
 ```bash
 npx tsx scripts/reconcile-databases.ts rows.json config.json --dry-run

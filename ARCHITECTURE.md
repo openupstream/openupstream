@@ -131,7 +131,22 @@ Databases, Buckets, Services, jobs, the routing table, Secrets, API keys and
 usage events. Provisioning is done by writing Kubernetes objects
 (CloudNativePG `Cluster`, Traefik `IngressRoute`, Deployments, CronJobs, Jobs)
 and letting the operators and controllers reconcile. State lives in its own
-Database on the cluster, provisioned the same way as a customer's.
+Database on the cluster, provisioned the same way as a customer's: it belongs
+to a fixed platform Account and Project (`PLATFORM` in
+`sdk/src/internal.ts`). The bootstrap creates that Database once; the
+control plane seeds the platform rows at startup, and from then on the
+operator reconciles it like any other (#56).
+
+It runs as two replicas, one per compute Site, in the platform Project's
+namespace, next to its Database, whose connection Secret CloudNativePG
+creates there (`control-plane/deploy/`). At startup it applies pending
+migrations; node-pg-migrate's lock lets only one replica do so (#57). It
+serves two ports: the public API on 8080, and on 8081 an internal API for
+the operators that ingress never routes. The internal API accepts a request
+only with a ServiceAccount token issued for the audience
+`openupstream-control-plane`, checked with a TokenReview, from an allowed
+ServiceAccount (#53). Its one endpoint, `GET /internal/v1/databases`, lists
+every Database with its Project.
 
 The schema is plain SQL migrations in `control-plane/migrations`, applied with
 node-pg-migrate; queries go through `pg` (node-postgres). The schema enforces
@@ -167,10 +182,20 @@ The reconcile pass talks to Kubernetes through `@kubernetes/client-node`,
 with server-side apply under the field manager `openupstream-operators`
 (#47). It only creates and updates: a Database's objects are deleted by the
 control plane's delete of that Database or its Project, never because a row
-is missing (#48). Its rows come from an internal control plane API (#49);
-until that exists, `operators/scripts/reconcile-databases.ts` runs one pass
-from a JSON file. Each operator's RBAC is in `operators/deploy/`; the
-Databases operator may create and patch, not delete.
+is missing (#48). It runs in the cluster (`operators/deploy/`, one
+replica) and makes a pass every 30 s with the rows from the control plane's
+internal API (#49, #54). The pass is level-triggered: a missed change or a
+restart costs at most one interval, and a pass that cannot get rows applies
+nothing. A new Database ran 61 s after its row was inserted on the dev
+cluster. Each operator's RBAC is in `operators/deploy/`; the Databases
+operator may create and patch, not delete.
+`operators/scripts/reconcile-databases.ts` runs a single pass from this
+machine, for the bootstrap.
+
+The control plane and operators images are built by GitHub Actions and
+pushed to GHCR as public packages (`ghcr.io/openupstream/{control-plane,
+operators}`, tagged with the commit), and clusters run them pinned by
+digest (#55).
 
 ## Products
 
@@ -289,7 +314,9 @@ Databases operator may create and patch, not delete.
 - One Kubernetes namespace per Project, `project-<project id>` (Project names
   are only unique per Account and can change), default-deny NetworkPolicy, also
   between Projects of the same Account. Ingress only from Traefik; Projects
-  reach each other only through public Routes.
+  reach each other only through public Routes. The platform Project's
+  namespace, where the control plane runs, also admits the operators on the
+  internal API's port.
 - Egress to the internet is allowed, with a per-pod bandwidth limit.
 - One-off jobs are an API call; customers cannot spawn containers from inside
   containers.
@@ -431,6 +458,11 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 50 | PgBouncer drops connections to a dead primary: TCP keepalives (10 s idle, 3 probes 5 s apart), `tcp_user_timeout` 10 s, `server_connect_timeout` 5 s | PgBouncer's defaults | a primary in a dark Site sends no TCP reset; with the defaults PgBouncer kept its connections until `server_idle_timeout` and writes stalled 3 minutes past the promotion |
 | 51 | A restore is a new Database bootstrapped from the source's ObjectStore at a target time; never in place | restore into the existing Database | CloudNativePG bootstraps a Cluster only when it is created; the new id gives the restore its own archive folder, so the source's history stays intact |
 | 52 | Development cluster: three Hetzner Cloud VMs per working session (fsn1; hel1 standing in for Limburg; nbg1 for the third Site) from shell scripts on the hcloud CLI in `infra/dev-cluster`; local-path storage | Terraform; TopoLVM on cloud volumes | no state to keep for a cluster that lives a few hours (#33); nodes carry the real Site names, so manifests apply unchanged. TopoLVM is not tested yet |
+| 53 | The operators authenticate to the control plane's internal API with their ServiceAccount token for the audience `openupstream-control-plane`, checked by a TokenReview; only listed ServiceAccounts are answered | a shared static token in a Secret; NetworkPolicy only | no secret of our own to create or rotate; the audience check keeps every other ServiceAccount token in the cluster, which is valid for the API server, from working |
+| 54 | The Databases operator makes a full pass every 30 s | a long-poll that returns early when a row changes (LISTEN/NOTIFY) | level-triggered and simple: every restart and missed change heals within one interval; a new Database waits up to 30 s |
+| 55 | Images are built by GitHub Actions and published to GHCR as public packages, tagged with the commit; clusters pin them by digest | building locally and importing into k3s; private packages with a pull secret | no registry to run; the code is public anyway; pinning by digest makes every node run the same image |
+| 56 | The control plane's Database belongs to a fixed platform Account and Project; the bootstrap creates it once, the control plane seeds its rows, the operator reconciles it from then on. The control plane runs in that Project's namespace | a separate Cluster outside the operator | one way to run Postgres, also for our own state; a pod can only read a Secret of its own namespace, and CloudNativePG creates the connection Secret next to the Cluster |
+| 57 | The control plane applies migrations at startup | an init container; a Job per release | node-pg-migrate locks, so with two replicas exactly one migrates; nothing else to deploy |
 
 ## Open questions
 
@@ -485,10 +517,10 @@ Decisions table once it is settled.
    cluster (2026-10-17): the manifests for a Database
    (`operators/src/databases`), one reconcile pass with the backup
    credentials Secret per Project namespace, the failover test, failback and
-   a point-in-time restore from NBG1. Left: TopoLVM, the control plane's
-   internal API for Database rows and the operator running in the cluster
-   on it, deleting a Database from the control plane (#48), restore through
-   the API.
+   a point-in-time restore from NBG1; the control plane's internal API and
+   the Databases operator running in the cluster on it, both from GHCR
+   images (2026-10-17). Left: TopoLVM, creating and deleting Databases
+   through the public API (#48), restore through the API.
 2. Object storage and static sites: Garage, routing table, Traefik,
    cert-manager.
 3. Containers, Service mode.

@@ -27,6 +27,33 @@ npm run migrate:create -w control-plane add-something
 
 `src/db/migrate.ts` runs the same migrations from code.
 
+## Running
+
+`npm run build -w control-plane`, then `node control-plane/dist/index.js`
+with `DATABASE_URL`. At startup it applies pending migrations and seeds the
+platform's own Account, Project and Database rows (`src/platform.ts`), then
+listens on `PORT` (8080, public API) and `INTERNAL_PORT` (8081).
+
+In the cluster it runs from the image built by `Dockerfile` (GitHub Actions
+pushes it to `ghcr.io/openupstream/control-plane`) with
+`deploy/control-plane.yaml`, in the platform Project's namespace next to its
+Database. `infra/dev-cluster/platform.sh` bootstraps both.
+
+## Internal API
+
+For the operators only, on its own port, never routed by ingress
+(`src/internal/`). Callers send their ServiceAccount token for the audience
+`openupstream-control-plane`; a TokenReview confirms it, and only the
+ServiceAccounts in `ALLOWED_CALLERS` (default: the Databases operator) get an
+answer: 401 without a valid token, 403 for anyone else, 503 when the token
+cannot be checked.
+
+- `GET /internal/v1/databases`: every Database with its Project
+  (`DatabaseRow` in `sdk/src/internal.ts`).
+
+The control plane's ServiceAccount is bound to `system:auth-delegator` to
+create TokenReviews.
+
 ## Secrets
 
 `src/secrets/envelope.ts` holds the envelope encryption as pure functions;

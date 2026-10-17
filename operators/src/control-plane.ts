@@ -12,6 +12,14 @@ export type FetchRowsError =
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
+/** fetch reports only "fetch failed"; the reason (ECONNREFUSED, ENOTFOUND, …) is its cause. */
+const describe = (error: unknown): string =>
+    error instanceof Error
+        ? error.cause instanceof Error
+            ? `${error.message}: ${error.cause.message}`
+            : error.message
+        : String(error);
+
 /**
  * Only the shape: each entry has a project and a database object with ids.
  * Whether a row can run is databaseManifests' to decide, per row.
@@ -45,8 +53,7 @@ export function controlPlaneRows(baseUrl: string, token: () => Promise<string>):
             )
             .then(
                 (value) => ok(value),
-                (error: unknown) =>
-                    err({ kind: 'unreachable', message: error instanceof Error ? error.message : String(error) } as const),
+                (error: unknown) => err({ kind: 'unreachable', message: describe(error) } as const),
             );
         if (!response.ok) {
             return response;

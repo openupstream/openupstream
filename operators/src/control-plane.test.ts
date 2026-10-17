@@ -56,6 +56,7 @@ test('a body that is not a list of rows is malformed', async () => {
 test('an unreachable control plane or unreadable token is reported, not thrown', async () => {
     const down = await controlPlaneRows('http://127.0.0.1:1', async () => 't')();
     assert.equal(!down.ok && down.error.kind, 'unreachable');
+    assert.match(!down.ok && down.error.kind === 'unreachable' ? down.error.message : '', /^fetch failed: .+/);
     const noToken = await controlPlaneRows(base, () => Promise.reject(new Error('ENOENT')))();
     assert.deepEqual(noToken, { ok: false, error: { kind: 'unreachable', message: 'ENOENT' } });
 });
