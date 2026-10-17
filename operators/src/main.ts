@@ -38,7 +38,12 @@ if (credentialsNamespace === undefined || credentialsName === undefined) {
     process.exit(1);
 }
 const config: DatabaseConfig = JSON.parse(await readFile(required('DATABASE_CONFIG_PATH'), 'utf8'));
-const intervalMs = Number(process.env['INTERVAL_SECONDS'] ?? 30) * 1000;
+const intervalSeconds = Number(process.env['INTERVAL_SECONDS'] ?? 30);
+if (!Number.isFinite(intervalSeconds) || intervalSeconds < 1) {
+    log({ msg: 'INTERVAL_SECONDS must be a number of seconds, at least 1' });
+    process.exit(1);
+}
+const intervalMs = intervalSeconds * 1000;
 
 const kubeConfig = new KubeConfig();
 kubeConfig.loadFromDefault();

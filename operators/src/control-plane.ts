@@ -59,7 +59,11 @@ export function controlPlaneRows(baseUrl: string, token: () => Promise<string>):
             return response;
         }
         if (response.value.status !== 200) {
-            return err({ kind: 'status', status: response.value.status, body: (await response.value.text()).slice(0, 500) });
+            const body = await response.value.text().then(
+                (text) => text.slice(0, 500),
+                () => '',
+            );
+            return err({ kind: 'status', status: response.value.status, body });
         }
         const body: unknown = await response.value.json().then(
             (value: unknown) => value,

@@ -50,6 +50,9 @@ async function main(): Promise<void> {
     const applied = await migrate(databaseUrl);
     log({ msg: 'migrations applied', applied });
     const pool = new pg.Pool({ connectionString: databaseUrl });
+    // A failover or switchover of our Database ends idle connections; without
+    // a listener the pool's 'error' event would end the process.
+    pool.on('error', (error) => log({ msg: 'idle database connection lost', error: error.message }));
     await seedPlatform(pool);
 
     const kubeConfig = new KubeConfig();

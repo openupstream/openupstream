@@ -4,6 +4,7 @@
  * pass applies the whole desired state, so a missed change or a restart
  * costs at most one interval.
  */
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { FetchRows } from '../control-plane.js';
 import type { Kube } from '../kube.js';
 import type { DatabaseConfig } from './manifests.js';
@@ -48,16 +49,7 @@ export async function runDatabasesOperator(
 ): Promise<void> {
     while (!signal.aborted) {
         log(await pass());
-        await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, intervalMs);
-            signal.addEventListener(
-                'abort',
-                () => {
-                    clearTimeout(timer);
-                    resolve();
-                },
-                { once: true },
-            );
-        });
+        // Rejects when stopped, which only ends the wait early.
+        await sleep(intervalMs, undefined, { signal }).catch(() => undefined);
     }
 }

@@ -19,10 +19,10 @@ export type Authenticate = (token: string) => Promise<Result<Caller, AuthError>>
 
 /** What the TokenReview status says, reduced to the fields that decide. */
 export interface ReviewStatus {
-    readonly authenticated?: boolean;
-    readonly audiences?: readonly string[];
-    readonly username?: string;
-    readonly error?: string;
+    readonly authenticated?: boolean | undefined;
+    readonly audiences?: readonly string[] | undefined;
+    readonly username?: string | undefined;
+    readonly error?: string | undefined;
 }
 
 /**
@@ -51,14 +51,10 @@ export function tokenReviewAuthenticator(kubeConfig: KubeConfig, audience: strin
                 (review) =>
                     callerFrom(
                         {
-                            ...(review.status?.authenticated === undefined
-                                ? {}
-                                : { authenticated: review.status.authenticated }),
-                            ...(review.status?.audiences === undefined ? {} : { audiences: review.status.audiences }),
-                            ...(review.status?.user?.username === undefined
-                                ? {}
-                                : { username: review.status.user.username }),
-                            ...(review.status?.error === undefined ? {} : { error: review.status.error }),
+                            authenticated: review.status?.authenticated,
+                            audiences: review.status?.audiences,
+                            username: review.status?.user?.username,
+                            error: review.status?.error,
                         },
                         audience,
                     ),
