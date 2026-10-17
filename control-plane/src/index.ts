@@ -17,7 +17,7 @@ import { KubeConfig } from '@kubernetes/client-node';
 import { INTERNAL_API_AUDIENCE } from '@openupstream/sdk';
 import pg from 'pg';
 import { createApi } from './api/app.js';
-import { jwtVerifier, keysFrom } from './api/auth.js';
+import { apiKeyVerifier, keysFrom, madauthAuthenticator, sessionVerifier } from './api/auth.js';
 import { s3BackupStore } from './backups.js';
 import { type CleanupDeps, cleanupPass } from './cleanup.js';
 import { configFrom } from './config.js';
@@ -100,7 +100,13 @@ async function main(): Promise<void> {
     const api = createApi({
         pool,
         kube,
-        verify: jwtVerifier({ issuer: auth.issuer, audience: auth.audience, keys: keysFrom(auth) }),
+        authenticate: madauthAuthenticator(
+            sessionVerifier({
+                issuer: auth.issuer,
+                keys: keysFrom(auth.jwks === undefined ? { jwksUrl: new URL('/.well-known/jwks.json', auth.madauthUrl).href } : { jwks: auth.jwks }),
+            }),
+            apiKeyVerifier(auth.madauthUrl),
+        ),
         log,
     });
     const server = serve({ fetch: api.fetch, port: config.value.port });

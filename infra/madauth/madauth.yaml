@@ -1,0 +1,107 @@
+# madAuth (ARCHITECTURE.md, "Control plane"; decisions 59 and 63): sign-in
+# and API keys, as its published image, with its users in a Database of the
+# platform Project (PLATFORM.authDatabase in sdk/src/internal.ts). Two
+# replicas, one per compute Site.
+#
+# Next to it, in the same pod, the sidecar from the control plane's image:
+# madAuth only calls https or localhost URLs, so the sidecar serves the API
+# key scopes and receives the webhooks on 127.0.0.1.
+#
+# Needs the Secret madauth (MADAUTH_SIGNING_KEY, the same on every replica,
+# and WEBHOOK_SECRET) and the ConfigMap madauth-config (MADAUTH_ISSUER,
+# ALLOWED_ORIGINS, WEBHOOK_EVENTS, MAIL). The control plane's image is
+# pinned by digest when applied (infra/dev-cluster/platform.sh).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: madauth
+  namespace: project-00000000-0000-4000-8000-000000000002
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: madauth
+  namespace: project-00000000-0000-4000-8000-000000000002
+  labels: {app.kubernetes.io/name: madauth}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: madauth}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: madauth}
+    spec:
+      serviceAccountName: madauth
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          nodeTaintsPolicy: Honor
+          matchLabelKeys: [pod-template-hash]
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: madauth}
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: madauth
+          image: ghcr.io/inouiw/madauth-server:0.7.0-beta.2@sha256:e3156eef838dc89a0995693ef828a9d3bf583f90c9846984fe8912d02409e2b4
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: db-00000000-0000-4000-8000-000000000004-app, key: uri}
+            - {name: MADAUTH_KEY_SERVICE, value: local}
+            - {name: PORT, value: "8787"}
+            - {name: WEBHOOK_URL, value: "http://127.0.0.1:8788/webhooks"}
+            - {name: API_KEY_SCOPES_URL, value: "http://127.0.0.1:8788/api-key-scopes"}
+          envFrom:
+            - configMapRef: {name: madauth-config}
+            - secretRef: {name: madauth}
+          ports:
+            - {name: http, containerPort: 8787}
+          # Answers without the database, so a failover of it does not take
+          # every replica out of the Service at once.
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 5
+          resources:
+            # Password hashing needs about 32 MB per sign-in in flight.
+            requests: {cpu: 50m, memory: 192Mi}
+            limits: {memory: 384Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+        - name: sidecar
+          image: ghcr.io/openupstream/control-plane:main
+          command: [node, control-plane/dist/madauth-sidecar.js]
+          env:
+            - name: WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef: {name: madauth, key: WEBHOOK_SECRET}
+            - name: MAIL
+              valueFrom:
+                configMapKeyRef: {name: madauth-config, key: MAIL, optional: true}
+          resources:
+            requests: {cpu: 10m, memory: 64Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: madauth
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  selector: {app.kubernetes.io/name: madauth}
+  ports:
+    - {name: http, port: 8787, targetPort: http}

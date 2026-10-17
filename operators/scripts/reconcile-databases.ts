@@ -13,7 +13,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { KubeConfig } from '@kubernetes/client-node';
-import { PLATFORM } from '@openupstream/sdk';
+import { PLATFORM_ROWS } from '@openupstream/sdk';
 import type { DatabaseConfig } from '../src/databases/manifests.js';
 import { type DatabaseRow, reconcileDatabases } from '../src/databases/reconcile.js';
 import { kubeFrom } from '../src/kube.js';
@@ -28,7 +28,7 @@ if ((!platform && rowsPath === undefined) || configPath === undefined) {
 }
 const rows: DatabaseRow[] =
     rowsPath === undefined
-        ? [{ project: PLATFORM.project, database: PLATFORM.database }]
+        ? [...PLATFORM_ROWS]
         : JSON.parse(readFileSync(rowsPath, 'utf8'));
 const config: DatabaseConfig = JSON.parse(readFileSync(configPath, 'utf8'));
 

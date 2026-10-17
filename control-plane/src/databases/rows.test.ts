@@ -22,11 +22,10 @@ test('no Databases, no rows', async () => {
 test('the platform rows are seeded once and listed like any Database', async () => {
     await seedPlatform(db.pool);
     await seedPlatform(db.pool);
+    const project = { ...PLATFORM.project, createdAt: '2026-10-17T00:00:00.000Z' };
     assert.deepEqual(await listDatabaseRows(db.pool), [
-        {
-            project: { ...PLATFORM.project, createdAt: '2026-10-17T00:00:00.000Z' },
-            database: { ...PLATFORM.database, createdAt: '2026-10-17T00:00:00.000Z' },
-        },
+        { project, database: { ...PLATFORM.database, createdAt: '2026-10-17T00:00:00.000Z' } },
+        { project, database: { ...PLATFORM.authDatabase, createdAt: '2026-10-17T00:00:00.000Z' } },
     ]);
 });
 
