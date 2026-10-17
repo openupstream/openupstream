@@ -11,7 +11,7 @@
 # Images come from GHCR, pinned by digest: by default the ones built for the
 # current commit (.github/workflows/images.yml). Override with IMAGE_TAG.
 #
-# Needs: KUBECONFIG, kubectl, docker (buildx, to resolve digests), node.
+# Needs: KUBECONFIG, kubectl, curl, jq, node.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -21,9 +21,16 @@ CONFIG=$PWD/database-config.json
 PLATFORM_NS=project-00000000-0000-4000-8000-000000000002
 PLATFORM_DB=db-00000000-0000-4000-8000-000000000003
 
+# Anonymous, like the cluster's pull: fails while a package is not public.
 digest() { # image name → image@sha256:…
-  local ref="ghcr.io/openupstream/$1:$IMAGE_TAG"
-  echo "ghcr.io/openupstream/$1@$(docker buildx imagetools inspect "$ref" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+  local repo="openupstream/$1" token digest
+  token=$(curl -fsS "https://ghcr.io/token?scope=repository:$repo:pull" | jq -r .token) ||
+    { echo "ghcr.io/$repo is not public" >&2; exit 1; }
+  digest=$(curl -fsSI -H "Authorization: Bearer $token" \
+    -H "Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json" \
+    "https://ghcr.io/v2/$repo/manifests/$IMAGE_TAG" | tr -d '\r' | awk -F': ' 'tolower($1) == "docker-content-digest" {print $2}')
+  [[ -n $digest ]] || { echo "no $repo:$IMAGE_TAG on GHCR, or it is not public" >&2; exit 1; }
+  echo "ghcr.io/$repo@$digest"
 }
 CONTROL_PLANE_IMAGE=$(digest control-plane)
 OPERATORS_IMAGE=$(digest operators)

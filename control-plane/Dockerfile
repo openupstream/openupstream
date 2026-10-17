@@ -28,6 +28,7 @@ RUN npm ci --omit=dev --workspace sdk --workspace control-plane && npm cache cle
 COPY --from=build /repo/sdk/dist sdk/dist
 COPY --from=build /repo/control-plane/dist control-plane/dist
 COPY --from=build /repo/control-plane/migrations control-plane/migrations
-USER node
+# The node user, by uid: runAsNonRoot can only check a numeric user.
+USER 1000:1000
 EXPOSE 8080 8081
 CMD ["node", "control-plane/dist/index.js"]

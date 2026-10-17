@@ -27,5 +27,6 @@ COPY dashboard/package.json dashboard/
 RUN npm ci --omit=dev --workspace sdk --workspace operators && npm cache clean --force
 COPY --from=build /repo/sdk/dist sdk/dist
 COPY --from=build /repo/operators/dist operators/dist
-USER node
+# The node user, by uid: runAsNonRoot can only check a numeric user.
+USER 1000:1000
 CMD ["node", "operators/dist/main.js"]
