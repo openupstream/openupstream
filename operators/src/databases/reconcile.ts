@@ -10,7 +10,7 @@
  * `planDatabases` is pure and decides everything; `reconcileDatabases` reads
  * the backup credentials, applies the plan with server-side apply and reports.
  */
-import type { Database, Project } from '@openupstream/sdk';
+import type { DatabaseRow, Project } from '@openupstream/sdk';
 import { type Kube, type KubeError, type KubeObject, type ObjectRef, refOf } from '../kube.js';
 import { LABELS, MANAGED_BY, projectNamespace } from '../kubernetes.js';
 import { type Result, err, ok } from '../result.js';
@@ -21,10 +21,7 @@ import {
     databaseManifests,
 } from './manifests.js';
 
-export interface DatabaseRow {
-    readonly project: Project;
-    readonly database: Database;
-}
+export type { DatabaseRow };
 
 /** Objects that must be applied one after the other, in this order. */
 export type ApplyChain = readonly KubeObject[];

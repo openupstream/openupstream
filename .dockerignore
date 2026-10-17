@@ -1,0 +1,7 @@
+**/node_modules
+**/dist
+**/.next
+operators/src/generated
+infra/dev-cluster/.state
+.git
+.claude

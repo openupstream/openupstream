@@ -11,6 +11,7 @@
 export const SDK_VERSION = '0.0.0';
 
 export * from './model.js';
+export * from './internal.js';
 
 export interface ClientOptions {
     baseUrl?: string;

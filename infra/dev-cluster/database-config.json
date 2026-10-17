@@ -1,0 +1,10 @@
+{
+  "postgresImage": "ghcr.io/cloudnative-pg/postgresql:17-standard-trixie@sha256:b3d52e61dc97095efbb603dcb38178491ab3d4b99753cfe6e642ac57366469c1",
+  "storageClass": "local-path",
+  "backup": {
+    "bucket": "openupstream-pg-backup",
+    "credentialsSecret": "backup-s3",
+    "retention": "7d",
+    "schedule": "0 0 3 * * *"
+  }
+}
