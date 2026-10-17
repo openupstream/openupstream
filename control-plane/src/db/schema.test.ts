@@ -4,7 +4,8 @@ import { randomBytes } from 'node:crypto';
 import pg from 'pg';
 import { COMPUTE_SITES, DATABASE_MIN_MEMORY_MB, RESOURCE_KINDS, USAGE_UNITS } from '@openupstream/sdk';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
-import { migrate } from './migrate.js';
+import { readdir } from 'node:fs/promises';
+import { MIGRATIONS_DIR, migrate } from './migrate.js';
 import { putSecret } from '../secrets/store.js';
 
 const UNIQUE_VIOLATION = '23505';
@@ -353,10 +354,11 @@ describe('Usage events', () => {
 
 describe('Migrations', () => {
     test('revert and re-apply cleanly', async () => {
+        const files = (await readdir(MIGRATIONS_DIR)).filter((name) => name.endsWith('.sql'));
         assert.deepEqual(await migrate(db.url), []);
-        assert.equal((await migrate(db.url, 'down')).length, 1);
+        assert.equal((await migrate(db.url, 'down')).length, files.length);
         const tables = await db.pool.query(`select 1 from pg_tables where schemaname = 'public' and tablename <> 'pgmigrations'`);
         assert.equal(tables.rowCount, 0);
-        assert.equal((await migrate(db.url)).length, 1);
+        assert.equal((await migrate(db.url)).length, files.length);
     });
 });

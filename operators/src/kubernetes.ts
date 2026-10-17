@@ -46,17 +46,10 @@ export type Manifest<T, ApiVersion extends string, Kind extends string> = Omit<
     metadata: ObjectMeta;
 };
 
-/** Ids are lowercase UUIDs, as Postgres prints them; usable in DNS names. */
-export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export { DNS_LABEL, UUID } from '@openupstream/sdk';
 
-/** Project names, Database names and label values share this shape. */
-export const DNS_LABEL = /^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/;
-
-/**
- * One namespace per Project, named by id: Project names are only unique per
- * Account and can change. Names are readable through the labels.
- */
-export const projectNamespace = (projectId: Id): string => `project-${projectId}`;
+// Named by id; the control plane needs the same names, so they live in the sdk.
+export { projectNamespace } from '@openupstream/sdk';
 
 /** Restricts pods to the compute Sites, whatever they tolerate. */
 export const requireComputeSite = () => ({

@@ -159,7 +159,29 @@ Postgres in Docker. The API types are in `sdk/src/model.ts`.
 The dashboard (`dashboard/`) is a Next.js app on the same API.
 
 Sign-in for Members and API keys for `oup` and the SDK come from
-[madAuth](https://madauth.com), self-hosted on the cluster.
+[madAuth](https://madauth.com), self-hosted on the cluster. madAuth issues
+JWTs; the control plane verifies them against madAuth's JWKS (issuer,
+audience, expiry, asymmetric algorithms only) and maps the subject to its
+Members: one madAuth identity can be a Member of several Accounts (#59).
+
+The public API (Hono, zod validation, `control-plane/src/api`) serves
+Projects and their Databases in the caller's Accounts; another Account's
+Project answers 404 (#61). A Database's state (`provisioning`, `ready`,
+`degraded`, `unknown`) is read live from its Cluster. Its connection details
+(the Pooler's in-cluster address, database and user `app`) are returned,
+the password never. Accounts and Members are not created through the API
+yet.
+
+Deleting a Project or Database only marks its row; a cleanup loop in the
+control plane carries the delete out (#58): every 30 s, on one replica at a
+time (a Postgres advisory lock), it removes a deleted Database's Cluster,
+Pooler and ScheduledBackup at once and again on every pass for 5 minutes (an
+operator pass that read the row before the delete could still re-apply
+them), deletes its backups, ObjectStore and row
+after the backup retention window (#60), and removes a deleted Project's
+namespace and row once it has no Database rows left. A deleted name is free
+again at once. On the dev cluster a deleted Database's Cluster was gone in
+19 s and its volumes 15 s later.
 
 ## Operators (`operators/`)
 
@@ -380,6 +402,9 @@ digest (#55).
   encryption; whether SSE-C works on Hetzner Object Storage is an open
   question.
 - Retention covers a few weeks of point-in-time recovery.
+- A deleted Database's backups and ObjectStore are kept for the same
+  retention window, so it can still be restored into a new Database; then
+  the control plane deletes its folder from the bucket (#60).
 - Each Database has its own `ObjectStore` with the plugin as its WAL
   archiver, archiving to `s3://<bucket>/project-<project id>/db-<database
   id>/`. Ids, not names: a new Database under an old name never finds the old
@@ -463,6 +488,10 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 55 | Images are built by GitHub Actions and published to GHCR as public packages, tagged with the commit; clusters pin them by digest | building locally and importing into k3s; private packages with a pull secret | no registry to run; the code is public anyway; pinning by digest makes every node run the same image |
 | 56 | The control plane's Database belongs to a fixed platform Account and Project; the bootstrap creates it once, the control plane seeds its rows, the operator reconciles it from then on. The control plane runs in that Project's namespace | a separate Cluster outside the operator | one way to run Postgres, also for our own state; a pod can only read a Secret of its own namespace, and CloudNativePG creates the connection Secret next to the Cluster |
 | 57 | The control plane applies migrations at startup | an init container; a Job per release | node-pg-migrate locks, so with two replicas exactly one migrates; nothing else to deploy |
+| 58 | Deleting a Project or Database marks its row (`deleted_at`); a cleanup loop in the control plane removes the Kubernetes objects, retries until they are gone and only then removes the row. Names are unique among live rows only | delete the objects in the request, then the row; delete the row, then the objects | no orphaned Cluster keeps running and no Database is recreated empty by the operator when one step fails; a deleted name can be used again at once |
+| 59 | madAuth JWTs verified against madAuth's JWKS with `jose`; the subject maps to Members, possibly of several Accounts. Dev cluster and tests trust a local key (`control-plane/scripts/dev-token.mjs`) | token introspection at madAuth per request | no call to madAuth per request; works the same for sessions and API keys; madAuth is not deployed yet |
+| 60 | A deleted Database's backups are kept for the backup retention window, then deleted with its ObjectStore | delete them with the Database; keep them until Open question 7 is settled | an accidental delete can be undone by a restore within the window; nothing is kept forever |
+| 61 | Public API on Hono with zod validation: Projects and Databases first; a Database's state is read live from its Cluster; Databases are reachable inside the cluster only and the password is never returned | Fastify; plain `node:http`; the operator reporting state back; credentials through the API; external access now | small and typed; state is always current; external access (Traefik TCP with TLS SNI) is a step of its own (Open question 13) |
 
 ## Open questions
 
@@ -486,7 +515,10 @@ Decisions table once it is settled.
    failure does not block restarts, without letting one Project pull
    another's private image.
 6. **Retained customer logs** (searchable history) as a later product.
-7. **Project deletion grace period** and backup retention window, in days.
+7. **Project deletion grace period**: whether a deleted Project can be
+   undone for some days before its Kubernetes objects go. A deleted
+   Database's backups are kept for the backup retention window (#60); that
+   window's length, in days, is still to be set.
 8. **What ProjectMatch needs beyond v1**: an encrypt-only/decrypt-only key
    split like its KMS setup, and alerting to replace its CloudWatch alarm.
 9. **Member roles.** Every Member can act on all of the Account's Projects
@@ -505,6 +537,10 @@ Decisions table once it is settled.
     (`RemovePodsViolatingTopologySpreadConstraint`) or a runbook step.
 12. **Is `images/postgres` needed?** CloudNativePG's `standard` images ship
     pgvector (0.8.7 in `17-standard-trixie`); the tests ran on that image.
+13. **Database access from outside the cluster.** Today only the Project's
+    Services reach a Database. `psql` from a laptop or a migration from CI
+    needs Traefik TCP routing with TLS SNI (Postgres 17 direct SSL), its
+    certificates, and a way to hand out the password.
 
 ## Build order
 
@@ -519,8 +555,10 @@ Decisions table once it is settled.
    credentials Secret per Project namespace, the failover test, failback and
    a point-in-time restore from NBG1; the control plane's internal API and
    the Databases operator running in the cluster on it, both from GHCR
-   images (2026-10-17). Left: TopoLVM, creating and deleting Databases
-   through the public API (#48), restore through the API.
+   images; creating and deleting Projects and Databases through the
+   public API, with the cleanup (2026-10-17). Left: TopoLVM, restore
+   through the API, madAuth deployed and Accounts and Members created
+   through sign-up, `oup pg` commands.
 2. Object storage and static sites: Garage, routing table, Traefik,
    cert-manager.
 3. Containers, Service mode.

@@ -53,6 +53,47 @@ export interface Database {
     createdAt: Timestamp;
 }
 
+/** Creates a Project in one of the caller's Accounts. */
+export interface ProjectInput {
+    accountId: Id;
+    name: string;
+}
+
+/** Creates a Database; homeSite defaults to `hetzner-fsn1`. */
+export interface DatabaseInput {
+    name: string;
+    homeSite?: Site;
+    memoryMb: number;
+    storageGb: number;
+}
+
+/**
+ * - `provisioning`: being created, or not yet seen by the operator
+ * - `ready`: both instances healthy
+ * - `degraded`: running, but not every instance is healthy (e.g. during a
+ *   failover)
+ * - `unknown`: the platform could not check just now
+ */
+export type DatabaseState = 'provisioning' | 'ready' | 'degraded' | 'unknown';
+
+/**
+ * Where the Project's Services reach the Database: through its PgBouncer
+ * (transaction pooling), inside the cluster only. The password is never
+ * returned; it is given to Services as DATABASE_URL.
+ */
+export interface DatabaseConnection {
+    host: string;
+    port: number;
+    database: string;
+    user: string;
+}
+
+/** A Database as the API returns it. */
+export interface DatabaseDetails extends Database {
+    state: DatabaseState;
+    connection: DatabaseConnection;
+}
+
 export interface Bucket {
     id: Id;
     projectId: Id;

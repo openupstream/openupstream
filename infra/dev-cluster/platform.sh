@@ -40,6 +40,15 @@ echo "operators:     $OPERATORS_IMAGE"
 (cd "$ROOT/operators" && npx tsx scripts/reconcile-databases.ts --platform "$CONFIG" >/dev/null)
 kubectl -n "$PLATFORM_NS" wait "cluster/$PLATFORM_DB" --for=condition=Ready --timeout=10m
 
+# Dev tokens: no madAuth yet, so the API trusts the public key in
+# .state/jwt (dev-token.sh mints tokens with the private one).
+[[ -f .state/jwt/jwks.json ]] || (cd "$ROOT/control-plane" && node scripts/dev-token.mjs init "$PWD/../infra/dev-cluster/.state/jwt")
+kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client -o yaml \
+  --from-literal=AUTH_ISSUER=https://dev.openupstream.invalid \
+  --from-literal=AUTH_AUDIENCE=openupstream-api \
+  --from-file=AUTH_JWKS=.state/jwt/jwks.json \
+  --from-literal=BACKUP_BUCKET="$(jq -r .backup.bucket "$CONFIG")" \
+  --from-literal=BACKUP_RETENTION="$(jq -r .backup.retention "$CONFIG")" | kubectl apply -f - >/dev/null
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/control-plane/deploy/control-plane.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n "$PLATFORM_NS" rollout status deployment/control-plane --timeout=5m

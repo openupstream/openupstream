@@ -10,7 +10,10 @@ before the target time, in about a minute.
 ## Needs
 
 - The source Database's `ObjectStore` (`db-<source id>`) still exists in
-  the Project's namespace, with the backup credentials Secret. Its archive
+  the Project's namespace, with the backup credentials Secret. That holds
+  for a deleted Database too, until the backup retention window after its
+  deletion has passed (ARCHITECTURE.md, decision 60), as long as its Project
+  is not deleted: nothing can be created in a deleted Project. Its archive
   is `s3://<bucket>/project-<project id>/db-<source id>/`.
 - A base backup older than the target time: check
   `kubectl -n project-<project id> get backups`.
