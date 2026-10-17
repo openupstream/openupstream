@@ -12,7 +12,15 @@
  *
  * Pure: no I/O. Invalid input is returned as errors, never thrown.
  */
-import { COMPUTE_SITES, DATABASE_MIN_MEMORY_MB, type Database, type Project, type Site } from '@openupstream/sdk';
+import {
+    COMPUTE_SITES,
+    DATABASE_MIN_MEMORY_MB,
+    type Database,
+    type Project,
+    type Site,
+    clusterName,
+    poolerName,
+} from '@openupstream/sdk';
 import type { Cluster, ObjectStore, Pooler, ScheduledBackup } from '../generated/index.js';
 import {
     DNS_LABEL,
@@ -96,11 +104,7 @@ export type DatabaseManifestError =
     | { readonly kind: 'memory-below-floor'; readonly memoryMb: number; readonly minimumMb: number }
     | { readonly kind: 'invalid-storage'; readonly storageGb: number };
 
-/** The Cluster's name; also names its ObjectStore, ScheduledBackup and backup folder. */
-export const clusterName = (database: Pick<Database, 'id'>): string => `db-${database.id}`;
-
-/** Cannot share the Cluster's name, nor `<cluster>-rw`, which the Cluster's own Service takes. */
-export const poolerName = (database: Pick<Database, 'id'>): string => `${clusterName(database)}-pooler`;
+export { clusterName, poolerName } from '@openupstream/sdk';
 
 /** Rows come from the database as strings; the type alone does not guarantee this. */
 const isComputeSite = (value: string): value is Site => (COMPUTE_SITES as readonly string[]).includes(value);

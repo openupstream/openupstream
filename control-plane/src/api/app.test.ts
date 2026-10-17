@@ -1,0 +1,220 @@
+import { after, before, describe, test } from 'node:test';
+import assert from 'node:assert/strict';
+import { type CryptoKey, SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from 'jose';
+import type { DatabaseDetails, Project } from '@openupstream/sdk';
+import { listDatabaseRows } from '../databases/rows.js';
+import { type ClusterStatus, type ControlPlaneKube } from '../kube.js';
+import { err, ok } from '../result.js';
+import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
+import { createApi } from './app.js';
+import { jwtVerifier } from './auth.js';
+
+const ISSUER = 'https://auth.test';
+const AUDIENCE = 'openupstream-api';
+
+let db: TestDatabase;
+let privateKey: CryptoKey;
+let otherKey: CryptoKey;
+let api: ReturnType<typeof createApi>;
+let accountA: string;
+let accountB: string;
+/** What the fake Kubernetes reports per Cluster name; a string is an error. */
+const clusters = new Map<string, ClusterStatus | string>();
+
+const kube: ControlPlaneKube = {
+    readCluster: async (_namespace, name) => {
+        const status = clusters.get(name);
+        return typeof status === 'string' ? err(status) : ok(status);
+    },
+    remove: async () => ok(undefined),
+};
+
+const token = (subject: string, overrides: { key?: CryptoKey; audience?: string; expires?: string } = {}) =>
+    new SignJWT({})
+        .setProtectedHeader({ alg: 'ES256' })
+        .setSubject(subject)
+        .setIssuer(ISSUER)
+        .setAudience(overrides.audience ?? AUDIENCE)
+        .setIssuedAt()
+        .setExpirationTime(overrides.expires ?? '5m')
+        .sign(overrides.key ?? privateKey);
+
+before(async () => {
+    db = await createTestDatabase();
+    const pair = await generateKeyPair('ES256');
+    privateKey = pair.privateKey;
+    otherKey = (await generateKeyPair('ES256')).privateKey;
+    const jwks = createLocalJWKSet({ keys: [{ ...(await exportJWK(pair.publicKey)), alg: 'ES256' }] });
+    api = createApi({ pool: db.pool, kube, verify: jwtVerifier({ issuer: ISSUER, audience: AUDIENCE, keys: jwks }) });
+    const accounts = await db.pool.query<{ id: string }>(`insert into accounts (name) values ('A'), ('B') returning id`);
+    [accountA, accountB] = accounts.rows.map((row) => row.id) as [string, string];
+    // alice is in A; bob in B; carol in both.
+    await db.pool.query(
+        `insert into members (account_id, auth_subject, email) values
+         ($1, 'alice', 'alice@a.test'), ($2, 'bob', 'bob@b.test'), ($1, 'carol', 'carol@a.test'), ($2, 'carol', 'carol@b.test')`,
+        [accountA, accountB],
+    );
+});
+
+after(async () => {
+    await db.close();
+});
+
+const call = async (method: string, path: string, subject?: string, body?: unknown) =>
+    api.request(path, {
+        method,
+        headers: {
+            ...(subject === undefined ? {} : { authorization: `Bearer ${await token(subject)}` }),
+            ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+
+describe('authentication', () => {
+    test('health needs no token', async () => {
+        assert.equal((await api.request('/v1/health')).status, 200);
+    });
+
+    test('no token, a forged token, another audience or an expired token: 401', async () => {
+        assert.equal((await call('GET', '/v1/projects')).status, 401);
+        const bad = [
+            await token('alice', { key: otherKey }),
+            await token('alice', { audience: 'someone-else' }),
+            await token('alice', { expires: '-1m' }),
+        ];
+        for (const jwt of bad) {
+            const response = await api.request('/v1/projects', { headers: { authorization: `Bearer ${jwt}` } });
+            assert.equal(response.status, 401);
+        }
+    });
+
+    test('a valid token of nobody who is a Member: 403', async () => {
+        assert.equal((await call('GET', '/v1/projects', 'mallory')).status, 403);
+    });
+});
+
+describe('Projects', () => {
+    let project: Project;
+
+    test('a Member creates a Project in their Account', async () => {
+        const response = await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'shop-prod' });
+        assert.equal(response.status, 201);
+        project = (await response.json()) as Project;
+        assert.equal(project.accountId, accountA);
+        assert.equal(project.name, 'shop-prod');
+        assert.equal(response.headers.get('location'), `/v1/projects/${project.id}`);
+    });
+
+    test('not in an Account the caller is no Member of', async () => {
+        assert.equal((await call('POST', '/v1/projects', 'alice', { accountId: accountB, name: 'x' })).status, 403);
+    });
+
+    test('names are DNS labels and unique per Account', async () => {
+        const invalid = await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'Shop_Prod' });
+        assert.equal(invalid.status, 400);
+        assert.deepEqual(((await invalid.json()) as { issues: { path: string }[] }).issues.map((i) => i.path), ['name']);
+        assert.equal((await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'shop-prod' })).status, 409);
+        assert.equal((await call('POST', '/v1/projects', 'bob', { accountId: accountB, name: 'shop-prod' })).status, 201);
+        assert.equal((await call('POST', '/v1/projects', 'alice', { accountId: accountA })).status, 400);
+        assert.equal((await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'a', extra: 1 })).status, 400);
+    });
+
+    test("each caller sees the Projects of their Accounts; another Account's is not found", async () => {
+        const names = async (subject: string) =>
+            ((await (await call('GET', '/v1/projects', subject)).json()) as Project[]).map((p) => `${p.accountId === accountA ? 'A' : 'B'}/${p.name}`);
+        assert.deepEqual(await names('alice'), ['A/shop-prod']);
+        assert.deepEqual(await names('bob'), ['B/shop-prod']);
+        assert.deepEqual((await names('carol')).sort(), ['A/shop-prod', 'B/shop-prod']);
+        assert.equal((await call('GET', `/v1/projects/${project.id}`, 'alice')).status, 200);
+        assert.equal((await call('GET', `/v1/projects/${project.id}`, 'bob')).status, 404);
+        assert.equal((await call('GET', '/v1/projects/not-a-uuid', 'alice')).status, 404);
+    });
+});
+
+describe('Databases', () => {
+    let projectId: string;
+    let database: DatabaseDetails;
+
+    before(async () => {
+        const response = await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'db-tests' });
+        projectId = ((await response.json()) as Project).id;
+    });
+
+    test('created in a Project, provisioning, with its in-cluster connection', async () => {
+        const response = await call('POST', `/v1/projects/${projectId}/databases`, 'alice', {
+            name: 'orders',
+            memoryMb: 512,
+            storageGb: 10,
+        });
+        assert.equal(response.status, 201);
+        database = (await response.json()) as DatabaseDetails;
+        assert.equal(database.homeSite, 'hetzner-fsn1');
+        assert.equal(database.state, 'provisioning');
+        assert.deepEqual(database.connection, {
+            host: `db-${database.id}-pooler.project-${projectId}.svc.cluster.local`,
+            port: 5432,
+            database: 'app',
+            user: 'app',
+        });
+        assert.equal(response.headers.get('location'), `/v1/projects/${projectId}/databases/${database.id}`);
+    });
+
+    test('the operator sees it at once', async () => {
+        assert.ok((await listDatabaseRows(db.pool)).some((row) => row.database.id === database.id));
+    });
+
+    test('input is checked: memory floor, Sites, names, duplicates', async () => {
+        const post = (body: unknown) => call('POST', `/v1/projects/${projectId}/databases`, 'alice', body);
+        assert.equal((await post({ name: 'small', memoryMb: 128, storageGb: 1 })).status, 400);
+        assert.equal((await post({ name: 'third', homeSite: 'netcup-nbg', memoryMb: 256, storageGb: 1 })).status, 400);
+        assert.equal((await post({ name: 'half', memoryMb: 256.5, storageGb: 1 })).status, 400);
+        assert.equal((await post({ name: 'orders', memoryMb: 256, storageGb: 1 })).status, 409);
+        assert.equal((await post({ name: 'lim', homeSite: 'ovh-lim', memoryMb: 256, storageGb: 1 })).status, 201);
+    });
+
+    test('its state comes from the Cluster, unknown when Kubernetes cannot be asked', async () => {
+        const state = async () =>
+            ((await (await call('GET', `/v1/projects/${projectId}/databases/${database.id}`, 'alice')).json()) as DatabaseDetails).state;
+        clusters.set(`db-${database.id}`, { instances: 2, readyInstances: 2, ready: true });
+        assert.equal(await state(), 'ready');
+        clusters.set(`db-${database.id}`, { instances: 2, readyInstances: 1, ready: false });
+        assert.equal(await state(), 'degraded');
+        clusters.set(`db-${database.id}`, 'connect ETIMEDOUT');
+        assert.equal(await state(), 'unknown');
+        clusters.delete(`db-${database.id}`);
+    });
+
+    test("another Account's Member finds nothing", async () => {
+        assert.equal((await call('GET', `/v1/projects/${projectId}/databases`, 'bob')).status, 404);
+        assert.equal((await call('GET', `/v1/projects/${projectId}/databases/${database.id}`, 'bob')).status, 404);
+        assert.equal((await call('DELETE', `/v1/projects/${projectId}/databases/${database.id}`, 'bob')).status, 404);
+    });
+
+    test('deleted: gone from the API and from the operator at once, and its name is free again', async () => {
+        assert.equal((await call('DELETE', `/v1/projects/${projectId}/databases/${database.id}`, 'alice')).status, 202);
+        assert.equal((await call('GET', `/v1/projects/${projectId}/databases/${database.id}`, 'alice')).status, 404);
+        assert.equal((await call('DELETE', `/v1/projects/${projectId}/databases/${database.id}`, 'alice')).status, 404);
+        assert.ok(!(await listDatabaseRows(db.pool)).some((row) => row.database.id === database.id));
+        const listed = (await (await call('GET', `/v1/projects/${projectId}/databases`, 'alice')).json()) as DatabaseDetails[];
+        assert.deepEqual(listed.map((d) => d.name), ['lim']);
+        const again = await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name: 'orders', memoryMb: 256, storageGb: 1 });
+        assert.equal(again.status, 201);
+    });
+
+    test('deleting the Project deletes its Databases with it; nothing can be created in it afterwards', async () => {
+        assert.equal((await call('DELETE', `/v1/projects/${projectId}`, 'alice')).status, 202);
+        assert.equal((await call('GET', `/v1/projects/${projectId}`, 'alice')).status, 404);
+        assert.ok(!(await listDatabaseRows(db.pool)).some((row) => row.project.id === projectId));
+        const live = await db.pool.query('select 1 from databases where project_id = $1 and deleted_at is null', [projectId]);
+        assert.equal(live.rowCount, 0);
+        assert.equal(
+            (await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name: 'late', memoryMb: 256, storageGb: 1 })).status,
+            404,
+        );
+        await assert.rejects(
+            db.pool.query(`insert into databases (project_id, name, memory_mb, storage_gb) values ($1, 'sneaky', 256, 1)`, [projectId]),
+            /is deleted/,
+        );
+        assert.equal((await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'db-tests' })).status, 201);
+    });
+});

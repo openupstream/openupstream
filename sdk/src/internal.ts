@@ -4,7 +4,23 @@
  * on its own port, never routed by ingress, and callers authenticate with
  * their Kubernetes ServiceAccount token.
  */
-import type { Account, Database, Project } from './model.js';
+import type { Account, Database, Id, Project } from './model.js';
+
+/**
+ * Kubernetes names, by id (ARCHITECTURE.md, decision 42): the operators
+ * create these objects, the control plane reads and deletes them.
+ */
+export const projectNamespace = (projectId: Id): string => `project-${projectId}`;
+
+/** The Database's CloudNativePG Cluster; also its ObjectStore, ScheduledBackup and backup folder. */
+export const clusterName = (database: Pick<Database, 'id'>): string => `db-${database.id}`;
+
+/** Cannot share the Cluster's name, nor `<cluster>-rw`, which the Cluster's own Service takes. */
+export const poolerName = (database: Pick<Database, 'id'>): string => `${clusterName(database)}-pooler`;
+
+/** The folder under the backup bucket that holds one Database's base backups and WAL. */
+export const backupPrefix = (projectId: Id, databaseId: Id): string =>
+    `${projectNamespace(projectId)}/${clusterName({ id: databaseId })}/`;
 
 /** Audience of the ServiceAccount tokens the operators send. */
 export const INTERNAL_API_AUDIENCE = 'openupstream-control-plane';

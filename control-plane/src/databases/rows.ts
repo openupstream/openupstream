@@ -18,7 +18,7 @@ interface Row {
     database_created_at: Date;
 }
 
-/** Every Database, oldest first, so the order is stable between calls. */
+/** Every Database that is not deleted, oldest first, so the order is stable between calls. */
 export async function listDatabaseRows(pool: pg.Pool): Promise<DatabaseRow[]> {
     const { rows } = await pool.query<Row>(`
         select p.id as project_id, p.account_id, p.name as project_name, p.created_at as project_created_at,
@@ -26,6 +26,7 @@ export async function listDatabaseRows(pool: pg.Pool): Promise<DatabaseRow[]> {
                d.created_at as database_created_at
         from databases d
         join projects p on p.id = d.project_id
+        where d.deleted_at is null
         order by d.created_at, d.id`);
     return rows.map((row) => ({
         project: {
