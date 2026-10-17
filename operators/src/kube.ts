@@ -69,17 +69,30 @@ const messageOf = (body: unknown): string | undefined => {
         : undefined;
 };
 
-/** Runs a client call and turns its rejection into a KubeError. */
-const attempt = <T>(call: () => Promise<T>): Promise<Result<T, KubeError>> =>
-    call().then(
+/**
+ * No call may take longer: the client sets no timeout, and a request to an
+ * API server in a Site that just went dark would otherwise hang the pass.
+ */
+export const KUBE_CALL_TIMEOUT_MS = 30_000;
+
+/** Runs a client call and turns its rejection, or its not ending in time, into a KubeError. */
+const attemptWithin = <T>(call: () => Promise<T>, timeoutMs: number): Promise<Result<T, KubeError>> => {
+    const timedOut = new Promise<Result<T, KubeError>>((resolve) => {
+        const timer = setTimeout(() => resolve(err({ status: 0, message: `no answer within ${timeoutMs} ms` })), timeoutMs);
+        timer.unref();
+    });
+    const answered = call().then(
         (value) => ok(value),
         (error: unknown) => err(kubeError(error)),
     );
+    return Promise.race([answered, timedOut]);
+};
 
 const DRY_RUN_ALL = 'All';
 
-export function kubeFrom(config: KubeConfig): Kube {
+export function kubeFrom(config: KubeConfig, { timeoutMs = KUBE_CALL_TIMEOUT_MS } = {}): Kube {
     const api = KubernetesObjectApi.makeApiClient(config);
+    const attempt = <T>(call: () => Promise<T>) => attemptWithin(call, timeoutMs);
     return {
         apply: async (object, { dryRun }) => {
             const result = await attempt(() =>

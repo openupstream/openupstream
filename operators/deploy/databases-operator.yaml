@@ -1,0 +1,63 @@
+# The Databases operator: one reconcile pass every 30 s with rows from the
+# control plane's internal API (ARCHITECTURE.md, decisions 49, 53 and 54).
+# One replica: the pass is idempotent and not on the failover path, so a
+# restart in the other Site only delays new Databases.
+#
+# Needs databases-rbac.yaml, the backup credentials Secret
+# openupstream-system/backup-s3 and the ConfigMap databases-operator-config
+# with a DatabaseConfig as database-config.json. The image is pinned by
+# digest when applied (infra/dev-cluster/platform.sh).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: databases-operator
+  namespace: openupstream-system
+  labels: {app.kubernetes.io/name: databases-operator}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: databases-operator}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: databases-operator}
+    spec:
+      serviceAccountName: databases-operator
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: databases-operator
+          image: ghcr.io/openupstream/operators:main
+          env:
+            - {name: CONTROL_PLANE_URL, value: "http://control-plane.project-00000000-0000-4000-8000-000000000002.svc:8081"}
+            - {name: TOKEN_PATH, value: /var/run/secrets/openupstream/control-plane/token}
+            - {name: DATABASE_CONFIG_PATH, value: /etc/openupstream/database-config.json}
+            - {name: BACKUP_CREDENTIALS, value: openupstream-system/backup-s3}
+          volumeMounts:
+            - {name: control-plane-token, mountPath: /var/run/secrets/openupstream/control-plane, readOnly: true}
+            - {name: config, mountPath: /etc/openupstream, readOnly: true}
+          resources:
+            requests: {cpu: 20m, memory: 96Mi}
+            limits: {memory: 192Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+      volumes:
+        # A token only the control plane accepts (audience), rotated by the
+        # kubelet; the operator reads it before every pass.
+        - name: control-plane-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: openupstream-control-plane
+                  expirationSeconds: 3600
+                  path: token
+        - name: config
+          configMap:
+            name: databases-operator-config

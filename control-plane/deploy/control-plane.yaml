@@ -1,0 +1,89 @@
+# The control plane, as a Service of the platform Project (PLATFORM in
+# sdk/src/internal.ts): it runs next to its own Database, whose connection
+# Secret CloudNativePG creates in this namespace. Two replicas, one per
+# compute Site. Port 8080 is the public API, 8081 the internal API for the
+# operators (never routed by ingress).
+#
+# The image is pinned by digest when applied (infra/dev-cluster/platform.sh).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: control-plane
+  namespace: project-00000000-0000-4000-8000-000000000002
+---
+# TokenReviews for the internal API's callers (ARCHITECTURE.md, decision 53).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openupstream-control-plane-auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: control-plane
+    namespace: project-00000000-0000-4000-8000-000000000002
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: control-plane
+  namespace: project-00000000-0000-4000-8000-000000000002
+  labels: {app.kubernetes.io/name: control-plane}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app.kubernetes.io/name: control-plane}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: control-plane}
+    spec:
+      serviceAccountName: control-plane
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          nodeTaintsPolicy: Honor
+          matchLabelKeys: [pod-template-hash]
+          labelSelector:
+            matchLabels: {app.kubernetes.io/name: control-plane}
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: control-plane
+          image: ghcr.io/openupstream/control-plane:main
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef: {name: db-00000000-0000-4000-8000-000000000003-app, key: uri}
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: internal, containerPort: 8081}
+          readinessProbe:
+            httpGet: {path: /v1/health, port: http}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: control-plane
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  selector: {app.kubernetes.io/name: control-plane}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+    - {name: internal, port: 8081, targetPort: internal}

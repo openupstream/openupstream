@@ -26,6 +26,7 @@
     "typescript": "^5.7.0"
   },
   "dependencies": {
+    "@kubernetes/client-node": "^2.0.0",
     "@openupstream/sdk": "^0.0.0",
     "node-pg-migrate": "^9.0.0",
     "pg": "^8.23.1"
