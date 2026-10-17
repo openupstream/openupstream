@@ -17,3 +17,5 @@ infra/terraform/*.tfvars
 *.pem
 *.key
 kubeconfig*
+# generated from operators/crds
+operators/src/generated/

@@ -14,3 +14,7 @@
  */
 export const OPERATORS = ['routing', 'sites', 'databases', 'secrets'] as const;
 export type Operator = (typeof OPERATORS)[number];
+
+export * from './databases/manifests.js';
+export * from './kubernetes.js';
+export * from './result.js';
