@@ -1,5 +1,5 @@
 // Dev and test stand-in for madAuth's session tokens (ARCHITECTURE.md,
-// decision 59): a key pair whose public half the control plane trusts via
+// decision 64): a key pair whose public half the control plane trusts via
 // AUTH_JWKS, and tokens shaped like madAuth's (ES256, typ
 // madauth-session+jwt, no audience) signed with the private half. Never for
 // a real cluster; where madAuth runs, sign in with it instead.

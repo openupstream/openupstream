@@ -11,6 +11,8 @@ which is why it lives in the monorepo.
   cert-manager, CloudNativePG, gVisor RuntimeClass, Prometheus/Loki/Grafana.
 - `garage/` — Garage cluster layout and configuration: replication factor 3,
   one zone per site.
+- `madauth/` — madAuth, sign-in and API keys, as its published image with the
+  control plane's sidecar (ARCHITECTURE.md, decision 63).
 - `dev-cluster/` — a throwaway three-Site k3s cluster on Hetzner Cloud for
   one working session (ARCHITECTURE.md, decisions 33 and 52).
 

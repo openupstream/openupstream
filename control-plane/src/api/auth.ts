@@ -1,5 +1,5 @@
 /**
- * Who calls the public API (ARCHITECTURE.md, decision 59): a madAuth user,
+ * Who calls the public API (ARCHITECTURE.md, decision 64): a madAuth user,
  * with either
  *
  * - their session token, a JWT (ES256, `typ: madauth-session+jwt`, no
