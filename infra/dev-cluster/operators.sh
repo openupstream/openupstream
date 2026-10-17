@@ -44,10 +44,12 @@ spread cnpg-system cnpg-controller-manager '{"app.kubernetes.io/name": "cloudnat
 kubectl -n kube-system scale deployment coredns --replicas=2 >/dev/null
 kubectl -n kube-system rollout status deployment coredns --timeout=5m
 
+# set -e does not see a failure inside $(…) in an argument; read first.
+ACCESS_KEY_ID=$(aws configure get aws_access_key_id --profile openupstream-backup)
+ACCESS_SECRET_KEY=$(aws configure get aws_secret_access_key --profile openupstream-backup)
 kubectl create namespace openupstream-system --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl -n openupstream-system create secret generic backup-s3 --dry-run=client -o yaml \
-  --from-literal=ACCESS_KEY_ID="$(aws configure get aws_access_key_id --profile openupstream-backup)" \
-  --from-literal=ACCESS_SECRET_KEY="$(aws configure get aws_secret_access_key --profile openupstream-backup)" |
+  --from-literal=ACCESS_KEY_ID="$ACCESS_KEY_ID" --from-literal=ACCESS_SECRET_KEY="$ACCESS_SECRET_KEY" |
   kubectl apply -f - >/dev/null
 
 kubectl get pods -A -o wide | awk 'NR == 1 || /cnpg|barman|coredns/ {print $1, $2, $4, $8}' | column -t

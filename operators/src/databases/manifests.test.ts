@@ -273,7 +273,7 @@ test('the same Database always gives the same objects and is left untouched', ()
 });
 
 const restoredDatabase: Database = { ...database, id: 'a7c4e2f1-3d5b-4c6e-8f9a-0b1c2d3e4f5a', name: 'orders-restored' };
-const source = { databaseId: database.id, targetTime: '2026-10-17T10:30:00Z' };
+const source = { database, targetTime: '2026-10-17T10:30:00Z' };
 
 test("a restored Database replays the source's archive up to the target time", () => {
     const result = restoredDatabaseManifests(project, restoredDatabase, config, source);
@@ -309,14 +309,17 @@ test('everything else about a restored Database is that of a new one', () => {
 
 test('a restore cannot target its own source, a malformed id or a time without a zone', () => {
     const result = restoredDatabaseManifests(project, database, config, {
-        databaseId: database.id,
+        database,
         targetTime: '2026-10-17 10:30:00',
     });
     assert.deepEqual(result.ok ? [] : result.error, [
         { kind: 'restore-into-source', databaseId: database.id },
         { kind: 'invalid-target-time', value: '2026-10-17 10:30:00' },
     ]);
-    const badId = restoredDatabaseManifests(project, restoredDatabase, config, { ...source, databaseId: 'orders' });
+    const badId = restoredDatabaseManifests(project, restoredDatabase, config, {
+        ...source,
+        database: { ...database, id: 'orders' },
+    });
     assert.deepEqual(badId.ok ? [] : badId.error, [{ kind: 'invalid-id', field: 'source.databaseId', value: 'orders' }]);
 });
 
@@ -329,4 +332,25 @@ test("a restored Database's own problems are reported with the source's", () => 
         result.ok ? [] : result.error.map((error) => error.kind),
         ['memory-below-floor', 'invalid-target-time'],
     );
+});
+
+test('a restore reads only an archive of its own Project', () => {
+    const otherProject = '7e6d5c4b-3a29-4180-9f8e-7d6c5b4a3928';
+    const result = restoredDatabaseManifests(project, restoredDatabase, config, {
+        ...source,
+        database: { ...database, projectId: otherProject },
+    });
+    assert.deepEqual(result.ok ? [] : result.error, [
+        { kind: 'source-in-other-project', projectId: project.id, sourceProjectId: otherProject },
+    ]);
+});
+
+test('target times must exist on the calendar', () => {
+    for (const targetTime of ['2026-02-30T10:00:00Z', '2026-13-01T10:00:00Z', '2026-10-17T24:00:00Z', '2026-10-17T10:60:00Z']) {
+        const result = restoredDatabaseManifests(project, restoredDatabase, config, { ...source, targetTime });
+        assert.deepEqual(result.ok ? [] : result.error, [{ kind: 'invalid-target-time', value: targetTime }], targetTime);
+    }
+    for (const targetTime of ['2028-02-29T10:00:00Z', '2026-10-17T10:30:00.123+02:00', '2026-12-31T23:59:59-05:30']) {
+        assert.ok(restoredDatabaseManifests(project, restoredDatabase, config, { ...source, targetTime }).ok, targetTime);
+    }
 });

@@ -14,16 +14,26 @@ import type { Database, Project } from '@openupstream/sdk';
 import { type Kube, type KubeError, type KubeObject, type ObjectRef, refOf } from '../kube.js';
 import { LABELS, MANAGED_BY, projectNamespace } from '../kubernetes.js';
 import { type Result, err, ok } from '../result.js';
-import { type DatabaseConfig, type DatabaseManifestError, databaseManifests } from './manifests.js';
+import {
+    BACKUP_CREDENTIAL_KEYS,
+    type DatabaseConfig,
+    type DatabaseManifestError,
+    databaseManifests,
+} from './manifests.js';
 
 export interface DatabaseRow {
     readonly project: Project;
     readonly database: Database;
 }
 
+/** Objects that must be applied one after the other, in this order. */
+export type ApplyChain = readonly KubeObject[];
+
 export interface DatabasePlan {
-    /** Namespaces and backup credentials first, then each Database's objects. */
-    readonly apply: readonly KubeObject[];
+    /** Per Project: its namespace, then its backup credentials. Applied first. */
+    readonly projects: readonly ApplyChain[];
+    /** Per Database: ObjectStore, Cluster, Pooler, ScheduledBackup. */
+    readonly databases: readonly ApplyChain[];
     /** Rows that cannot run; their existing objects are left alone. */
     readonly invalid: readonly { readonly databaseId: string; readonly errors: readonly DatabaseManifestError[] }[];
 }
@@ -75,16 +85,16 @@ export function planDatabases(
         (project) => project.id,
     );
     return {
-        apply: [
-            ...projects.map(namespaceFor),
-            ...projects.map((project) => backupSecretFor(project, config, backupCredentials)),
-            ...valid.flatMap(({ manifests }) => [
-                manifests.objectStore,
-                manifests.cluster,
-                manifests.pooler,
-                manifests.scheduledBackup,
-            ]),
-        ],
+        projects: projects.map((project) => [
+            namespaceFor(project),
+            backupSecretFor(project, config, backupCredentials),
+        ]),
+        databases: valid.map(({ manifests }) => [
+            manifests.objectStore,
+            manifests.cluster,
+            manifests.pooler,
+            manifests.scheduledBackup,
+        ]),
         invalid: results.flatMap(({ row, result }) =>
             result.ok ? [] : [{ databaseId: row.database.id, errors: result.error }],
         ),
@@ -99,6 +109,12 @@ export interface ReconcileReport {
 
 export type ReconcileError =
     | { readonly kind: 'missing-backup-credentials'; readonly namespace: string; readonly name: string }
+    | {
+          readonly kind: 'incomplete-backup-credentials';
+          readonly namespace: string;
+          readonly name: string;
+          readonly missingKeys: readonly string[];
+      }
     | { readonly kind: 'kube'; readonly error: KubeError };
 
 export interface ReconcileOptions {
@@ -123,15 +139,25 @@ export async function reconcileDatabases(
     if (credentials.value === undefined) {
         return err({ kind: 'missing-backup-credentials', namespace, name });
     }
+    const missingKeys = Object.values(BACKUP_CREDENTIAL_KEYS).filter((key) => !credentials.value?.[key]);
+    if (missingKeys.length > 0) {
+        return err({ kind: 'incomplete-backup-credentials', namespace, name, missingKeys });
+    }
     const plan = planDatabases(rows, config, credentials.value);
     const dryRun = options.dryRun ?? false;
 
-    // One at a time, in order: a Cluster's namespace, Secret and ObjectStore
-    // exist before the Cluster.
-    const outcomes: { ref: ObjectRef; result: Result<void, KubeError> }[] = [];
-    for (const object of plan.apply) {
-        outcomes.push({ ref: refOf(object), result: await kube.apply(object, { dryRun }) });
-    }
+    // Chains run side by side, each in order: a namespace exists before its
+    // Secret, an ObjectStore before its Cluster. Projects come first, so
+    // every Database finds its namespace and credentials.
+    const applyChain = async (chain: ApplyChain) => {
+        const results: { ref: ObjectRef; result: Result<void, KubeError> }[] = [];
+        for (const object of chain) {
+            results.push({ ref: refOf(object), result: await kube.apply(object, { dryRun }) });
+        }
+        return results;
+    };
+    const applyAll = async (chains: readonly ApplyChain[]) => (await Promise.all(chains.map(applyChain))).flat();
+    const outcomes = [...(await applyAll(plan.projects)), ...(await applyAll(plan.databases))];
     return ok({
         applied: outcomes.filter(({ result }) => result.ok).map(({ ref }) => ref),
         invalid: plan.invalid,

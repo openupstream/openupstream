@@ -359,8 +359,8 @@ Databases operator may create and patch, not delete.
   one's archive. The credentials are a Secret in the Project's namespace.
 - A `ScheduledBackup` takes base backups, the first right after creation,
   from the standby when there is one.
-- A restore creates a new Database (new id) whose Cluster bootstraps from the
-  source's ObjectStore up to a target time, replaying WAL across timelines,
+- A restore creates a new Database (new id) in the source's Project whose
+  Cluster bootstraps from the source's ObjectStore up to a target time, replaying WAL across timelines,
   so also past a failover. It archives into its own folder; the source's is
   only read (#51). Tested 2026-10-17: restored to the exact last row before
   the target time, across a failover's timeline switch, in about a minute.

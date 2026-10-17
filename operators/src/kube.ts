@@ -52,13 +52,20 @@ const kubeError = (error: unknown): KubeError =>
         ? { status: error.code, message: messageOf(error.body) ?? error.message }
         : { status: 0, message: error instanceof Error ? error.message : String(error) };
 
+/** JSON from the API server, or undefined when the body is not JSON. */
+const parseJson = (text: string): unknown => {
+    try {
+        return JSON.parse(text);
+    } catch {
+        return undefined;
+    }
+};
+
 /** The API server puts the reason in a Status object's `message`. */
 const messageOf = (body: unknown): string | undefined => {
-    if (typeof body === 'string') {
-        return /"message"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(body)?.[1];
-    }
-    return typeof body === 'object' && body !== null && 'message' in body && typeof body.message === 'string'
-        ? body.message
+    const parsed = typeof body === 'string' ? parseJson(body) : body;
+    return typeof parsed === 'object' && parsed !== null && 'message' in parsed && typeof parsed.message === 'string'
+        ? parsed.message
         : undefined;
 };
 

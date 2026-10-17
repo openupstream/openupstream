@@ -38,6 +38,8 @@ const credentials = { ACCESS_KEY_ID: 'aWQ=', ACCESS_SECRET_KEY: 'c2VjcmV0' };
 const namespace = `project-${project.id}`;
 
 const kinds = (objects: readonly KubeObject[]) => objects.map((object) => object.kind);
+const planned = (plan: { projects: readonly (readonly KubeObject[])[]; databases: readonly (readonly KubeObject[])[] }) =>
+    [...plan.projects, ...plan.databases].flat();
 
 test('a Project with two Databases gets one namespace, one credentials Secret and four objects per Database', () => {
     const rows: DatabaseRow[] = [
@@ -45,31 +47,24 @@ test('a Project with two Databases gets one namespace, one credentials Secret an
         { project, database: invoices },
     ];
     const plan = planDatabases(rows, config, credentials);
-    assert.deepEqual(kinds(plan.apply), [
-        'Namespace',
-        'Secret',
-        'ObjectStore',
-        'Cluster',
-        'Pooler',
-        'ScheduledBackup',
-        'ObjectStore',
-        'Cluster',
-        'Pooler',
-        'ScheduledBackup',
+    assert.deepEqual(plan.projects.map(kinds), [['Namespace', 'Secret']]);
+    assert.deepEqual(plan.databases.map(kinds), [
+        ['ObjectStore', 'Cluster', 'Pooler', 'ScheduledBackup'],
+        ['ObjectStore', 'Cluster', 'Pooler', 'ScheduledBackup'],
     ]);
     assert.deepEqual(plan.invalid, []);
 });
 
 test("the backup credentials are copied into the Project's namespace under the name the ObjectStore uses", () => {
     const plan = planDatabases([{ project, database: orders }], config, credentials);
-    const secret = plan.apply.find((object) => object.kind === 'Secret');
+    const secret = planned(plan).find((object) => object.kind === 'Secret');
     assert.deepEqual(secret?.metadata, {
         name: 'backup-s3',
         namespace,
         labels: { [LABELS.projectId]: project.id, [LABELS.managedBy]: MANAGED_BY },
     });
     assert.deepEqual(secret?.['data'], credentials);
-    const namespaceObject = plan.apply.find((object) => object.kind === 'Namespace');
+    const namespaceObject = planned(plan).find((object) => object.kind === 'Namespace');
     assert.equal(namespaceObject?.metadata.name, namespace);
     assert.equal(namespaceObject?.metadata.labels?.[LABELS.projectName], 'shop-prod');
 });
@@ -88,7 +83,7 @@ test('an invalid row is reported and applies nothing, the others still apply', (
         plan.invalid.map(({ databaseId, errors }) => ({ databaseId, kinds: errors.map((error) => error.kind) })),
         [{ databaseId: broken.id, kinds: ['memory-below-floor'] }],
     );
-    const clusters = plan.apply.filter((object) => object.kind === 'Cluster');
+    const clusters = planned(plan).filter((object) => object.kind === 'Cluster');
     assert.deepEqual(
         clusters.map((object) => object.metadata.name),
         [`db-${orders.id}`],
@@ -96,7 +91,7 @@ test('an invalid row is reported and applies nothing, the others still apply', (
 });
 
 test('no rows: nothing to apply', () => {
-    assert.deepEqual(planDatabases([], config, credentials), { apply: [], invalid: [] });
+    assert.deepEqual(planDatabases([], config, credentials), { projects: [], databases: [], invalid: [] });
 });
 
 /** Records what the reconcile pass sends; fails applies for the given kinds. */
@@ -116,17 +111,28 @@ const options = { backupCredentials: { namespace: 'openupstream-system', name: '
 
 test('reconcile applies the plan in order and reports each object', async () => {
     const { kube, applied } = fakeKube(credentials);
-    const result = await reconcileDatabases(kube, [{ project, database: orders }], config, options);
+    const result = await reconcileDatabases(
+        kube,
+        [
+            { project, database: orders },
+            { project, database: invoices },
+        ],
+        config,
+        options,
+    );
     assert.ok(result.ok);
-    assert.deepEqual(kinds(applied.map(({ object }) => object)), [
-        'Namespace',
-        'Secret',
-        'ObjectStore',
-        'Cluster',
-        'Pooler',
-        'ScheduledBackup',
-    ]);
-    assert.equal(result.value.applied.length, 6);
+    const order = applied.map(({ object }) => `${object.kind}/${object.metadata.name}`);
+    const position = (kind: string, id = '') => order.findIndex((entry) => entry.startsWith(kind) && entry.includes(id));
+    // The Project's objects before any Database's; each Database in order.
+    assert.deepEqual(order.slice(0, 2), [`Namespace/${namespace}`, 'Secret/backup-s3']);
+    for (const { id } of [orders, invoices]) {
+        const steps = ['ObjectStore', 'Cluster', 'Pooler', 'ScheduledBackup'].map((kind) => position(kind, id));
+        assert.deepEqual(
+            steps,
+            [...steps].sort((a, b) => a - b),
+        );
+    }
+    assert.equal(result.value.applied.length, 10);
     assert.deepEqual(result.value.failed, []);
     assert.equal(
         applied.every(({ dryRun }) => !dryRun),
@@ -162,6 +168,21 @@ test('without the backup credentials Secret nothing is applied', async () => {
     assert.deepEqual(result, {
         ok: false,
         error: { kind: 'missing-backup-credentials', namespace: 'openupstream-system', name: 'backup-s3' },
+    });
+    assert.equal(applied.length, 0);
+});
+
+test('backup credentials without the keys the ObjectStore reads are refused', async () => {
+    const { kube, applied } = fakeKube({ ACCESS_KEY_ID: 'aWQ=' });
+    const result = await reconcileDatabases(kube, [{ project, database: orders }], config, options);
+    assert.deepEqual(result, {
+        ok: false,
+        error: {
+            kind: 'incomplete-backup-credentials',
+            namespace: 'openupstream-system',
+            name: 'backup-s3',
+            missingKeys: ['ACCESS_SECRET_KEY'],
+        },
     });
     assert.equal(applied.length, 0);
 });

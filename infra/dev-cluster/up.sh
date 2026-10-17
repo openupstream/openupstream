@@ -9,7 +9,7 @@
 #   ovh-lim       hel1  compute Site (stand-in; Hetzner Cloud has no Limburg)
 #   netcup-nbg    nbg1  third Site, tainted openupstream.io/third-site
 #
-# Needs: hcloud with an active context, kubectl, ssh, curl, openssl.
+# Needs: hcloud with an active context, kubectl, ssh, curl, openssl, jq.
 # Writes: .state/ (SSH key, k3s token, kubeconfig), gitignored.
 set -euo pipefail
 
@@ -68,7 +68,10 @@ EOF
 hcloud firewall describe "$PREFIX" >/dev/null 2>&1 ||
   hcloud firewall create --name "$PREFIX" --label "$LABEL" >/dev/null
 hcloud firewall replace-rules "$PREFIX" --rules-file "$STATE/firewall.json" >/dev/null
-hcloud firewall apply-to-resource "$PREFIX" --type label_selector --label-selector "$LABEL" >/dev/null 2>&1 || true
+# Applied by label, so it also covers servers created on a re-run.
+hcloud firewall describe "$PREFIX" -o json |
+  jq -e --arg label "$LABEL" '.applied_to[]? | select(.label_selector.selector == $label)' >/dev/null ||
+  hcloud firewall apply-to-resource "$PREFIX" --type label_selector --label-selector "$LABEL" >/dev/null
 
 for node_ip in "${IPS[@]}"; do
   until "${SSH[@]}" "root@$node_ip" true 2>/dev/null; do sleep 3; done

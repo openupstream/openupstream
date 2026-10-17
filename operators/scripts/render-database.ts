@@ -38,7 +38,11 @@ const [project, database, config] = [read(projectPath), read(databasePath), read
 const result =
     restoreFrom === undefined || targetTime === undefined
         ? databaseManifests(project, database, config)
-        : restoredDatabaseManifests(project, database, config, { databaseId: restoreFrom, targetTime });
+        : // The source is in the same Project: its ObjectStore is read from this namespace.
+          restoredDatabaseManifests(project, database, config, {
+              database: { id: restoreFrom, projectId: project.id },
+              targetTime,
+          });
 if (!result.ok) {
     console.error(JSON.stringify(result.error, null, 2));
     process.exit(1);
