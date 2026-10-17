@@ -1,10 +1,13 @@
 /**
- * The public API (ARCHITECTURE.md, "Control plane"): Projects and their
- * Databases in the caller's Accounts. Every route under /v1 except the
- * health check needs a madAuth JWT. Another Account's Project answers 404,
- * like one that does not exist.
+ * The public API (ARCHITECTURE.md, "Control plane"): the caller's Accounts,
+ * and the Projects and Databases in them. Every route under /v1 except the
+ * health check needs a madAuth session token or API key (./auth.ts); an
+ * API key needs `openupstream:read` for GET and `openupstream:write` for
+ * anything else. Another Account's Project answers 404, like one that does
+ * not exist.
  */
 import {
+    API_KEY_SCOPES,
     COMPUTE_SITES,
     DATABASE_MIN_MEMORY_MB,
     DNS_LABEL,
@@ -19,18 +22,29 @@ import {
 import { Hono } from 'hono';
 import type pg from 'pg';
 import { z } from 'zod';
+import { createAccount, listAccounts } from '../accounts/store.js';
 import { createDatabase, deleteDatabase, getDatabase, listDatabases } from '../databases/store.js';
 import { type ControlPlaneKube, stateOf } from '../kube.js';
 import { createProject, deleteProject, getProject, listProjects } from '../projects/store.js';
-import { type Verify, accountsOf } from './auth.js';
+import { type Authenticate, type Identity, accountsOf } from './auth.js';
 
 export interface ApiDeps {
     readonly pool: pg.Pool;
-    readonly verify: Verify;
+    readonly authenticate: Authenticate;
     readonly kube: ControlPlaneKube;
     readonly log?: (entry: Record<string, unknown>) => void;
 }
 
+
+const accountInput = z.strictObject({
+    name: z.string().trim().min(1).max(200),
+});
+
+/** Whether an API key with `scopes` may make a request with `method`; a session (undefined) may make any. */
+export const scopeAllows = (scopes: readonly string[] | undefined, method: string): boolean =>
+    scopes === undefined ||
+    scopes.includes(API_KEY_SCOPES.write) ||
+    ((method === 'GET' || method === 'HEAD') && scopes.includes(API_KEY_SCOPES.read));
 
 const projectInput = z.strictObject({
     accountId: z.string().regex(UUID),
@@ -52,10 +66,10 @@ const connectionOf = (database: Database) => ({
     user: 'app',
 });
 
-type Env = { Variables: { accountIds: string[] } };
+type Env = { Variables: { identity: Identity; accountIds: string[] } };
 
 export function createApi(deps: ApiDeps): Hono<Env> {
-    const { pool, verify, kube } = deps;
+    const { pool, authenticate, kube } = deps;
     const app = new Hono<Env>();
 
     /** The state from the Cluster; `unknown` when Kubernetes cannot be asked, rather than failing the request. */
@@ -80,19 +94,20 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (token === undefined) {
             return c.json({ error: 'bearer token required' }, 401);
         }
-        const verified = await verify(token);
-        if (!verified.ok) {
-            if (verified.error.kind === 'unavailable') {
-                deps.log?.({ msg: 'cannot verify tokens', error: verified.error.reason });
+        const identity = await authenticate(token);
+        if (!identity.ok) {
+            if (identity.error.kind === 'unavailable') {
+                deps.log?.({ msg: 'cannot verify tokens', error: identity.error.reason });
                 return c.json({ error: 'cannot verify tokens now' }, 503);
             }
             return c.json({ error: 'invalid token' }, 401);
         }
-        const accountIds = await accountsOf(pool, verified.value.subject);
-        if (accountIds.length === 0) {
-            return c.json({ error: 'not a Member of any Account' }, 403);
+        if (!scopeAllows(identity.value.scopes, c.req.method)) {
+            const needed = c.req.method === 'GET' ? API_KEY_SCOPES.read : API_KEY_SCOPES.write;
+            return c.json({ error: `this API key lacks the scope ${needed}` }, 403);
         }
-        c.set('accountIds', accountIds);
+        c.set('identity', identity.value);
+        c.set('accountIds', await accountsOf(pool, identity.value.subject));
         return next();
     });
 
@@ -101,6 +116,22 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         issues: issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
     });
     const body = (c: { req: { json: () => Promise<unknown> } }) => c.req.json().catch(() => undefined);
+
+    app.get('/v1/accounts', async (c) => c.json(await listAccounts(pool, c.get('identity').subject)));
+
+    app.post('/v1/accounts', async (c) => {
+        const input = accountInput.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const { subject, email } = c.get('identity');
+        if (email === undefined) {
+            return c.json({ error: 'your madAuth user has no e-mail address' }, 400);
+        }
+        const account = await createAccount(pool, subject, email, input.data.name);
+        c.header('location', `/v1/accounts/${account.id}`);
+        return c.json(account, 201);
+    });
 
     app.get('/v1/projects', async (c) => c.json(await listProjects(pool, c.get('accountIds'))));
 

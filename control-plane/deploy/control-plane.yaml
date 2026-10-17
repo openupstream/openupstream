@@ -5,8 +5,8 @@
 # operators (never routed by ingress).
 #
 # The image is pinned by digest when applied (infra/dev-cluster/platform.sh).
-# Needs the ConfigMap control-plane-config (AUTH_ISSUER, AUTH_AUDIENCE,
-# AUTH_JWKS_URL or AUTH_JWKS, BACKUP_BUCKET, BACKUP_RETENTION) and the backup
+# Needs the ConfigMap control-plane-config (AUTH_ISSUER,
+# MADAUTH_URL, BACKUP_BUCKET, BACKUP_RETENTION) and the backup
 # credentials Secret backup-s3, which the Databases operator copies into
 # this namespace.
 apiVersion: v1

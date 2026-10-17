@@ -12,11 +12,11 @@ export const SDK_VERSION = '0.0.0';
 
 export * from './model.js';
 export * from './internal.js';
-import type { DatabaseDetails, DatabaseInput, Id, Project, ProjectInput } from './model.js';
+import type { Account, AccountInput, DatabaseDetails, DatabaseInput, Id, Project, ProjectInput } from './model.js';
 
 export interface ClientOptions {
     baseUrl?: string;
-    /** A madAuth token: a Member's session or an API key. */
+    /** A madAuth session token, or one of the user's madAuth API keys (`madauth_…`). */
     token: string;
 }
 
@@ -40,6 +40,16 @@ export class OpenUpstreamClient {
     async health(): Promise<{ ok: boolean }> {
         const res = await fetch(`${this.baseUrl}/v1/health`);
         return { ok: res.ok };
+    }
+
+    /** The Accounts the caller is a Member of. */
+    listAccounts(): Promise<ApiResult<Account[]>> {
+        return this.#call('GET', '/v1/accounts');
+    }
+
+    /** A new Account, with the caller as its first Member. */
+    createAccount(input: AccountInput): Promise<ApiResult<Account>> {
+        return this.#call('POST', '/v1/accounts', input);
     }
 
     listProjects(): Promise<ApiResult<Project[]>> {

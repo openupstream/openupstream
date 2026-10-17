@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # Bootstraps the platform on the dev cluster, after operators.sh:
 #
-# 1. the control plane's own Database (the platform Project's, PLATFORM in
-#    sdk/src/internal.ts), with one reconcile pass from this machine;
-# 2. the control plane next to it, which migrates and seeds the platform
-#    rows, so from then on the operator owns that Database too;
-# 3. the Databases operator, reconciling every 30 s with rows from the
+# 1. the platform Project's Databases (PLATFORM in sdk/src/internal.ts):
+#    the control plane's and madAuth's, with one reconcile pass from this
+#    machine;
+# 2. madAuth with its sidecar, its signing key and webhook secret generated
+#    once; on the dev cluster its e-mails go to the sidecar's log (MAIL=log)
+#    and its public URL is http://localhost:8787 (a port-forward);
+# 3. the control plane, which migrates and seeds the platform rows, so from
+#    then on the operator owns those Databases too;
+# 4. the Databases operator, reconciling every 30 s with rows from the
 #    control plane.
 #
 # Images come from GHCR, pinned by digest: by default the ones built for the
@@ -20,6 +24,10 @@ IMAGE_TAG=${IMAGE_TAG:-$(git rev-parse HEAD)}
 CONFIG=$PWD/database-config.json
 PLATFORM_NS=project-00000000-0000-4000-8000-000000000002
 PLATFORM_DB=db-00000000-0000-4000-8000-000000000003
+AUTH_DB=db-00000000-0000-4000-8000-000000000004
+# madAuth's public URL: the issuer of its tokens, and the only app origin.
+# On the dev cluster: kubectl -n $PLATFORM_NS port-forward svc/madauth 8787
+MADAUTH_ISSUER=${MADAUTH_ISSUER:-http://localhost:8787}
 
 # Anonymous, like the cluster's pull: fails while a package is not public.
 digest() { # image name → image@sha256:…
@@ -38,15 +46,34 @@ echo "control plane: $CONTROL_PLANE_IMAGE"
 echo "operators:     $OPERATORS_IMAGE"
 
 (cd "$ROOT/operators" && npx tsx scripts/reconcile-databases.ts --platform "$CONFIG" >/dev/null)
-kubectl -n "$PLATFORM_NS" wait "cluster/$PLATFORM_DB" --for=condition=Ready --timeout=10m
+kubectl -n "$PLATFORM_NS" wait "cluster/$PLATFORM_DB" "cluster/$AUTH_DB" --for=condition=Ready --timeout=10m
 
-# Dev tokens: no madAuth yet, so the API trusts the public key in
-# .state/jwt (dev-token.sh mints tokens with the private one).
-[[ -f .state/jwt/jwks.json ]] || (cd "$ROOT/control-plane" && node scripts/dev-token.mjs init "$PWD/../infra/dev-cluster/.state/jwt")
+# madAuth's keys: generated once, kept in the cluster only. The signing key
+# is a private ES256 JWK, as `madauth generate-key` makes it.
+if ! kubectl -n "$PLATFORM_NS" get secret madauth >/dev/null 2>&1; then
+  (cd "$ROOT/control-plane" && node --input-type=module -e "
+    import { calculateJwkThumbprint, exportJWK, generateKeyPair } from 'jose';
+    import { randomBytes } from 'node:crypto';
+    const { privateKey } = await generateKeyPair('ES256', { extractable: true });
+    const jwk = await exportJWK(privateKey);
+    const key = { ...jwk, alg: 'ES256', kid: await calculateJwkThumbprint(jwk) };
+    console.log(JSON.stringify({ apiVersion: 'v1', kind: 'Secret', type: 'Opaque',
+      metadata: { name: 'madauth', namespace: '$PLATFORM_NS' },
+      stringData: { MADAUTH_SIGNING_KEY: JSON.stringify(key), WEBHOOK_SECRET: 'whsec_' + randomBytes(32).toString('base64') } }));
+  ") | kubectl apply -f - >/dev/null
+fi
+kubectl -n "$PLATFORM_NS" create configmap madauth-config --dry-run=client -o yaml \
+  --from-literal=MADAUTH_ISSUER="$MADAUTH_ISSUER" \
+  --from-literal=ALLOWED_ORIGINS="$MADAUTH_ISSUER" \
+  --from-literal=WEBHOOK_EVENTS=email.send_verification,email.send_password_reset,email.send_already_registered,email.send_password_reset_no_password \
+  --from-literal=MAIL=log | kubectl apply -f - >/dev/null
+sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/infra/madauth/madauth.yaml" |
+  kubectl apply -f - >/dev/null
+kubectl -n "$PLATFORM_NS" rollout status deployment/madauth --timeout=5m
+
 kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client -o yaml \
-  --from-literal=AUTH_ISSUER=https://dev.openupstream.invalid \
-  --from-literal=AUTH_AUDIENCE=openupstream-api \
-  --from-file=AUTH_JWKS=.state/jwt/jwks.json \
+  --from-literal=AUTH_ISSUER="$MADAUTH_ISSUER" \
+  --from-literal=MADAUTH_URL="http://madauth.$PLATFORM_NS.svc:8787" \
   --from-literal=BACKUP_BUCKET="$(jq -r .backup.bucket "$CONFIG")" \
   --from-literal=BACKUP_RETENTION="$(jq -r .backup.retention "$CONFIG")" | kubectl apply -f - >/dev/null
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/control-plane/deploy/control-plane.yaml" |

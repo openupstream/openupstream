@@ -40,10 +40,11 @@ export interface DatabaseRow {
 }
 
 /**
- * The platform's own Account, Project and Database: the control plane's
- * state. The bootstrap creates this Database once; the control plane seeds
- * these rows at startup, and from then on the operator reconciles it like
- * any customer's. Fixed ids, so bootstrap and control plane agree.
+ * The platform's own Account, Project and Databases: the control plane's
+ * state (`database`) and madAuth's users (`authDatabase`). The bootstrap
+ * creates these Databases once; the control plane seeds these rows at
+ * startup, and from then on the operator reconciles them like any
+ * customer's. Fixed ids, so bootstrap and control plane agree.
  */
 export const PLATFORM = {
     account: {
@@ -66,4 +67,19 @@ export const PLATFORM = {
         storageGb: 5,
         createdAt: '2026-10-17T00:00:00Z',
     },
-} as const satisfies { account: Account; project: Project; database: Database };
+    authDatabase: {
+        id: '00000000-0000-4000-8000-000000000004',
+        projectId: '00000000-0000-4000-8000-000000000002',
+        name: 'auth',
+        homeSite: 'hetzner-fsn1',
+        memoryMb: 512,
+        storageGb: 2,
+        createdAt: '2026-10-17T00:00:00Z',
+    },
+} as const satisfies { account: Account; project: Project; database: Database; authDatabase: Database };
+
+/** The platform's Database rows, as the operator gets them. */
+export const PLATFORM_ROWS: readonly DatabaseRow[] = [
+    { project: PLATFORM.project, database: PLATFORM.database },
+    { project: PLATFORM.project, database: PLATFORM.authDatabase },
+];

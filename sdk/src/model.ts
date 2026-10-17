@@ -53,6 +53,21 @@ export interface Database {
     createdAt: Timestamp;
 }
 
+/** Creates an Account; the caller becomes its first Member. */
+export interface AccountInput {
+    name: string;
+}
+
+/**
+ * What an API key may do (madAuth API keys, created by the Member): `read`
+ * allows every GET, `write` everything. A Member's own session may do
+ * everything.
+ */
+export const API_KEY_SCOPES = {
+    read: 'openupstream:read',
+    write: 'openupstream:write',
+} as const;
+
 /** Creates a Project in one of the caller's Accounts. */
 export interface ProjectInput {
     accountId: Id;
