@@ -1,0 +1,66 @@
+# What the Database reconcile pass (src/databases/reconcile.ts) may do.
+# Server-side apply is a PATCH that creates missing objects, so every applied
+# kind needs both `patch` and `create`. Nothing here may delete: removing a
+# Database is the control plane's explicit step (ARCHITECTURE.md, decision 48).
+#
+# Secrets are cluster-wide because Project namespaces are created at run
+# time and RBAC cannot select namespaces by name pattern.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: databases-operator
+  namespace: openupstream-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openupstream-databases-operator
+rules:
+  - apiGroups: [""]
+    resources: [namespaces, secrets]
+    verbs: [create, patch]
+  - apiGroups: [postgresql.cnpg.io]
+    resources: [clusters, poolers, scheduledbackups]
+    verbs: [create, patch]
+  - apiGroups: [barmancloud.cnpg.io]
+    resources: [objectstores]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openupstream-databases-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: openupstream-databases-operator
+subjects:
+  - kind: ServiceAccount
+    name: databases-operator
+    namespace: openupstream-system
+---
+# The platform's backup credentials, copied into each Project's namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openupstream-databases-operator
+  namespace: openupstream-system
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [backup-s3]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openupstream-databases-operator
+  namespace: openupstream-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openupstream-databases-operator
+subjects:
+  - kind: ServiceAccount
+    name: databases-operator
+    namespace: openupstream-system

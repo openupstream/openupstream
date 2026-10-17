@@ -24,7 +24,8 @@ defined in [GLOSSARY.md](GLOSSARY.md).
 - Scale-to-zero databases. Postgres is always on with a 256 MB floor; idle
   Databases pay a small memory charge instead of eating a 5–15 s cold start.
 - Synchronous multi-site writes (RPO 0). Replication is asynchronous; RPO is
-  seconds, RTO is the failover time of CloudNativePG.
+  seconds, RTO is the failover time of CloudNativePG (measured: writes back
+  88 s after a whole Site went dark, see Postgres).
 - Queues, mail, DNS, CDN, log analytics. See `docs/scope.md`.
 - Own hardware. Everything runs on rented servers (Hetzner, OVHcloud, netcup).
 - Building images from source. Customers bring a built image.
@@ -67,6 +68,11 @@ When any one Site fails, or its whole provider does:
 
 - etcd keeps quorum (2 of 3), so the Kubernetes API and every operator keep
   working.
+- Kubernetes marks the Site's node NotReady after 20 s
+  (`node-monitor-grace-period`, default 50 s) and replaces its pods 30 s later
+  (default not-ready and unreachable tolerations, default 300 s). CoreDNS and
+  the CloudNativePG operator run twice, one per compute Site; with one
+  replica each, DNS and failover waited for the eviction (#46).
 - CloudNativePG promotes the standby of every Database whose primary was in
   the failed Site. Writes continue after the failover; up to a few seconds of
   writes can be lost (async replication).
@@ -155,8 +161,16 @@ that returns the objects or a list of errors; the reconcile loop around it
 only applies and compares. The CRDs of CloudNativePG and the Barman Cloud
 Plugin are vendored in `operators/crds` at the versions we run, and their
 TypeScript types are generated from them at build time (not checked in), so
-a misspelt or removed field fails the typecheck. There is no Kubernetes
-client library yet; it is chosen with the reconcile loop.
+a misspelt or removed field fails the typecheck.
+
+The reconcile pass talks to Kubernetes through `@kubernetes/client-node`,
+with server-side apply under the field manager `openupstream-operators`
+(#47). It only creates and updates: a Database's objects are deleted by the
+control plane's delete of that Database or its Project, never because a row
+is missing (#48). Its rows come from an internal control plane API (#49);
+until that exists, `operators/scripts/reconcile-databases.ts` runs one pass
+from a JSON file. Each operator's RBAC is in `operators/deploy/`; the
+Databases operator may create and patch, not delete.
 
 ## Products
 
@@ -182,15 +196,24 @@ client library yet; it is chosen with the reconcile loop.
 - Failover is automatic inside the one k3s cluster. CloudNativePG's primary
   isolation check (on by default) shuts down a primary that can reach neither
   the API server nor its standby. There is no CloudNativePG replica cluster.
+  Measured on the dev cluster (2026-10-17, primary, operator leader and
+  controller-manager leader all in the Site that went dark): no acknowledged
+  write lost; writes through PgBouncer back after 88 s (node NotReady after
+  42 s, operator leader in the other Site after 64 s, promotion at 84 s).
+  The old primary rejoins as a standby (`pg_rewind`) when its Site returns.
+  Runbook: `docs/runbooks/failover-test.md`.
 - Failback is a declarative switchover back to the Home site once it is
-  healthy, done from a runbook, not automatically.
+  healthy, done from a runbook, not automatically. Writes pause for about
+  15 s.
 - Storage is local NVMe through TopoLVM, which enforces the requested volume
   size and supports resizing.
 - PgBouncer through a CloudNativePG `Pooler` of type `rw`, so it follows the
   primary: `db-<database id>-pooler`, two instances with one per compute
   Site, transaction pooling with `max_prepared_statements` so drivers'
   prepared statements work. Session features (`LISTEN`, advisory locks,
-  `SET`) need a direct connection to the Cluster.
+  `SET`) need a direct connection to the Cluster. TCP keepalives and
+  `tcp_user_timeout` drop connections to a primary in a dark Site, which
+  sends no reset (#50).
 - Always on, 256 MB memory floor, pgvector enabled (created in the
   application database at bootstrap). The memory limit is also the request;
   `shared_buffers` is a quarter of it. The image is ours (`images/postgres`),
@@ -336,6 +359,12 @@ client library yet; it is chosen with the reconcile loop.
   one's archive. The credentials are a Secret in the Project's namespace.
 - A `ScheduledBackup` takes base backups, the first right after creation,
   from the standby when there is one.
+- A restore creates a new Database (new id) in the source's Project whose
+  Cluster bootstraps from the source's ObjectStore up to a target time, replaying WAL across timelines,
+  so also past a failover. It archives into its own folder; the source's is
+  only read (#51). Tested 2026-10-17: restored to the exact last row before
+  the target time, across a failover's timeline switch, in about a minute.
+  Runbook: `docs/runbooks/restore-from-backup.md`.
 
 ## Observability and customer logs
 
@@ -390,11 +419,18 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 38 | Usage events have no foreign keys, carry the Account and outlive their Project; one event per Resource, unit and interval start | cascade with the Project; no uniqueness | usage between the last rollup and a deletion must still be billed; append-only rows cannot be corrected, so a retried emit must not create a second one |
 | 39 | Secrets: AES-256-GCM for both layers, associated data binding values to Project and name, KEK id stored per data key | one KEK-encrypted value per Secret; libsodium | `node:crypto` only; the binding stops copied rows from decrypting elsewhere; the id allows KEK rotation by rewrapping |
 | 40 | CRD types generated with json-schema-to-typescript from upstream CRDs vendored in `operators/crds`; generated code not checked in | hand-written types; generated code checked in; `@kubernetes-models` classes | field names and enums come from the version we run, and typos fail the typecheck; types only, no runtime dependency; an upgrade is reviewed as a CRD diff, not thousands of generated lines |
-| 41 | No Kubernetes client library until the reconcile loop | `@kubernetes/client-node` now | the first part of each operator is pure functions returning plain objects; the client is picked when there is a cluster to test it against |
+| 41 | ~~No Kubernetes client library until the reconcile loop~~, resolved by #47 | `@kubernetes/client-node` now | the first part of each operator is pure functions returning plain objects; the client is picked when there is a cluster to test it against |
 | 42 | Kubernetes objects named by id (`project-<project id>`, `db-<database id>`); names only in labels | names in object names; a Service named after the Database as an alias | Project names are only unique per Account and can change; CloudNativePG caps Cluster names at 50 characters; a new Database under an old name must not reuse the old backup folder |
 | 43 | PgBouncer in transaction mode with `max_prepared_statements`, one Pooler instance per compute Site | session mode; a single Pooler instance | pooling only saves connections in transaction mode, which matters at a 256 MB floor; one instance per Site keeps the Pooler up when a Site fails |
 | 44 | Primary placed in the Home site by a preferred node affinity; required anti-affinity on the zone places the standby | per-instance placement (CloudNativePG has none); a switchover after creation | CloudNativePG creates the primary first, so the preference decides where it lands |
 | 45 | The third Site's taint is `openupstream.io/third-site=true:NoSchedule`; customer workloads never tolerate it and require a compute Site | node affinity alone | either one alone keeps customer pods off the third Site; both guard against a mistake in the other |
+| 46 | A dark Site is handled fast: `node-monitor-grace-period` 20 s, default not-ready and unreachable tolerations 30 s, CoreDNS and the CloudNativePG operator twice with a hard spread over the compute Sites (`nodeTaintsPolicy: Honor`, `matchLabelKeys: [pod-template-hash]`); the Barman Cloud Plugin once | Kubernetes defaults (50 s, 300 s, one replica each); replicas only | measured on the dev cluster: with the defaults writes stopped for 10 minutes, because DNS and the operator were in the dark Site until their eviction; with replicas and 30 s, 106 s; with 20 s as well, 88 s. Cost: a Site unreachable for more than 20 s counts as failed |
+| 47 | `@kubernetes/client-node` (2.x), server-side apply under the field manager `openupstream-operators`, behind a two-method `Kube` interface | own client on `fetch`; kubernetes-fluent-client | the official client, with apply, watch and informers; the interface keeps it out of the reconcile logic and its exceptions at the boundary |
+| 48 | The Database reconcile pass only creates and updates; deleting a Database's objects is an explicit step of the control plane's delete, and the operator's RBAC has no delete | delete objects without a row; delete unless the listing is empty | deleting a Cluster deletes its volumes; a wrong or empty listing must never delete a running Database |
+| 49 | The operators get their rows from an internal control plane API | a read-only role on the control plane's Database | the schema stays private to the control plane |
+| 50 | PgBouncer drops connections to a dead primary: TCP keepalives (10 s idle, 3 probes 5 s apart), `tcp_user_timeout` 10 s, `server_connect_timeout` 5 s | PgBouncer's defaults | a primary in a dark Site sends no TCP reset; with the defaults PgBouncer kept its connections until `server_idle_timeout` and writes stalled 3 minutes past the promotion |
+| 51 | A restore is a new Database bootstrapped from the source's ObjectStore at a target time; never in place | restore into the existing Database | CloudNativePG bootstraps a Cluster only when it is created; the new id gives the restore its own archive folder, so the source's history stays intact |
+| 52 | Development cluster: three Hetzner Cloud VMs per working session (fsn1; hel1 standing in for Limburg; nbg1 for the third Site) from shell scripts on the hcloud CLI in `infra/dev-cluster`; local-path storage | Terraform; TopoLVM on cloud volumes | no state to keep for a cluster that lives a few hours (#33); nodes carry the real Site names, so manifests apply unchanged. TopoLVM is not tested yet |
 
 ## Open questions
 
@@ -424,6 +460,19 @@ Decisions table once it is settled.
 9. **Member roles.** Every Member can act on all of the Account's Projects
    today; whether there are roles (owner, billing, read-only) or per-Project
    access is not decided.
+10. **In-cluster clients after an API server dies.** In the failover test the
+    CloudNativePG operator in the surviving Site got its leader lease only
+    64 s after the other Site went dark, and the standby's instance manager
+    saw the promotion request 17 s after that: they reach the API through
+    the `kubernetes` Service, which still routed to the dead API server.
+    This is most of the remaining 88 s. To measure: shorter client
+    timeouts, or a node-local API endpoint for system pods.
+11. **Pods do not move back after a Site returns.** The replacement of a
+    pod from the dark Site stays in the other one, so both CloudNativePG
+    operator replicas ended up in one Site. A descheduler
+    (`RemovePodsViolatingTopologySpreadConstraint`) or a runbook step.
+12. **Is `images/postgres` needed?** CloudNativePG's `standard` images ship
+    pgvector (0.8.7 in `17-standard-trixie`); the tests ran on that image.
 
 ## Build order
 
@@ -432,11 +481,14 @@ Decisions table once it is settled.
    step 1 on. Done: `sdk/src/model.ts`, `control-plane/migrations`,
    `control-plane/src/secrets`.
 1. Postgres: CloudNativePG, PgBouncer, backups to Hetzner Object Storage, a
-   tested failover (a whole Site down) and a tested restore. Started: the
-   manifests for a Database (`operators/src/databases`). Next, with a
-   cluster: install CloudNativePG and the Barman Cloud Plugin, the reconcile
-   loop and the backup credentials Secret per Project namespace, then the
-   failover and restore tests.
+   tested failover (a whole Site down) and a tested restore. Done on the dev
+   cluster (2026-10-17): the manifests for a Database
+   (`operators/src/databases`), one reconcile pass with the backup
+   credentials Secret per Project namespace, the failover test, failback and
+   a point-in-time restore from NBG1. Left: TopoLVM, the control plane's
+   internal API for Database rows and the operator running in the cluster
+   on it, deleting a Database from the control plane (#48), restore through
+   the API.
 2. Object storage and static sites: Garage, routing table, Traefik,
    cert-manager.
 3. Containers, Service mode.

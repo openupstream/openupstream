@@ -11,6 +11,8 @@ which is why it lives in the monorepo.
   cert-manager, CloudNativePG, gVisor RuntimeClass, Prometheus/Loki/Grafana.
 - `garage/` — Garage cluster layout and configuration: replication factor 3,
   one zone per site.
+- `dev-cluster/` — a throwaway three-Site k3s cluster on Hetzner Cloud for
+  one working session (ARCHITECTURE.md, decisions 33 and 52).
 
 Bootstrap order: Terraform → k3s install on the nodes → Helm releases → Garage
 layout → control plane. A runbook lives in `docs/runbooks/bootstrap.md` once

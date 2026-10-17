@@ -38,6 +38,22 @@ export const BACKUP_CREDENTIAL_KEYS = { accessKeyId: 'ACCESS_KEY_ID', secretAcce
 export const DATABASE_INSTANCES = 2;
 export const POOLER_INSTANCES = 2;
 
+/**
+ * A primary in a dark Site sends no TCP reset, so without these PgBouncer
+ * keeps its connections to it until server_idle_timeout (10 minutes) and
+ * writes stall long after the failover (measured 2026-10-17). Keepalives
+ * drop an idle dead connection after about 25 s, tcp_user_timeout one with
+ * unacknowledged data after 10 s.
+ */
+export const POOLER_DEAD_SERVER_DETECTION = {
+    tcp_keepalive: '1',
+    tcp_keepidle: '10',
+    tcp_keepintvl: '5',
+    tcp_keepcnt: '3',
+    tcp_user_timeout: '10000',
+    server_connect_timeout: '5',
+} as const;
+
 /** Platform settings that are the same for every Database. */
 export interface DatabaseConfig {
     /** Our Postgres image (`images/postgres`), pinned by digest. */
@@ -219,9 +235,12 @@ const poolerFor = (meta: ObjectMeta, cluster: string): PoolerManifest => ({
         type: 'rw',
         pgbouncer: {
             poolMode: 'transaction',
-            // Lets clients use protocol-level prepared statements in
-            // transaction mode.
-            parameters: { max_prepared_statements: '200' },
+            parameters: {
+                // Lets clients use protocol-level prepared statements in
+                // transaction mode.
+                max_prepared_statements: '200',
+                ...POOLER_DEAD_SERVER_DETECTION,
+            },
         },
         template: {
             metadata: { labels: inheritedLabels(meta) },
@@ -262,6 +281,109 @@ const scheduledBackupFor = (meta: ObjectMeta, config: DatabaseConfig): Scheduled
         backupOwnerReference: 'self',
     },
 });
+
+/** Where a restored Database's data comes from. */
+export interface RestoreSource {
+    /**
+     * The Database whose backups are restored. Its ObjectStore must still
+     * exist, in the same Project: the restore reads it from its own namespace.
+     */
+    readonly database: Pick<Database, 'id' | 'projectId'>;
+    /** RFC 3339 with a time zone, e.g. `2026-10-17T10:30:00Z`. */
+    readonly targetTime: string;
+}
+
+export type RestoreError =
+    | DatabaseManifestError
+    | { readonly kind: 'invalid-id'; readonly field: 'source.databaseId'; readonly value: string }
+    | { readonly kind: 'restore-into-source'; readonly databaseId: string }
+    | { readonly kind: 'source-in-other-project'; readonly projectId: string; readonly sourceProjectId: string }
+    | { readonly kind: 'invalid-target-time'; readonly value: string };
+
+/** Date-time with an explicit offset; Postgres would read a bare time as server-local. */
+const RFC3339 = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-](\d{2}):(\d{2}))$/;
+
+/** RFC3339 shape and a real calendar time: Date.parse turns 02-30 into 03-02. */
+const isRfc3339 = (value: string): boolean => {
+    const match = RFC3339.exec(value);
+    if (match === null) {
+        return false;
+    }
+    const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number) as [
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+    ];
+    const [offsetHour, offsetMinute] = [Number(match[9] ?? 0), Number(match[10] ?? 0)];
+    const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    return (
+        month >= 1 &&
+        month <= 12 &&
+        day >= 1 &&
+        day <= daysInMonth &&
+        hour <= 23 &&
+        minute <= 59 &&
+        second <= 59 &&
+        offsetHour <= 23 &&
+        offsetMinute <= 59
+    );
+};
+
+const RESTORE_SOURCE = 'origin';
+
+/**
+ * The objects of a new Database that starts as a copy of `source` at its
+ * target time, read from the source's ObjectStore (WAL replay across
+ * timelines, so also past a failover). The new Database archives into its
+ * own folder; the source's archive is only read. Restoring in place is not
+ * possible: CloudNativePG only bootstraps a Cluster when it is created.
+ */
+export function restoredDatabaseManifests(
+    project: Project,
+    database: Database,
+    config: DatabaseConfig,
+    source: RestoreSource,
+): Result<DatabaseManifests, RestoreError[]> {
+    const checks: [boolean, RestoreError][] = [
+        [UUID.test(source.database.id), { kind: 'invalid-id', field: 'source.databaseId', value: source.database.id }],
+        [source.database.id !== database.id, { kind: 'restore-into-source', databaseId: database.id }],
+        [
+            source.database.projectId === project.id,
+            { kind: 'source-in-other-project', projectId: project.id, sourceProjectId: source.database.projectId },
+        ],
+        [isRfc3339(source.targetTime), { kind: 'invalid-target-time', value: source.targetTime }],
+    ];
+    const sourceErrors = checks.filter(([valid]) => !valid).map(([, error]) => error);
+    const result = databaseManifests(project, database, config);
+    const errors = [...(result.ok ? [] : result.error), ...sourceErrors];
+    if (!result.ok || errors.length > 0) {
+        return err(errors);
+    }
+    const { cluster } = result.value;
+    const archive = clusterName(source.database);
+    return ok({
+        ...result.value,
+        cluster: {
+            ...cluster,
+            spec: {
+                ...cluster.spec,
+                bootstrap: { recovery: { source: RESTORE_SOURCE, recoveryTarget: { targetTime: source.targetTime } } },
+                externalClusters: [
+                    {
+                        name: RESTORE_SOURCE,
+                        plugin: {
+                            name: BARMAN_CLOUD_PLUGIN,
+                            parameters: { barmanObjectName: archive, serverName: archive },
+                        },
+                    },
+                ],
+            },
+        },
+    });
+}
 
 /** The Kubernetes objects that run `database`, or every reason it cannot run. */
 export function databaseManifests(

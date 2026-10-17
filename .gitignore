@@ -19,3 +19,5 @@ infra/terraform/*.tfvars
 kubeconfig*
 # generated from operators/crds
 operators/src/generated/
+# throwaway dev cluster state (SSH key, k3s token, kubeconfig)
+infra/dev-cluster/.state/
