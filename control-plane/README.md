@@ -68,7 +68,9 @@ tokens for the dev cluster, where there is no madAuth yet.
 Deleting only marks rows (`deleted_at`): the operator stops seeing them at
 once, and the name can be used again. `src/cleanup.ts` then, every 30 s and
 on one replica at a time (a Postgres advisory lock), removes a deleted
-Database's Cluster, Pooler and ScheduledBackup; after `BACKUP_RETENTION` it
+Database's Cluster, Pooler and ScheduledBackup, and again on every pass for
+5 minutes, in case an operator pass that read the row before the delete
+re-applies them; after `BACKUP_RETENTION` it
 deletes the Database's backup folder from the bucket, its ObjectStore and its
 row; and once a deleted Project has no Database rows left, its namespace and
 its row. Until the retention has passed a deleted Database can be restored

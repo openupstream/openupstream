@@ -175,7 +175,9 @@ yet.
 Deleting a Project or Database only marks its row; a cleanup loop in the
 control plane carries the delete out (#58): every 30 s, on one replica at a
 time (a Postgres advisory lock), it removes a deleted Database's Cluster,
-Pooler and ScheduledBackup at once, deletes its backups, ObjectStore and row
+Pooler and ScheduledBackup at once and again on every pass for 5 minutes (an
+operator pass that read the row before the delete could still re-apply
+them), deletes its backups, ObjectStore and row
 after the backup retention window (#60), and removes a deleted Project's
 namespace and row once it has no Database rows left. A deleted name is free
 again at once. On the dev cluster a deleted Database's Cluster was gone in

@@ -30,6 +30,9 @@ describe('API calls', () => {
                 } else if (req.method === 'DELETE') {
                     res.writeHead(202);
                     res.end();
+                } else if (req.url === '/v1/projects/truncated') {
+                    res.writeHead(500, { 'content-type': 'application/json' });
+                    res.end('{"error": "intern');
                 } else if (req.url === '/v1/projects') {
                     res.writeHead(200, { 'content-type': 'application/json' });
                     res.end('[]');
@@ -61,6 +64,10 @@ describe('API calls', () => {
         });
         assert.equal(seen.at(-1)?.body, '{"accountId":"a","name":"shop"}');
         assert.deepEqual(await client.getProject('x'), { ok: false, error: { status: 502, message: 'Bad Gateway' } });
+        assert.deepEqual(await client.getProject('truncated'), {
+            ok: false,
+            error: { status: 500, message: 'Internal Server Error' },
+        });
     });
 
     test('an unreachable API is an error, not an exception', async () => {

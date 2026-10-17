@@ -1,6 +1,6 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { type CryptoKey, SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from 'jose';
+import { type CryptoKey, SignJWT, createLocalJWKSet, createRemoteJWKSet, exportJWK, generateKeyPair } from 'jose';
 import type { DatabaseDetails, Project } from '@openupstream/sdk';
 import { listDatabaseRows } from '../databases/rows.js';
 import { type ClusterStatus, type ControlPlaneKube } from '../kube.js';
@@ -86,6 +86,21 @@ describe('authentication', () => {
             const response = await api.request('/v1/projects', { headers: { authorization: `Bearer ${jwt}` } });
             assert.equal(response.status, 401);
         }
+    });
+
+    test('when the keys cannot be fetched (madAuth down): 503, not 401', async () => {
+        const down = createApi({
+            pool: db.pool,
+            kube,
+            verify: jwtVerifier({ issuer: ISSUER, audience: AUDIENCE, keys: createRemoteJWKSet(new URL('http://127.0.0.1:9/jwks')) }),
+        });
+        const response = await down.request('/v1/projects', { headers: { authorization: `Bearer ${await token('alice')}` } });
+        assert.equal(response.status, 503);
+    });
+
+    test('a malformed token: 401', async () => {
+        const response = await api.request('/v1/projects', { headers: { authorization: 'Bearer not.a.jwt' } });
+        assert.equal(response.status, 401);
     });
 
     test('a valid token of nobody who is a Member: 403', async () => {

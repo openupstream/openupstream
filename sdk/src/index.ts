@@ -93,7 +93,7 @@ export class OpenUpstreamClient {
         }
         // A proxy in front may answer with HTML; only the API's own answers are JSON.
         const isJson = response.value.headers.get('content-type')?.includes('application/json') ?? false;
-        const parsed: unknown = isJson ? await response.value.json() : undefined;
+        const parsed: unknown = isJson ? await response.value.json().catch(() => undefined) : undefined;
         if (response.value.ok) {
             return { ok: true, value: parsed as T };
         }

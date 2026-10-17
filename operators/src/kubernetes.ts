@@ -46,11 +46,7 @@ export type Manifest<T, ApiVersion extends string, Kind extends string> = Omit<
     metadata: ObjectMeta;
 };
 
-/** Ids are lowercase UUIDs, as Postgres prints them; usable in DNS names. */
-export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-/** Project names, Database names and label values share this shape. */
-export const DNS_LABEL = /^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/;
+export { DNS_LABEL, UUID } from '@openupstream/sdk';
 
 // Named by id; the control plane needs the same names, so they live in the sdk.
 export { projectNamespace } from '@openupstream/sdk';

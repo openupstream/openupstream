@@ -7,6 +7,8 @@
 import {
     COMPUTE_SITES,
     DATABASE_MIN_MEMORY_MB,
+    DNS_LABEL,
+    UUID,
     type Database,
     type DatabaseDetails,
     type DatabaseState,
@@ -29,8 +31,6 @@ export interface ApiDeps {
     readonly log?: (entry: Record<string, unknown>) => void;
 }
 
-const DNS_LABEL = /^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const projectInput = z.strictObject({
     accountId: z.string().regex(UUID),
@@ -82,6 +82,10 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         const verified = await verify(token);
         if (!verified.ok) {
+            if (verified.error.kind === 'unavailable') {
+                deps.log?.({ msg: 'cannot verify tokens', error: verified.error.reason });
+                return c.json({ error: 'cannot verify tokens now' }, 503);
+            }
             return c.json({ error: 'invalid token' }, 401);
         }
         const accountIds = await accountsOf(pool, verified.value.subject);

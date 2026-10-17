@@ -94,32 +94,44 @@ test('a deleted Database loses its running objects at once, keeps its backups un
     await db.pool.query('update databases set deleted_at = now() where id = $1', [databaseId]);
     await cleanupPass(deps());
     const namespace = `project-${projectId}`;
-    assert.deepEqual(removed, [
+    const running = [
         `ScheduledBackup ${namespace}/db-${databaseId}`,
         `Pooler ${namespace}/db-${databaseId}-pooler`,
         `Cluster ${namespace}/db-${databaseId}`,
-    ]);
-    assert.notEqual((await row(databaseId))?.objects_removed_at, null);
+    ];
+    assert.deepEqual(removed, running);
     assert.deepEqual(prefixes, []);
+
+    // Within the grace period an operator pass that still saw the row may
+    // re-apply the objects, so they are removed again on every pass.
+    assert.equal((await row(databaseId))?.objects_removed_at, null);
+    await cleanupPass(deps());
+    assert.deepEqual(removed, [...running, ...running]);
+
+    // After it, that is recorded once and not repeated.
+    await ageDeletion(databaseId, '6 minutes');
+    await cleanupPass(deps());
+    assert.notEqual((await row(databaseId))?.objects_removed_at, null);
+    removed.length = 0;
 
     // Within the retention window nothing more happens.
     await ageDeletion(databaseId, '6 days');
     await cleanupPass(deps());
-    assert.equal(removed.length, 3);
+    assert.equal(removed.length, 0);
     assert.ok(await row(databaseId));
 
     // After it, the backups, the ObjectStore and the row go.
     await ageDeletion(databaseId, '8 days');
     await cleanupPass(deps());
     assert.deepEqual(prefixes, [`${namespace}/db-${databaseId}/`]);
-    assert.equal(removed[3], `ObjectStore ${namespace}/db-${databaseId}`);
+    assert.deepEqual(removed, [`ObjectStore ${namespace}/db-${databaseId}`]);
     assert.equal(await row(databaseId), undefined);
 });
 
 test('a failed step is not recorded and is retried by the next pass', async () => {
     const { removed, prefixes, failKinds, failBackupsWith, deps } = fakes();
     const logs: Record<string, unknown>[] = [];
-    await db.pool.query('update databases set deleted_at = now() where id = $1', [databaseId]);
+    await ageDeletion(databaseId, '6 minutes');
     failKinds.add('Cluster');
     await cleanupPass(deps(logs));
     assert.equal((await row(databaseId))?.objects_removed_at, null);

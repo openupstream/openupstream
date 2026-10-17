@@ -40,7 +40,17 @@ const CLEANUP_LOCK = 7_310_001;
  */
 async function runCleanup(deps: CleanupDeps, intervalMs: number, signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
-        const client = await deps.pool.connect();
+        const connected = await deps.pool.connect().then(
+            (client) => ({ ok: true as const, client }),
+            (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }),
+        );
+        if (!connected.ok) {
+            // E.g. our Database is failing over: wait for the next pass.
+            deps.log({ msg: 'cleanup pass skipped: no database connection', error: connected.error });
+            await sleep(intervalMs, undefined, { signal }).catch(() => undefined);
+            continue;
+        }
+        const { client } = connected;
         const pass = client
             .query<{ locked: boolean }>('select pg_try_advisory_lock($1) as locked', [CLEANUP_LOCK])
             .then(async ({ rows }) => {

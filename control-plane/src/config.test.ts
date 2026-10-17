@@ -42,3 +42,12 @@ test('every problem is reported at once', () => {
         'PORT and INTERNAL_PORT must be port numbers',
     ]);
 });
+
+test('an inline JWKS must be a JWKS document, a JWKS URL a URL', () => {
+    const { AUTH_JWKS_URL: _url, ...rest } = env;
+    const bad = configFrom({ ...rest, AUTH_JWKS: '{"keys": ' });
+    assert.deepEqual(bad.ok ? [] : bad.error, ['AUTH_JWKS must be a JWKS document: {"keys": [...]}']);
+    assert.equal(configFrom({ ...rest, AUTH_JWKS: '{"keys":[]}' }).ok, true);
+    const url = configFrom({ ...env, AUTH_JWKS_URL: 'jwks.json' });
+    assert.deepEqual(url.ok ? [] : url.error, ['AUTH_JWKS_URL must be a URL']);
+});

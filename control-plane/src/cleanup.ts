@@ -3,7 +3,9 @@
  * only marks rows deleted; each pass then, in this order:
  *
  * 1. removes a deleted Database's Cluster, Pooler and ScheduledBackup (with
- *    the Cluster go its volumes) and records that;
+ *    the Cluster go its volumes); it records that only once the deletion is
+ *    older than OPERATOR_GRACE, because an operator pass that fetched its
+ *    rows before the delete can still re-apply them until then;
  * 2. once the retention window has passed, deletes its backups from the
  *    bucket, then its ObjectStore, then its row. Until then it can be
  *    restored into a new Database;
@@ -34,6 +36,12 @@ interface DeletedDatabase {
 
 const CNPG = 'postgresql.cnpg.io/v1';
 
+/**
+ * Longer than any operator pass can take (its Kubernetes calls time out
+ * after 30 s): after this, no pass that still saw the row is running.
+ */
+export const OPERATOR_GRACE = '5 minutes';
+
 const runningObjects = (database: { id: string; projectId: string }): ObjectRef[] => {
     const namespace = projectNamespace(database.projectId);
     return [
@@ -55,8 +63,10 @@ const removeAll = async (kube: ControlPlaneKube, refs: readonly ObjectRef[]): Pr
 };
 
 async function removeRunningObjects(deps: CleanupDeps): Promise<void> {
-    const { rows } = await deps.pool.query<DeletedDatabase>(
-        'select id, project_id from databases where deleted_at is not null and objects_removed_at is null order by deleted_at',
+    const { rows } = await deps.pool.query<DeletedDatabase & { settled: boolean }>(
+        `select id, project_id, deleted_at < now() - $1::interval as settled from databases
+         where deleted_at is not null and objects_removed_at is null order by deleted_at`,
+        [OPERATOR_GRACE],
     );
     for (const row of rows) {
         const error = await removeAll(deps.kube, runningObjects({ id: row.id, projectId: row.project_id }));
@@ -64,8 +74,10 @@ async function removeRunningObjects(deps: CleanupDeps): Promise<void> {
             deps.log({ msg: 'cleanup: cannot remove Database objects', database: row.id, error });
             continue;
         }
-        await deps.pool.query('update databases set objects_removed_at = now() where id = $1', [row.id]);
-        deps.log({ msg: 'cleanup: Database objects removed, backups kept', database: row.id, retention: deps.retention });
+        if (row.settled) {
+            await deps.pool.query('update databases set objects_removed_at = now() where id = $1', [row.id]);
+            deps.log({ msg: 'cleanup: Database objects removed, backups kept', database: row.id, retention: deps.retention });
+        }
     }
 }
 

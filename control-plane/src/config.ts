@@ -34,6 +34,20 @@ export const DEFAULT_ALLOWED_CALLERS = ['system:serviceaccount:openupstream-syst
 
 type Env = Readonly<Record<string, string | undefined>>;
 
+/** JSON.parse only throws; this answers. */
+const parseJson = (text: string): unknown => {
+    try {
+        return JSON.parse(text);
+    } catch {
+        return undefined;
+    }
+};
+
+const isJwks = (text: string): boolean => {
+    const parsed = parseJson(text);
+    return typeof parsed === 'object' && parsed !== null && 'keys' in parsed && Array.isArray(parsed.keys);
+};
+
 const port = (value: string | undefined, fallback: number): number | undefined => {
     const n = Number(value ?? fallback);
     return Number.isInteger(n) && n > 0 && n < 65536 ? n : undefined;
@@ -56,6 +70,10 @@ export function configFrom(env: Env): Result<Config, string[]> {
     const jwks = env['AUTH_JWKS'] ?? '';
     if ((jwksUrl === '') === (jwks === '')) {
         problems.push('set exactly one of AUTH_JWKS_URL and AUTH_JWKS');
+    } else if (jwks !== '' && !isJwks(jwks)) {
+        problems.push('AUTH_JWKS must be a JWKS document: {"keys": [...]}');
+    } else if (jwksUrl !== '' && !URL.canParse(jwksUrl)) {
+        problems.push('AUTH_JWKS_URL must be a URL');
     }
     const bucket = required('BACKUP_BUCKET');
     const accessKeyId = required('ACCESS_KEY_ID');

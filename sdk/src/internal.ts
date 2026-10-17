@@ -22,6 +22,12 @@ export const poolerName = (database: Pick<Database, 'id'>): string => `${cluster
 export const backupPrefix = (projectId: Id, databaseId: Id): string =>
     `${projectNamespace(projectId)}/${clusterName({ id: databaseId })}/`;
 
+/** Ids are lowercase UUIDs, as Postgres prints them; usable in DNS names. */
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** Project and Database names, and label values: a DNS label (the schema checks the same). */
+export const DNS_LABEL = /^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
 /** Audience of the ServiceAccount tokens the operators send. */
 export const INTERNAL_API_AUDIENCE = 'openupstream-control-plane';
 

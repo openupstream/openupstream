@@ -14,7 +14,23 @@ export interface TokenConfig {
     readonly keys: JWTVerifyGetKey;
 }
 
-export type Verify = (token: string) => Promise<Result<{ readonly subject: string }, string>>;
+export type VerifyError =
+    /** The token is not one we accept: 401. */
+    | { readonly kind: 'invalid'; readonly reason: string }
+    /** The keys could not be fetched (madAuth unreachable): 503, so clients retry. */
+    | { readonly kind: 'unavailable'; readonly reason: string };
+
+export type Verify = (token: string) => Promise<Result<{ readonly subject: string }, VerifyError>>;
+
+/** jose's errors about fetching the JWKS, as opposed to about the token. */
+const UNAVAILABLE = new Set(['ERR_JWKS_TIMEOUT', 'ERR_JOSE_GENERIC']);
+
+const verifyError = (error: unknown): VerifyError => {
+    const code = error instanceof Error && 'code' in error ? String(error.code) : undefined;
+    const reason = error instanceof Error ? error.message : String(error);
+    // Not a jose error at all (fetch failed) or one about the JWKS itself.
+    return code === undefined || UNAVAILABLE.has(code) ? { kind: 'unavailable', reason } : { kind: 'invalid', reason };
+};
 
 /** Asymmetric algorithms only: a shared-secret token could be minted by anyone holding the key. */
 const ALGORITHMS = ['RS256', 'ES256', 'EdDSA'];
@@ -22,8 +38,11 @@ const ALGORITHMS = ['RS256', 'ES256', 'EdDSA'];
 export function jwtVerifier(config: TokenConfig): Verify {
     return (token) =>
         jwtVerify(token, config.keys, { issuer: config.issuer, audience: config.audience, algorithms: ALGORITHMS }).then(
-            ({ payload }) => (typeof payload.sub === 'string' && payload.sub !== '' ? ok({ subject: payload.sub }) : err('token has no subject')),
-            (error: unknown) => err(error instanceof Error ? error.message : String(error)),
+            ({ payload }) =>
+                typeof payload.sub === 'string' && payload.sub !== ''
+                    ? ok({ subject: payload.sub })
+                    : err({ kind: 'invalid', reason: 'token has no subject' } as const),
+            (error: unknown) => err(verifyError(error)),
         );
 }
 
