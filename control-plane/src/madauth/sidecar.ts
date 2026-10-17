@@ -11,7 +11,7 @@
  *   visibly instead of waiting for an e-mail that never comes. Events are
  *   acknowledged.
  */
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { WEBHOOK_TOLERANCE_SECONDS, verifyWebhook } from '@madauth/server/webhook';
 import { API_KEY_SCOPES } from '@openupstream/sdk';
 import { Hono } from 'hono';
 import type { Result } from '../result.js';
@@ -41,71 +41,72 @@ export interface MailRequest {
 
 export type SendMail = (mail: MailRequest) => Promise<Result<void, string>>;
 
-/** Calls older or newer than this are refused (Standard Webhooks). */
-const TOLERANCE_SECONDS = 5 * 60;
-
-/**
- * Standard Webhooks: `webhook-signature` holds `v1,<base64 HMAC-SHA256 of
- * "<id>.<timestamp>.<body>">`, keyed with the base64 part of `whsec_…`.
- */
-export function verifyWebhook(
-    secret: string,
-    headers: { id: string | undefined; timestamp: string | undefined; signature: string | undefined },
-    body: string,
-    nowSeconds: number,
-): boolean {
-    const { id, timestamp, signature } = headers;
-    if (id === undefined || timestamp === undefined || signature === undefined || !secret.startsWith('whsec_')) {
-        return false;
+/** A webhook call's body, `{ type, data }`, or undefined when it is not one. */
+const parseCall = (body: string): { type: string; data: Record<string, unknown> } | undefined => {
+    const parsed: unknown = (() => {
+        try {
+            return JSON.parse(body);
+        } catch {
+            return undefined;
+        }
+    })();
+    if (typeof parsed !== 'object' || parsed === null || !('type' in parsed) || typeof parsed.type !== 'string') {
+        return undefined;
     }
-    const sentAt = Number(timestamp);
-    if (!Number.isInteger(sentAt) || Math.abs(nowSeconds - sentAt) > TOLERANCE_SECONDS) {
-        return false;
-    }
-    const expected = createHmac('sha256', Buffer.from(secret.slice('whsec_'.length), 'base64'))
-        .update(`${id}.${timestamp}.${body}`)
-        .digest();
-    // Several signatures may be sent, space separated, during a secret rotation.
-    return signature.split(' ').some((candidate) => {
-        const [version, value] = candidate.split(',');
-        const given = Buffer.from(value ?? '', 'base64');
-        return version === 'v1' && given.length === expected.length && timingSafeEqual(given, expected);
-    });
-}
+    const data = 'data' in parsed && typeof parsed.data === 'object' && parsed.data !== null ? parsed.data : {};
+    return { type: parsed.type, data: data as Record<string, unknown> };
+};
 
 export interface SidecarDeps {
     readonly webhookSecret: string;
     /** undefined: no mail sender configured; e-mails are refused. */
     readonly sendMail: SendMail | undefined;
     readonly log: (entry: Record<string, unknown>) => void;
-    readonly nowSeconds?: () => number;
+    /** Milliseconds, like Date.now. */
+    readonly now?: () => number;
 }
 
 export function createSidecar(deps: SidecarDeps): Hono {
     const app = new Hono();
-    const nowSeconds = deps.nowSeconds ?? (() => Math.floor(Date.now() / 1000));
+    const now = deps.now ?? Date.now;
+    /**
+     * webhook-ids seen within the tolerance window: a signed call is only
+     * valid that long, so remembering it that long refuses every replay.
+     */
+    const seen = new Map<string, number>();
+    const firstTime = (id: string): boolean => {
+        const expired = now() - WEBHOOK_TOLERANCE_SECONDS * 2000;
+        for (const [key, at] of seen) {
+            if (at < expired) {
+                seen.delete(key);
+            }
+        }
+        if (seen.has(id)) {
+            return false;
+        }
+        seen.set(id, now());
+        return true;
+    };
 
     app.get('/api-key-scopes', (c) => c.json(apiKeyScopes));
 
     app.post('/webhooks', async (c) => {
         const body = await c.req.text();
-        const signed = verifyWebhook(
-            deps.webhookSecret,
-            {
-                id: c.req.header('webhook-id'),
-                timestamp: c.req.header('webhook-timestamp'),
-                signature: c.req.header('webhook-signature'),
-            },
-            body,
-            nowSeconds(),
-        );
-        if (!signed) {
+        // madAuth's own check (Standard Webhooks), the version of the image it runs.
+        if (!verifyWebhook(deps.webhookSecret, c.req.raw.headers, body, { now: now() })) {
             deps.log({ msg: 'madauth webhook: bad signature' });
             return c.body(null, 401);
         }
-        const call = JSON.parse(body) as { type?: unknown; data?: Record<string, unknown> };
-        const type = typeof call.type === 'string' ? call.type : '';
-        const data = call.data ?? {};
+        if (!firstTime(c.req.header('webhook-id') ?? '')) {
+            deps.log({ msg: 'madauth webhook: replayed call refused', id: c.req.header('webhook-id') });
+            return c.body(null, 409);
+        }
+        const call = parseCall(body);
+        if (call === undefined) {
+            deps.log({ msg: 'madauth webhook: body is not {type, data}' });
+            return c.json({ error: 'malformed call' }, 400);
+        }
+        const { type, data } = call;
         if (!type.startsWith('email.send_')) {
             // Events (user.*) and anything newer: acknowledged, nothing to do yet.
             return c.body(null, 204);

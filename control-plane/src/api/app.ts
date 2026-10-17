@@ -107,7 +107,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             return c.json({ error: `this API key lacks the scope ${needed}` }, 403);
         }
         c.set('identity', identity.value);
-        c.set('accountIds', await accountsOf(pool, identity.value.subject));
+        c.set('accountIds', await accountsOf(pool, identity.value));
         return next();
     });
 

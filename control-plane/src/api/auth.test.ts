@@ -59,3 +59,19 @@ test('madAuth unreachable, failing or answering nonsense: unavailable, never val
         assert.equal(result.ok ? 'ok' : result.error.kind, 'unavailable');
     }
 });
+
+test('concurrent requests with one new key ask madAuth once', async () => {
+    let release: () => void = () => {};
+    const answered = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    const { calls, fetcher } = fakeMadauth(async () => {
+        await answered;
+        return verified(['openupstream:read']);
+    });
+    const verify = apiKeyVerifier(MADAUTH, { fetch: fetcher });
+    const results = Promise.all([verify(KEY), verify(KEY), verify(KEY)]);
+    release();
+    assert.ok((await results).every((result) => result.ok));
+    assert.equal(calls.length, 1);
+});

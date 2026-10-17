@@ -571,6 +571,11 @@ Decisions table once it is settled.
     a Kubernetes Secret and in the process's memory; madAuth's alternative,
     AWS KMS, means an AWS dependency. And until the first admin exists,
     madAuth logs a setup token, which Loki would collect.
+16. **Who may sign up, and how much.** Any madAuth user can create Accounts,
+    and in them Projects and Databases, without limit. Before madAuth is
+    reachable from the internet: an allow-list or invitation for sign-ups
+    (madAuth's `user.signing_up` webhook, in the sidecar) and limits per
+    Account until billing exists.
 
 ## Build order
 

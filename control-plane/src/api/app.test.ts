@@ -184,6 +184,13 @@ describe('Accounts', () => {
         assert.ok(!((await (await call('GET', '/v1/accounts', 'alice')).json()) as Account[]).some((a) => a.name.startsWith('Dora')));
     });
 
+    test("a Member's e-mail follows the address the user has in madAuth now", async () => {
+        const jwt = await token('dora', { email: 'dora@new.test' });
+        assert.equal((await api.request('/v1/accounts', { headers: { authorization: `Bearer ${jwt}` } })).status, 200);
+        const emails = await db.pool.query('select distinct email from members where auth_subject = $1', ['dora']);
+        assert.deepEqual(emails.rows, [{ email: 'dora@new.test' }]);
+    });
+
     test('names are 1 to 200 characters', async () => {
         assert.equal((await call('POST', '/v1/accounts', 'dora', { name: '   ' })).status, 400);
         assert.equal((await call('POST', '/v1/accounts', 'dora', { name: 'x'.repeat(201) })).status, 400);

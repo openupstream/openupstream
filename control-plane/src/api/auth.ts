@@ -66,7 +66,9 @@ export function sessionVerifier(config: { readonly issuer: string; readonly keys
  */
 export const keysFrom = (source: { readonly jwksUrl?: string; readonly jwks?: string }): JWTVerifyGetKey =>
     source.jwksUrl !== undefined
-        ? createRemoteJWKSet(new URL(source.jwksUrl))
+        ? // madAuth signs with a new key right after a rotation; refetch soon
+          // when a token names a key we do not have yet.
+          createRemoteJWKSet(new URL(source.jwksUrl), { cooldownDuration: 5_000 })
         : createLocalJWKSet(JSON.parse(source.jwks ?? '{}'));
 
 interface VerifiedKey {
@@ -88,12 +90,9 @@ export function apiKeyVerifier(
     { fetch: fetcher = fetch, now = Date.now }: { fetch?: typeof fetch; now?: () => number } = {},
 ): Authenticate {
     const cache = new Map<string, { identity: Identity; until: number }>();
-    return async (key) => {
-        const hash = createHash('sha256').update(key).digest('hex');
-        const cached = cache.get(hash);
-        if (cached !== undefined && cached.until > now()) {
-            return ok(cached.identity);
-        }
+    /** Checks under way, so concurrent requests with one key ask madAuth once. */
+    const inFlight = new Map<string, Promise<Result<Identity, AuthError>>>();
+    const check = async (key: string, hash: string): Promise<Result<Identity, AuthError>> => {
         const response = await fetcher(new URL('/auth/api-keys/verify', madauthUrl), {
             method: 'POST',
             headers: { authorization: `Bearer ${key}` },
@@ -126,6 +125,16 @@ export function apiKeyVerifier(
         cache.set(hash, { identity, until: now() + API_KEY_CACHE_MS });
         return ok(identity);
     };
+    return async (key) => {
+        const hash = createHash('sha256').update(key).digest('hex');
+        const cached = cache.get(hash);
+        if (cached !== undefined && cached.until > now()) {
+            return ok(cached.identity);
+        }
+        const pending = inFlight.get(hash) ?? check(key, hash).finally(() => inFlight.delete(hash));
+        inFlight.set(hash, pending);
+        return pending;
+    };
 }
 
 /** API keys go to madAuth, everything else is taken for a session token. */
@@ -134,11 +143,18 @@ export const madauthAuthenticator =
     (token) =>
         token.startsWith(API_KEY_PREFIX) ? apiKeys(token) : sessions(token);
 
-/** The Accounts the madAuth user is a Member of. */
-export async function accountsOf(pool: pg.Pool, subject: string): Promise<string[]> {
+/**
+ * The Accounts the madAuth user is a Member of. Their Member rows take the
+ * e-mail address the user has in madAuth now, so a changed address reaches
+ * them with the user's next request.
+ */
+export async function accountsOf(pool: pg.Pool, identity: Pick<Identity, 'subject' | 'email'>): Promise<string[]> {
     const { rows } = await pool.query<{ account_id: string }>(
-        'select account_id from members where auth_subject = $1 order by account_id',
-        [subject],
+        `with refreshed as (
+             update members set email = $2 where auth_subject = $1 and $2::text is not null and email <> $2
+         )
+         select account_id from members where auth_subject = $1 order by account_id`,
+        [identity.subject, identity.email ?? null],
     );
     return rows.map((row) => row.account_id);
 }

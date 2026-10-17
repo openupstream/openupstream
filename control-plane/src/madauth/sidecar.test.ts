@@ -1,21 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createHmac, randomBytes } from 'node:crypto';
-import { type MailRequest, apiKeyScopes, createSidecar, verifyWebhook } from './sidecar.js';
+import { randomBytes } from 'node:crypto';
+import { signWebhook } from '@madauth/server/webhook';
+import { type MailRequest, apiKeyScopes, createSidecar } from './sidecar.js';
 
 const secret = `whsec_${randomBytes(32).toString('base64')}`;
 const NOW = 1_800_000_000;
+let ids = 0;
 
-/** Signs like madAuth: Standard Webhooks. */
-const sign = (body: string, { id = 'msg_1', timestamp = NOW, key = secret } = {}) => ({
+/** Signs as madAuth does, with its own function; a fresh id per call unless given. */
+const sign = (body: string, { id = `msg_${(ids += 1)}`, timestamp = NOW, key = secret } = {}) => ({
     'webhook-id': id,
     'webhook-timestamp': String(timestamp),
-    'webhook-signature': `v1,${createHmac('sha256', Buffer.from(key.slice(6), 'base64')).update(`${id}.${timestamp}.${body}`).digest('base64')}`,
+    'webhook-signature': signWebhook(key, id, timestamp, body),
 });
 
 const sidecar = (sendMail?: (mail: MailRequest) => Promise<{ ok: true; value: undefined } | { ok: false; error: string }>) => {
     const logs: Record<string, unknown>[] = [];
-    const app = createSidecar({ webhookSecret: secret, sendMail, log: (entry) => logs.push(entry), nowSeconds: () => NOW });
+    const app = createSidecar({ webhookSecret: secret, sendMail, log: (entry) => logs.push(entry), now: () => NOW * 1000 });
     const post = (call: unknown, headers?: Record<string, string>) => {
         const body = JSON.stringify(call);
         return app.request('/webhooks', { method: 'POST', body, headers: headers ?? sign(body) });
@@ -73,12 +75,18 @@ test('unsigned, forged, stale or tampered calls are refused', async () => {
     assert.equal((await post({ ...verification, data: { ...verification.data, to: 'evil@x.test' } }, sign(body))).status, 401);
 });
 
-test('during a secret rotation, one matching signature among several is enough', () => {
-    const body = '{}';
-    const old = sign(body, { key: `whsec_${randomBytes(32).toString('base64')}` })['webhook-signature'];
-    const current = sign(body)['webhook-signature'];
-    assert.equal(
-        verifyWebhook(secret, { id: 'msg_1', timestamp: String(NOW), signature: `${old} ${current}` }, body, NOW),
-        true,
-    );
+test('a replayed call is refused, even with a valid signature', async () => {
+    const { post } = sidecar(async () => ({ ok: true, value: undefined }));
+    const body = JSON.stringify(verification);
+    const headers = sign(body, { id: 'msg_replay' });
+    assert.equal((await post(verification, headers)).status, 200);
+    assert.equal((await post(verification, headers)).status, 409);
+});
+
+test('a signed body that is not {type, data} is a 400, not a crash', async () => {
+    const { app } = sidecar();
+    for (const body of ['not json', '[]', '{"data":{}}']) {
+        const response = await app.request('/webhooks', { method: 'POST', body, headers: sign(body) });
+        assert.equal(response.status, 400, body);
+    }
 });
