@@ -165,8 +165,8 @@ a second Database of the platform Project, two replicas, one per compute
 Site (`infra/madauth`, #63). madAuth only calls https or localhost URLs, so
 a sidecar from the control plane's image, in the same pod, serves it the API
 key scopes and receives its webhooks (e-mails to send, events) on
-127.0.0.1. On the dev cluster the sidecar writes e-mails to its log; a mail
-provider is Open question 14.
+127.0.0.1. It sends madAuth's e-mails through Amazon SES in an EU region
+(#66); on the dev cluster it writes them to its log instead.
 
 The API accepts two kinds of madAuth credentials (#64):
 
@@ -182,7 +182,10 @@ The API accepts two kinds of madAuth credentials (#64):
 
 The subject is a madAuth user, which can be a Member of several Accounts.
 A signed-in user creates an Account with `POST /v1/accounts` and becomes its
-first Member (#62); invitations to existing Accounts come later.
+first Member (#62); invitations to existing Accounts come later. Anyone
+may sign up, but an Account needs a payment method in Stripe before it
+creates its first Resource (#65). How someone who runs openupstream
+themselves changes these rules is Open question 16.
 
 The public API (Hono, zod validation, `control-plane/src/api`) serves
 Projects and their Databases in the caller's Accounts; another Account's
@@ -409,6 +412,8 @@ digest (#55).
 - An hourly job rolls the events up and sends them to Stripe Billing Meters.
   Stripe rates, invoices (one per Account, broken down per Project) and
   collects (SEPA enabled).
+- An Account has a Stripe customer with a payment method (card or SEPA)
+  before it can create a Resource; Projects themselves are free (#65).
 
 ## Backups
 
@@ -515,6 +520,8 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 62 | A signed-in madAuth user creates an Account with `POST /v1/accounts` and becomes its first Member; a user may have several | creating it on the first API call; madAuth's `user.signed_up` webhook | explicit and repeatable, no webhook to lose (madAuth does not retry), no stray Accounts from sign-ins; the dashboard calls it on first visit |
 | 63 | madAuth runs as its published image on a Postgres Database of the platform Project, two replicas; a sidecar from the control plane's image serves it the API key scopes and receives its webhooks on 127.0.0.1 | embedding madAuth in an own Node service; the image with SQLite (one replica); in-cluster TLS; changing madAuth to allow in-cluster http | no madAuth code in openupstream to build and patch; the users are in a Database with failover and backups like any other; madAuth only calls https or localhost, and the sidecar ships with the API it describes |
 | 64 | madAuth session tokens (ES256, `typ: madauth-session+jwt`, no audience) verified against its JWKS; API keys checked with madAuth (`/auth/api-keys/verify`), cached for a minute; scopes `openupstream:read` (GET) and `openupstream:write` (everything) | per-resource scopes; one full-access scope | madAuth has no audience and no OAuth flows; its API keys are opaque; two scopes allow read-only keys now and finer scopes later without breaking existing keys |
+| 65 | Anyone may sign up; an Account needs a payment method in Stripe (card or SEPA) before it creates its first Resource | an allow-list or invitations; free limits per Account until billing exists | no hand-picking of customers, and no unpaid resources: memory is reserved from the first Database on. Self-hosted installations will need other rules (Open question 16) |
+| 66 | madAuth's e-mails (sign-up, password reset) are sent through Amazon SES in an EU region, by the madAuth sidecar | an EU provider (Scaleway TEM, Brevo) | the maintainer already has it set up; the addresses stay in the EU region; AWS becomes a subprocessor |
 
 ## Open questions
 
@@ -564,18 +571,17 @@ Decisions table once it is settled.
     Services reach a Database. `psql` from a laptop or a migration from CI
     needs Traefik TCP routing with TLS SNI (Postgres 17 direct SSL), its
     certificates, and a way to hand out the password.
-14. **Mail for madAuth.** Sign-up and password reset need e-mails sent: a
-    provider (an EU one, e.g. Scaleway TEM or Brevo, or SES), sent from the
-    madAuth sidecar.
+14. ~~**Mail for madAuth.**~~ Settled by decision 66: Amazon SES.
 15. **madAuth's keys.** With `MADAUTH_KEY_SERVICE=local` the signing key is
     a Kubernetes Secret and in the process's memory; madAuth's alternative,
     AWS KMS, means an AWS dependency. And until the first admin exists,
     madAuth logs a setup token, which Loki would collect.
-16. **Who may sign up, and how much.** Any madAuth user can create Accounts,
-    and in them Projects and Databases, without limit. Before madAuth is
-    reachable from the internet: an allow-list or invitation for sign-ups
-    (madAuth's `user.signing_up` webhook, in the sidecar) and limits per
-    Account until billing exists.
+16. **Sign-up for those who run openupstream themselves.** The hosted
+    service lets anyone sign up and requires a payment method (decision 65).
+    A self-hosted installation may want something else: invitations only,
+    an allow-list of domains (madAuth's `user.signing_up` webhook, in the
+    sidecar), or no payment method. How these rules become configurable is
+    for later.
 
 ## Build order
 
@@ -593,9 +599,10 @@ Decisions table once it is settled.
    images; creating and deleting Projects and Databases through the
    public API, with the cleanup; madAuth with sign-up, API keys and
    Accounts created through the API (2026-10-17). Left: TopoLVM, restore
-   through the API, mail for madAuth (Open question 14), `oup login` and
-   `oup pg` commands. Public hostnames for madAuth and the API come with
-   step 2.
+   through the API, `oup login` and `oup pg` commands. Public hostnames for
+   madAuth and the API come with step 2, and with them open sign-up: SES for
+   madAuth's e-mails (#66) and the payment method gate (#65) must be in
+   place by then.
 2. Object storage and static sites: Garage, routing table, Traefik,
    cert-manager.
 3. Containers, Service mode.
@@ -623,5 +630,5 @@ one CloudFront distribution, SSM/Secrets Manager, KMS. The mapping:
 
 Not technical, but no customer is billed before these exist: a company (UG
 or GmbH), a data processing agreement (AVV) template, the TOMs, and the list
-of subprocessors (Hetzner, OVHcloud, netcup, bunny.net, Stripe, the mail
-provider).
+of subprocessors (Hetzner, OVHcloud, netcup, bunny.net, Stripe, Amazon Web
+Services for SES).
