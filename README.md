@@ -2,14 +2,14 @@
 
 Open source cloud infrastructure, hosted in the EU.
 
-openupstream is a small cloud provider for developers who want their data and
-compute in the EU, run on open source, and billed by what they use. The whole
-platform lives in this repository; the hosted service at
+OpenUpstream is a cloud provider based in Germany with EU-only hosting.
+Keep your code highly available by using the default multi-region hosting. Save money by paying a fraction compared to AWS, Azure and GCP. You can also host the plattform yourself and pay only for the infrastructure.
+
+
+The whole platform lives in this repository; the hosted service at
 [openupstream.com](https://openupstream.com) runs exactly this code.
 
-> Status: pre-alpha. Nothing here is usable yet. Demo apps prove each build
-> step; the first real customer, [ProjectMatch](https://projectmatch.io), moves
-> off AWS after v1.
+> Status: pre-alpha. See the plan for verstion 1 below.
 
 ## What it offers (v1 scope)
 
