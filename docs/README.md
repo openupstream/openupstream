@@ -1,6 +1,8 @@
 # docs
 
 - `scope.md` — what v1 does and does not offer, and why
+- `self-hosting.md` — the tools, accounts, credentials and domains you need
+  to run openupstream yourself
 - `adr/` — architecture decision records, one file per decision
 - `runbooks/` — operational procedures (bootstrap, failover test, restore)
 

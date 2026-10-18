@@ -28,6 +28,16 @@ npm test
 `npm test` needs Docker running (or a Postgres in `TEST_DATABASE_URL`) for the
 control plane's database tests; see `control-plane/README.md`.
 
+With [Colima](https://github.com/abiosoft/colima) instead of Docker Desktop,
+testcontainers needs to know where Docker is. Set these in a file every
+shell reads (`~/.zshenv` for zsh), not only interactive ones, so editors and
+scripts see them too:
+
+```sh
+export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock
+export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
+```
+
 ## Commit messages
 
 Imperative mood, one line summary under 72 characters, body if the why is not
