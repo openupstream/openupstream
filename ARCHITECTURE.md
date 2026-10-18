@@ -521,7 +521,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 63 | madAuth runs as its published image on a Postgres Database of the platform Project, two replicas; a sidecar from the control plane's image serves it the API key scopes and receives its webhooks on 127.0.0.1 | embedding madAuth in an own Node service; the image with SQLite (one replica); in-cluster TLS; changing madAuth to allow in-cluster http | no madAuth code in openupstream to build and patch; the users are in a Database with failover and backups like any other; madAuth only calls https or localhost, and the sidecar ships with the API it describes |
 | 64 | madAuth session tokens (ES256, `typ: madauth-session+jwt`, no audience) verified against its JWKS; API keys checked with madAuth (`/auth/api-keys/verify`), cached for a minute; scopes `openupstream:read` (GET) and `openupstream:write` (everything) | per-resource scopes; one full-access scope | madAuth has no audience and no OAuth flows; its API keys are opaque; two scopes allow read-only keys now and finer scopes later without breaking existing keys |
 | 65 | Anyone may sign up; an Account needs a payment method in Stripe (card or SEPA) before it creates its first Resource | an allow-list or invitations; free limits per Account until billing exists | no hand-picking of customers, and no unpaid resources: memory is reserved from the first Database on. Self-hosted installations will need other rules (Open question 16) |
-| 66 | madAuth's e-mails (sign-up, password reset) are sent through Amazon SES in an EU region, by the madAuth sidecar | an EU provider (Scaleway TEM, Brevo) | the maintainer already has it set up; the addresses stay in the EU region; AWS becomes a subprocessor |
+| 66 | madAuth's e-mails (sign-up, password reset) are sent through Amazon SES in an EU region, by the madAuth sidecar | an EU provider (Scaleway TEM, Brevo) | the maintainer already has it set up; the addresses stay in the EU region; AWS becomes a subprocessor. This is a US company, which decision 34 avoided for ingress: there Cloudflare would see every customer's traffic, here SES sees only a Member's address and the sign-in e-mails we send, never a Project's data; an EU provider remains a drop-in replacement in the sidecar |
 
 ## Open questions
 
@@ -600,11 +600,13 @@ Decisions table once it is settled.
    public API, with the cleanup; madAuth with sign-up, API keys and
    Accounts created through the API (2026-10-17). Left: TopoLVM, restore
    through the API, `oup login` and `oup pg` commands. Public hostnames for
-   madAuth and the API come with step 2, and with them open sign-up: SES for
-   madAuth's e-mails (#66) and the payment method gate (#65) must be in
-   place by then.
+   madAuth and the API come with step 2, together with SES and the
+   payment-method gate that open sign-up needs.
 2. Object storage and static sites: Garage, routing table, Traefik,
-   cert-manager.
+   cert-manager. With Traefik come the public hostnames of the API and
+   madAuth, and so open sign-up: this step also brings the sidecar's SES
+   sender (#66) and the payment-method gate, a Stripe customer per Account
+   with a payment method checked before the first Resource (#65).
 3. Containers, Service mode.
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
