@@ -17,7 +17,8 @@ local-path provisioner, not TopoLVM.
 
 Needs `hcloud` with a context for the dev Cloud project, `kubectl`, `jq`, Node, and the
 AWS CLI profile `openupstream-backup` with the S3 keys of the backup project
-on Hetzner Object Storage.
+on Hetzner Object Storage; [docs/self-hosting.md](../../docs/self-hosting.md)
+says how to set them up.
 
 ```bash
 ./up.sh

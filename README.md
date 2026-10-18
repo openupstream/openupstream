@@ -70,6 +70,13 @@ The control plane's tests need Docker, or a Postgres server in
 
 Each workspace has its own README with the parts that are specific to it.
 
+## Running it yourself
+
+[docs/self-hosting.md](docs/self-hosting.md) lists the tools, accounts,
+credentials and domains the platform needs, and how we set them up for the
+hosted service; [infra/dev-cluster](infra/dev-cluster/README.md) brings up a
+development cluster with them.
+
 ## License
 
 [AGPL-3.0-only](LICENSE). You can run openupstream yourself, modify it and
