@@ -2,6 +2,9 @@
 
 Open source cloud infrastructure, hosted in the EU.
 
+Created by David Neuy and
+[contributors](https://github.com/openupstream/openupstream/graphs/contributors).
+
 OpenUpstream is a cloud provider based in Germany with EU-only hosting.
 Keep your code highly available by using the default multi-region hosting. Save money by paying a fraction compared to AWS, Azure and GCP. You can also host the plattform yourself and pay only for the infrastructure.
 
