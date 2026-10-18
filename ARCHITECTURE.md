@@ -159,10 +159,30 @@ Postgres in Docker. The API types are in `sdk/src/model.ts`.
 The dashboard (`dashboard/`) is a Next.js app on the same API.
 
 Sign-in for Members and API keys for `oup` and the SDK come from
-[madAuth](https://madauth.com), self-hosted on the cluster. madAuth issues
-JWTs; the control plane verifies them against madAuth's JWKS (issuer,
-audience, expiry, asymmetric algorithms only) and maps the subject to its
-Members: one madAuth identity can be a Member of several Accounts (#59).
+[madAuth](https://madauth.com), self-hosted on the cluster as its published
+image (`ghcr.io/inouiw/madauth-server`, pinned by digest) with its users in
+a second Database of the platform Project, two replicas, one per compute
+Site (`infra/madauth`, #63). madAuth only calls https or localhost URLs, so
+a sidecar from the control plane's image, in the same pod, serves it the API
+key scopes and receives its webhooks (e-mails to send, events) on
+127.0.0.1. On the dev cluster the sidecar writes e-mails to its log; a mail
+provider is Open question 14.
+
+The API accepts two kinds of madAuth credentials (#64):
+
+- a session token: a JWT (ES256, `typ: madauth-session+jwt`, issuer
+  checked, no audience) verified against madAuth's JWKS, fetched from madAuth
+  inside the cluster. A session may do everything its user may.
+- an API key (`madauth_…`, opaque), which the user creates in madAuth and
+  `oup` and scripts send. The control plane asks madAuth
+  (`POST /auth/api-keys/verify`) whom it acts for and which scopes count, and
+  reuses the answer for a minute, so a revoked key works for at most a
+  minute more. `openupstream:read` allows every GET, `openupstream:write`
+  everything.
+
+The subject is a madAuth user, which can be a Member of several Accounts.
+A signed-in user creates an Account with `POST /v1/accounts` and becomes its
+first Member (#62); invitations to existing Accounts come later.
 
 The public API (Hono, zod validation, `control-plane/src/api`) serves
 Projects and their Databases in the caller's Accounts; another Account's
@@ -489,9 +509,12 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 56 | The control plane's Database belongs to a fixed platform Account and Project; the bootstrap creates it once, the control plane seeds its rows, the operator reconciles it from then on. The control plane runs in that Project's namespace | a separate Cluster outside the operator | one way to run Postgres, also for our own state; a pod can only read a Secret of its own namespace, and CloudNativePG creates the connection Secret next to the Cluster |
 | 57 | The control plane applies migrations at startup | an init container; a Job per release | node-pg-migrate locks, so with two replicas exactly one migrates; nothing else to deploy |
 | 58 | Deleting a Project or Database marks its row (`deleted_at`); a cleanup loop in the control plane removes the Kubernetes objects, retries until they are gone and only then removes the row. Names are unique among live rows only | delete the objects in the request, then the row; delete the row, then the objects | no orphaned Cluster keeps running and no Database is recreated empty by the operator when one step fails; a deleted name can be used again at once |
-| 59 | madAuth JWTs verified against madAuth's JWKS with `jose`; the subject maps to Members, possibly of several Accounts. Dev cluster and tests trust a local key (`control-plane/scripts/dev-token.mjs`) | token introspection at madAuth per request | no call to madAuth per request; works the same for sessions and API keys; madAuth is not deployed yet |
+| 59 | ~~madAuth JWTs verified against madAuth's JWKS with `jose`; the subject maps to Members, possibly of several Accounts. Dev cluster and tests trust a local key (`control-plane/scripts/dev-token.mjs`)~~, superseded by #64 | token introspection at madAuth per request | no call to madAuth per request; works the same for sessions and API keys; madAuth is not deployed yet |
 | 60 | A deleted Database's backups are kept for the backup retention window, then deleted with its ObjectStore | delete them with the Database; keep them until Open question 7 is settled | an accidental delete can be undone by a restore within the window; nothing is kept forever |
 | 61 | Public API on Hono with zod validation: Projects and Databases first; a Database's state is read live from its Cluster; Databases are reachable inside the cluster only and the password is never returned | Fastify; plain `node:http`; the operator reporting state back; credentials through the API; external access now | small and typed; state is always current; external access (Traefik TCP with TLS SNI) is a step of its own (Open question 13) |
+| 62 | A signed-in madAuth user creates an Account with `POST /v1/accounts` and becomes its first Member; a user may have several | creating it on the first API call; madAuth's `user.signed_up` webhook | explicit and repeatable, no webhook to lose (madAuth does not retry), no stray Accounts from sign-ins; the dashboard calls it on first visit |
+| 63 | madAuth runs as its published image on a Postgres Database of the platform Project, two replicas; a sidecar from the control plane's image serves it the API key scopes and receives its webhooks on 127.0.0.1 | embedding madAuth in an own Node service; the image with SQLite (one replica); in-cluster TLS; changing madAuth to allow in-cluster http | no madAuth code in openupstream to build and patch; the users are in a Database with failover and backups like any other; madAuth only calls https or localhost, and the sidecar ships with the API it describes |
+| 64 | madAuth session tokens (ES256, `typ: madauth-session+jwt`, no audience) verified against its JWKS; API keys checked with madAuth (`/auth/api-keys/verify`), cached for a minute; scopes `openupstream:read` (GET) and `openupstream:write` (everything) | per-resource scopes; one full-access scope | madAuth has no audience and no OAuth flows; its API keys are opaque; two scopes allow read-only keys now and finer scopes later without breaking existing keys |
 
 ## Open questions
 
@@ -541,6 +564,18 @@ Decisions table once it is settled.
     Services reach a Database. `psql` from a laptop or a migration from CI
     needs Traefik TCP routing with TLS SNI (Postgres 17 direct SSL), its
     certificates, and a way to hand out the password.
+14. **Mail for madAuth.** Sign-up and password reset need e-mails sent: a
+    provider (an EU one, e.g. Scaleway TEM or Brevo, or SES), sent from the
+    madAuth sidecar.
+15. **madAuth's keys.** With `MADAUTH_KEY_SERVICE=local` the signing key is
+    a Kubernetes Secret and in the process's memory; madAuth's alternative,
+    AWS KMS, means an AWS dependency. And until the first admin exists,
+    madAuth logs a setup token, which Loki would collect.
+16. **Who may sign up, and how much.** Any madAuth user can create Accounts,
+    and in them Projects and Databases, without limit. Before madAuth is
+    reachable from the internet: an allow-list or invitation for sign-ups
+    (madAuth's `user.signing_up` webhook, in the sidecar) and limits per
+    Account until billing exists.
 
 ## Build order
 
@@ -556,9 +591,11 @@ Decisions table once it is settled.
    a point-in-time restore from NBG1; the control plane's internal API and
    the Databases operator running in the cluster on it, both from GHCR
    images; creating and deleting Projects and Databases through the
-   public API, with the cleanup (2026-10-17). Left: TopoLVM, restore
-   through the API, madAuth deployed and Accounts and Members created
-   through sign-up, `oup pg` commands.
+   public API, with the cleanup; madAuth with sign-up, API keys and
+   Accounts created through the API (2026-10-17). Left: TopoLVM, restore
+   through the API, mail for madAuth (Open question 14), `oup login` and
+   `oup pg` commands. Public hostnames for madAuth and the API come with
+   step 2.
 2. Object storage and static sites: Garage, routing table, Traefik,
    cert-manager.
 3. Containers, Service mode.

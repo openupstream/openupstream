@@ -12,9 +12,11 @@ export interface Config {
     readonly internalPort: number;
     readonly allowedCallers: ReadonlySet<string>;
     readonly auth: {
+        /** madAuth's public URL, the `iss` of its session tokens. */
         readonly issuer: string;
-        readonly audience: string;
-        readonly jwksUrl?: string;
+        /** madAuth inside the cluster: its JWKS and API key checks. */
+        readonly madauthUrl: string;
+        /** A JWKS document instead of madAuth's (tests). */
         readonly jwks?: string;
     };
     readonly backup: {
@@ -65,15 +67,13 @@ export function configFrom(env: Env): Result<Config, string[]> {
     };
     const databaseUrl = required('DATABASE_URL');
     const issuer = required('AUTH_ISSUER');
-    const audience = required('AUTH_AUDIENCE');
-    const jwksUrl = env['AUTH_JWKS_URL'] ?? '';
+    const madauthUrl = required('MADAUTH_URL');
+    if (madauthUrl !== '' && !URL.canParse(madauthUrl)) {
+        problems.push('MADAUTH_URL must be a URL');
+    }
     const jwks = env['AUTH_JWKS'] ?? '';
-    if ((jwksUrl === '') === (jwks === '')) {
-        problems.push('set exactly one of AUTH_JWKS_URL and AUTH_JWKS');
-    } else if (jwks !== '' && !isJwks(jwks)) {
+    if (jwks !== '' && !isJwks(jwks)) {
         problems.push('AUTH_JWKS must be a JWKS document: {"keys": [...]}');
-    } else if (jwksUrl !== '' && !URL.canParse(jwksUrl)) {
-        problems.push('AUTH_JWKS_URL must be a URL');
     }
     const bucket = required('BACKUP_BUCKET');
     const accessKeyId = required('ACCESS_KEY_ID');
@@ -101,7 +101,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
         allowedCallers: new Set(
             (env['ALLOWED_CALLERS'] ?? DEFAULT_ALLOWED_CALLERS.join(',')).split(',').filter((name) => name !== ''),
         ),
-        auth: { issuer, audience, ...(jwksUrl === '' ? { jwks } : { jwksUrl }) },
+        auth: { issuer, madauthUrl, ...(jwks === '' ? {} : { jwks }) },
         backup: {
             endpoint: env['BACKUP_ENDPOINT'] ?? BACKUP_ENDPOINT,
             region: env['BACKUP_REGION'] ?? 'nbg1',

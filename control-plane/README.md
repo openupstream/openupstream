@@ -43,14 +43,18 @@ Database. `infra/dev-cluster/platform.sh` bootstraps both.
 ## Public API
 
 `src/api/` (Hono, zod validation). Every route but `GET /v1/health` needs a
-madAuth JWT (`Authorization: Bearer …`), verified against madAuth's JWKS
-(`AUTH_JWKS_URL`, or `AUTH_JWKS` inline for tests and the dev cluster) for
-`AUTH_ISSUER` and `AUTH_AUDIENCE`. Its subject is a madAuth identity; the
-caller acts for every Account it is a Member of. A Project of another
+madAuth credential as `Authorization: Bearer …` (`src/api/auth.ts`): a
+session token, verified against madAuth's JWKS (`MADAUTH_URL`, madAuth
+inside the cluster) for the issuer `AUTH_ISSUER`, or an API key
+(`madauth_…`), which madAuth checks for us; a key needs `openupstream:read`
+for GET and `openupstream:write` for anything else. The caller acts for
+every Account its madAuth user is a Member of. A Project of another
 Account answers 404, like one that does not exist.
 
 | Route | |
 | --- | --- |
+| `GET /v1/accounts` | the caller's Accounts |
+| `POST /v1/accounts` | `{name}` → 201: a new Account, the caller its first Member |
 | `GET /v1/projects` | the Projects of the caller's Accounts |
 | `POST /v1/projects` | `{accountId, name}` → 201; 409 if the name is taken in the Account |
 | `GET /v1/projects/{id}` | |
@@ -61,7 +65,17 @@ Account answers 404, like one that does not exist.
 | `DELETE /v1/projects/{id}/databases/{id}` | 202 |
 
 The sdk's `OpenUpstreamClient` wraps these. `scripts/dev-token.mjs` mints
-tokens for the dev cluster, where there is no madAuth yet.
+madAuth-shaped session tokens for running the control plane without madAuth
+(`AUTH_JWKS` with its public key).
+
+## madAuth sidecar
+
+`src/madauth-sidecar.ts`, run from this image next to madAuth in its pod
+(`infra/madauth`): madAuth only calls https or localhost URLs, so this serves
+it on 127.0.0.1:8788 the API key scopes (`GET /api-key-scopes`) and receives
+its webhooks (`POST /webhooks`, Standard Webhooks signatures with
+`WEBHOOK_SECRET`). E-mails go to the log with `MAIL=log` (dev cluster) and
+are refused otherwise, until a mail provider is chosen.
 
 ## Cleanup
 

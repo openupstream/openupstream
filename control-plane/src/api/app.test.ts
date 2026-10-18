@@ -1,16 +1,25 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { type CryptoKey, SignJWT, createLocalJWKSet, createRemoteJWKSet, exportJWK, generateKeyPair } from 'jose';
-import type { DatabaseDetails, Project } from '@openupstream/sdk';
+import { API_KEY_SCOPES, type Account, type DatabaseDetails, type Project } from '@openupstream/sdk';
 import { listDatabaseRows } from '../databases/rows.js';
 import { type ClusterStatus, type ControlPlaneKube } from '../kube.js';
 import { err, ok } from '../result.js';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
 import { createApi } from './app.js';
-import { jwtVerifier } from './auth.js';
+import { type Authenticate, SESSION_TOKEN_TYPE, madauthAuthenticator, sessionVerifier } from './auth.js';
 
-const ISSUER = 'https://auth.test';
-const AUDIENCE = 'openupstream-api';
+const ISSUER = 'https://openupstream.test';
+
+/** API keys as madAuth would verify them: `madauth_<subject>_<read|write|none>`. */
+const apiKeys: Authenticate = async (key) => {
+    const [, subject, scope] = key.split('_');
+    if (subject === undefined || scope === undefined) {
+        return err({ kind: 'invalid', reason: 'unknown key' });
+    }
+    const scopes = scope === 'read' ? [API_KEY_SCOPES.read] : scope === 'write' ? [API_KEY_SCOPES.write] : [];
+    return ok({ subject, email: `${subject}@keys.test`, scopes });
+};
 
 let db: TestDatabase;
 let privateKey: CryptoKey;
@@ -29,12 +38,15 @@ const kube: ControlPlaneKube = {
     remove: async () => ok(undefined),
 };
 
-const token = (subject: string, overrides: { key?: CryptoKey; audience?: string; expires?: string } = {}) =>
-    new SignJWT({})
-        .setProtectedHeader({ alg: 'ES256' })
+/** A session token as madAuth issues it. */
+const token = (
+    subject: string,
+    overrides: { key?: CryptoKey; issuer?: string; typ?: string; expires?: string; email?: string } = {},
+) =>
+    new SignJWT({ email: overrides.email ?? `${subject}@example.test` })
+        .setProtectedHeader({ alg: 'ES256', typ: overrides.typ ?? SESSION_TOKEN_TYPE })
         .setSubject(subject)
-        .setIssuer(ISSUER)
-        .setAudience(overrides.audience ?? AUDIENCE)
+        .setIssuer(overrides.issuer ?? ISSUER)
         .setIssuedAt()
         .setExpirationTime(overrides.expires ?? '5m')
         .sign(overrides.key ?? privateKey);
@@ -45,7 +57,11 @@ before(async () => {
     privateKey = pair.privateKey;
     otherKey = (await generateKeyPair('ES256')).privateKey;
     const jwks = createLocalJWKSet({ keys: [{ ...(await exportJWK(pair.publicKey)), alg: 'ES256' }] });
-    api = createApi({ pool: db.pool, kube, verify: jwtVerifier({ issuer: ISSUER, audience: AUDIENCE, keys: jwks }) });
+    api = createApi({
+        pool: db.pool,
+        kube,
+        authenticate: madauthAuthenticator(sessionVerifier({ issuer: ISSUER, keys: jwks }), apiKeys),
+    });
     const accounts = await db.pool.query<{ id: string }>(`insert into accounts (name) values ('A'), ('B') returning id`);
     [accountA, accountB] = accounts.rows.map((row) => row.id) as [string, string];
     // alice is in A; bob in B; carol in both.
@@ -75,12 +91,15 @@ describe('authentication', () => {
         assert.equal((await api.request('/v1/health')).status, 200);
     });
 
-    test('no token, a forged token, another audience or an expired token: 401', async () => {
+    test('no token, a forged token, another issuer, another token type or an expired token: 401', async () => {
         assert.equal((await call('GET', '/v1/projects')).status, 401);
         const bad = [
             await token('alice', { key: otherKey }),
-            await token('alice', { audience: 'someone-else' }),
+            await token('alice', { issuer: 'https://elsewhere.test' }),
+            // e.g. madAuth's renewal token, which must never pass for a session
+            await token('alice', { typ: 'madauth-renewal+jwt' }),
             await token('alice', { expires: '-1m' }),
+            'madauth_unknown',
         ];
         for (const jwt of bad) {
             const response = await api.request('/v1/projects', { headers: { authorization: `Bearer ${jwt}` } });
@@ -92,7 +111,7 @@ describe('authentication', () => {
         const down = createApi({
             pool: db.pool,
             kube,
-            verify: jwtVerifier({ issuer: ISSUER, audience: AUDIENCE, keys: createRemoteJWKSet(new URL('http://127.0.0.1:9/jwks')) }),
+            authenticate: sessionVerifier({ issuer: ISSUER, keys: createRemoteJWKSet(new URL('http://127.0.0.1:9/jwks')) }),
         });
         const response = await down.request('/v1/projects', { headers: { authorization: `Bearer ${await token('alice')}` } });
         assert.equal(response.status, 503);
@@ -103,8 +122,79 @@ describe('authentication', () => {
         assert.equal(response.status, 401);
     });
 
-    test('a valid token of nobody who is a Member: 403', async () => {
-        assert.equal((await call('GET', '/v1/projects', 'mallory')).status, 403);
+    test('a signed-in user who is no Member yet sees no Accounts and no Projects', async () => {
+        const accounts = await call('GET', '/v1/accounts', 'newbie');
+        assert.equal(accounts.status, 200);
+        assert.deepEqual(await accounts.json(), []);
+        assert.deepEqual(await (await call('GET', '/v1/projects', 'newbie')).json(), []);
+    });
+});
+
+describe('API keys', () => {
+    const withKey = (key: string, method: string, path: string, body?: unknown) =>
+        api.request(path, {
+            method,
+            headers: { authorization: `Bearer ${key}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+
+    test('openupstream:read may read, not write', async () => {
+        assert.equal((await withKey('madauth_alice_read', 'GET', '/v1/projects')).status, 200);
+        const write = await withKey('madauth_alice_read', 'POST', '/v1/projects', { accountId: accountA, name: 'by-key' });
+        assert.equal(write.status, 403);
+        assert.deepEqual(await write.json(), { error: 'this API key lacks the scope openupstream:write' });
+    });
+
+    test('openupstream:write may do both', async () => {
+        assert.equal((await withKey('madauth_alice_write', 'GET', '/v1/projects')).status, 200);
+        const write = await withKey('madauth_alice_write', 'POST', '/v1/projects', { accountId: accountA, name: 'by-key' });
+        assert.equal(write.status, 201);
+        const { id } = (await write.json()) as Project;
+        assert.equal((await withKey('madauth_alice_write', 'DELETE', `/v1/projects/${id}`)).status, 202);
+    });
+
+    test('a key with neither scope may do nothing', async () => {
+        assert.equal((await withKey('madauth_alice_none', 'GET', '/v1/projects')).status, 403);
+    });
+});
+
+describe('Accounts', () => {
+    test('a signed-in user creates an Account and is its first Member', async () => {
+        const response = await call('POST', '/v1/accounts', 'dora', { name: 'Dora GmbH' });
+        assert.equal(response.status, 201);
+        const account = (await response.json()) as Account;
+        assert.equal(account.name, 'Dora GmbH');
+        assert.equal(response.headers.get('location'), `/v1/accounts/${account.id}`);
+        assert.deepEqual(
+            ((await (await call('GET', '/v1/accounts', 'dora')).json()) as Account[]).map((a) => a.id),
+            [account.id],
+        );
+        const member = await db.pool.query('select email from members where account_id = $1 and auth_subject = $2', [
+            account.id,
+            'dora',
+        ]);
+        assert.deepEqual(member.rows, [{ email: 'dora@example.test' }]);
+        // and can work in it at once
+        assert.equal((await call('POST', '/v1/projects', 'dora', { accountId: account.id, name: 'web' })).status, 201);
+    });
+
+    test('a second Account is a second Account; others see neither', async () => {
+        assert.equal((await call('POST', '/v1/accounts', 'dora', { name: 'Dora Labs' })).status, 201);
+        assert.equal(((await (await call('GET', '/v1/accounts', 'dora')).json()) as Account[]).length, 2);
+        assert.ok(!((await (await call('GET', '/v1/accounts', 'alice')).json()) as Account[]).some((a) => a.name.startsWith('Dora')));
+    });
+
+    test("a Member's e-mail follows the address the user has in madAuth now", async () => {
+        const jwt = await token('dora', { email: 'dora@new.test' });
+        assert.equal((await api.request('/v1/accounts', { headers: { authorization: `Bearer ${jwt}` } })).status, 200);
+        const emails = await db.pool.query('select distinct email from members where auth_subject = $1', ['dora']);
+        assert.deepEqual(emails.rows, [{ email: 'dora@new.test' }]);
+    });
+
+    test('names are 1 to 200 characters', async () => {
+        assert.equal((await call('POST', '/v1/accounts', 'dora', { name: '   ' })).status, 400);
+        assert.equal((await call('POST', '/v1/accounts', 'dora', { name: 'x'.repeat(201) })).status, 400);
+        assert.equal((await call('POST', '/v1/accounts', 'dora', {})).status, 400);
     });
 });
 

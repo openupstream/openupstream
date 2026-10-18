@@ -4,9 +4,8 @@ import { configFrom } from './config.js';
 
 const env = {
     DATABASE_URL: 'postgres://app@db/app',
-    AUTH_ISSUER: 'https://auth.openupstream.com',
-    AUTH_AUDIENCE: 'openupstream-api',
-    AUTH_JWKS_URL: 'https://auth.openupstream.com/.well-known/jwks.json',
+    AUTH_ISSUER: 'https://openupstream.com',
+    MADAUTH_URL: 'http://madauth.project-00000000-0000-4000-8000-000000000002.svc:8787',
     BACKUP_BUCKET: 'openupstream-pg-backup',
     ACCESS_KEY_ID: 'id',
     ACCESS_SECRET_KEY: 'secret',
@@ -20,21 +19,17 @@ test('a complete environment, with defaults for the rest', () => {
     assert.equal(config.value.internalPort, 8081);
     assert.equal(config.value.backup.endpoint, 'https://nbg1.your-objectstorage.com');
     assert.equal(config.value.backup.retention, '30 days');
-    assert.deepEqual(config.value.auth, {
-        issuer: env.AUTH_ISSUER,
-        audience: env.AUTH_AUDIENCE,
-        jwksUrl: env.AUTH_JWKS_URL,
-    });
+    assert.deepEqual(config.value.auth, { issuer: env.AUTH_ISSUER, madauthUrl: env.MADAUTH_URL });
     assert.equal(config.value.cleanupIntervalMs, 30_000);
 });
 
 test('every problem is reported at once', () => {
-    const config = configFrom({ AUTH_JWKS: '{"keys":[]}', AUTH_JWKS_URL: 'https://x', BACKUP_RETENTION: '1w', PORT: 'http' });
+    const config = configFrom({ AUTH_JWKS: '{"keys": ', BACKUP_RETENTION: '1w', PORT: 'http' });
     assert.deepEqual(config.ok ? [] : config.error, [
         'DATABASE_URL is not set',
         'AUTH_ISSUER is not set',
-        'AUTH_AUDIENCE is not set',
-        'set exactly one of AUTH_JWKS_URL and AUTH_JWKS',
+        'MADAUTH_URL is not set',
+        'AUTH_JWKS must be a JWKS document: {"keys": [...]}',
         'BACKUP_BUCKET is not set',
         'ACCESS_KEY_ID is not set',
         'ACCESS_SECRET_KEY is not set',
@@ -43,11 +38,10 @@ test('every problem is reported at once', () => {
     ]);
 });
 
-test('an inline JWKS must be a JWKS document, a JWKS URL a URL', () => {
-    const { AUTH_JWKS_URL: _url, ...rest } = env;
-    const bad = configFrom({ ...rest, AUTH_JWKS: '{"keys": ' });
-    assert.deepEqual(bad.ok ? [] : bad.error, ['AUTH_JWKS must be a JWKS document: {"keys": [...]}']);
-    assert.equal(configFrom({ ...rest, AUTH_JWKS: '{"keys":[]}' }).ok, true);
-    const url = configFrom({ ...env, AUTH_JWKS_URL: 'jwks.json' });
-    assert.deepEqual(url.ok ? [] : url.error, ['AUTH_JWKS_URL must be a URL']);
+test("an inline JWKS replaces madAuth's; MADAUTH_URL must be a URL", () => {
+    const inline = configFrom({ ...env, AUTH_JWKS: '{"keys":[]}' });
+    assert.ok(inline.ok);
+    assert.equal(inline.value.auth.jwks, '{"keys":[]}');
+    const url = configFrom({ ...env, MADAUTH_URL: 'not a url' });
+    assert.deepEqual(url.ok ? [] : url.error, ['MADAUTH_URL must be a URL']);
 });

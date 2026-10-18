@@ -43,12 +43,40 @@ compute Sites, and creates the backup credentials Secret in
 ./platform.sh
 ```
 
-It creates the control plane's own Database (the platform Project's), runs
-the control plane next to it and starts the Databases operator, with the
+It creates the platform Project's Databases (the control plane's and
+madAuth's), runs madAuth with its sidecar, the control plane and the
+Databases operator, with the
 GHCR images of the current commit pinned by digest (`IMAGE_TAG` to choose
 others; the commit must be pushed and its Images workflow done). The
-DatabaseConfig is `database-config.json`. A Database row inserted into the
-control plane's Database is running about a minute later.
+DatabaseConfig is `database-config.json`.
+
+madAuth's public URL on the dev cluster is `http://localhost:8787`: forward
+it, and the API, from the platform Project's namespace:
+
+```bash
+kubectl -n project-00000000-0000-4000-8000-000000000002 port-forward svc/madauth 8787 &
+kubectl -n project-00000000-0000-4000-8000-000000000002 port-forward svc/control-plane 8080 &
+```
+
+Sign up with e-mail and password through madAuth's HTTP API (`Origin` must
+be the allowed origin), take the code from the sidecar's log, and confirm
+it; the session cookie `madauth_session` is a token for the API:
+
+```bash
+curl -X POST -H 'Origin: http://localhost:8787' -H 'content-type: application/json' http://localhost:8787/auth/password/signup -d '{"email":"you@example.com","password":"a long passphrase","redirectTo":"http://localhost:8787/"}'
+```
+
+```bash
+kubectl -n project-00000000-0000-4000-8000-000000000002 logs deploy/madauth -c sidecar
+```
+
+```bash
+curl -c jar -X POST -H 'Origin: http://localhost:8787' -H 'content-type: application/json' http://localhost:8787/auth/email/verify -d '{"email":"you@example.com","code":"<code>"}'
+```
+
+Then `POST /v1/accounts` with that token creates your Account; API keys
+come from `POST /auth/api-keys/create` with the same cookie (scopes
+`openupstream:read` or `openupstream:write`).
 
 Without the control plane, one pass from this machine, from `operators/`:
 
