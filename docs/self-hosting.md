@@ -157,9 +157,89 @@ The production zones (`openupstream.com` for our own services, #67, and the
 customer domain `openupstream.app`, #68) move to bunny.net entirely when the
 production servers exist; that part is written then.
 
+## 6. Amazon SES: madAuth's e-mails
+
+madAuth's e-mails (address confirmation, password reset) go out through
+Amazon SES in an EU region, sent by the madAuth sidecar (#66). Ours: region
+`eu-central-1` (Frankfurt), domain `openupstream.com`, sender
+`no-reply@openupstream.com`. Route 53 is not needed; the records go wherever
+the domain's DNS is (ours: domaindiscount24).
+
+1. **Verify the domain.** In the SES console, in your EU region:
+   **Configuration → Identities → Create identity → Domain**, e.g.
+   `openupstream.com`.
+   - Tick **Use a custom MAIL FROM domain** and enter only the label,
+     `mail` (the console appends the domain). Behavior on MX failure: **Use
+     default MAIL FROM domain**.
+   - **Advanced DKIM settings**: **Easy DKIM**, **RSA_2048_BIT**, DKIM
+     signatures enabled, and **Publish DNS records to Route53 unticked**
+     (in both places it appears).
+2. **Add the records SES shows** at your DNS provider (at domaindiscount24:
+   **Create new subdomain** with the name part, then **Edit** for the type
+   and value):
+
+   | Name | Type | Value |
+   | --- | --- | --- |
+   | three `<token>._domainkey` | CNAME | `<token>.dkim.amazonses.com` |
+   | `mail` | MX | `10 feedback-smtp.<region>.amazonses.com` |
+   | `mail` | TXT | `v=spf1 include:amazonses.com ~all` |
+   | `_dmarc` | TXT | `v=DMARC1; p=none;` (add `rua=mailto:<you>` for reports) |
+
+   SES shows the identity as **Verified** once it finds them, usually
+   within minutes. Check from the command line:
+
+   ```bash
+   aws sesv2 get-email-identity --email-identity openupstream.com --region eu-central-1 --query '{verified:VerifiedForSendingStatus,dkim:DkimAttributes.Status,mailFrom:MailFromAttributes.MailFromDomainStatus}'
+   ```
+
+3. **Leave the sandbox.** A new SES account, per region, only sends to
+   verified addresses: **Account dashboard → Request production access**.
+4. **A key that can only send.** An IAM policy that allows sending only
+   through this identity and only as the sender, and an IAM user with just
+   that policy. With an admin profile on your machine, the policy (put your
+   account ID and region in):
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [{
+       "Effect": "Allow",
+       "Action": ["ses:SendEmail", "ses:SendRawEmail"],
+       "Resource": "arn:aws:ses:eu-central-1:<account id>:identity/openupstream.com",
+       "Condition": { "StringEquals": { "ses:FromAddress": "no-reply@openupstream.com" } }
+     }]
+   }
+   ```
+
+   ```bash
+   aws iam create-policy --policy-name openupstream-ses-send --policy-document file://ses-send-policy.json
+   ```
+
+   ```bash
+   aws iam create-user --user-name openupstream-ses
+   ```
+
+   ```bash
+   aws iam attach-user-policy --user-name openupstream-ses --policy-arn arn:aws:iam::<account id>:policy/openupstream-ses-send
+   ```
+
+   The access key goes straight into the profile `openupstream-ses`,
+   without showing on screen:
+
+   ```bash
+   read -r KEY_ID SECRET <<< "$(aws iam create-access-key --user-name openupstream-ses --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text)" && aws configure set aws_access_key_id "$KEY_ID" --profile openupstream-ses && aws configure set aws_secret_access_key "$SECRET" --profile openupstream-ses && aws configure set region eu-central-1 --profile openupstream-ses; unset KEY_ID SECRET
+   ```
+
+5. **Send a test mail** with that profile, then check the headers (in
+   Gmail: **Show original**) for SPF, DKIM and DMARC **PASS**:
+
+   ```bash
+   aws sesv2 send-email --profile openupstream-ses --region eu-central-1 --from-email-address no-reply@openupstream.com --destination ToAddresses=<you> --content 'Simple={Subject={Data="SES test"},Body={Text={Data="Sent with the send-only key."}}}'
+   ```
+
 ## Coming with build step 2
 
-- **Amazon SES** for madAuth's e-mails (#66): an AWS profile allowed to send,
-  its EU region and a verified sender.
 - **Stripe** for the payment method an Account needs (#65).
 - The production DNS zones and public hostnames.
+- The sidecar using the `openupstream-ses` key (until then it logs e-mails
+  on the dev cluster).
