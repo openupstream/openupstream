@@ -23,9 +23,17 @@ context) and put them into the cluster as Kubernetes Secrets.
 | `hcloud` | creating and deleting the development cluster's VMs |
 | `kubectl` | everything on the cluster |
 | AWS CLI (`aws`) | the backup bucket (it speaks S3), and SES later |
-| `jq`, `curl`, `ssh`, `openssl`, `dig` | the scripts in `infra/dev-cluster` |
+| `jq`, `curl`, `ssh`, `openssl` | the scripts in `infra/dev-cluster` |
+| `dig` | checking DNS delegations (section 5) |
 
 On macOS: `brew install hcloud kubectl awscli jq`.
+
+Then install and build the repository once; the dev-cluster scripts run
+code from it (`operators/scripts`, and libraries from `node_modules`):
+
+```bash
+npm ci && npm run build
+```
 
 ## 2. Container images
 
@@ -41,6 +49,14 @@ credentials, so the packages must be public:
 
 In a fork, the images are `ghcr.io/<your owner>/…`; the deploy manifests and
 `infra/dev-cluster/platform.sh` still say `openupstream`, so adjust them.
+
+Other names that are ours today and need yours:
+
+| What | Where |
+| --- | --- |
+| The backup bucket | `infra/dev-cluster/database-config.json` (section 4) |
+| madAuth's public URL | `MADAUTH_ISSUER` in `infra/dev-cluster/platform.sh` (on the dev cluster `http://localhost:8787`) |
+| Our hostnames (`openupstream.com`, `api.`) and the customer domain (`openupstream.app`) | decisions 67 and 68; they become settings with build step 2, which is the first to use them |
 
 ## 3. Hetzner Cloud: the development cluster
 
