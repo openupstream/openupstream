@@ -165,8 +165,8 @@ a second Database of the platform Project, two replicas, one per compute
 Site (`infra/madauth`, #63). madAuth only calls https or localhost URLs, so
 a sidecar from the control plane's image, in the same pod, serves it the API
 key scopes and receives its webhooks (e-mails to send, events) on
-127.0.0.1. On the dev cluster the sidecar writes e-mails to its log; a mail
-provider is Open question 14.
+127.0.0.1. It sends madAuth's e-mails through Amazon SES in an EU region
+(#66); on the dev cluster it writes them to its log instead.
 
 The API accepts two kinds of madAuth credentials (#64):
 
@@ -182,7 +182,10 @@ The API accepts two kinds of madAuth credentials (#64):
 
 The subject is a madAuth user, which can be a Member of several Accounts.
 A signed-in user creates an Account with `POST /v1/accounts` and becomes its
-first Member (#62); invitations to existing Accounts come later.
+first Member (#62); invitations to existing Accounts come later. Anyone
+may sign up, but an Account needs a payment method in Stripe before it
+creates its first Resource (#65). How someone who runs openupstream
+themselves changes these rules is Open question 16.
 
 The public API (Hono, zod validation, `control-plane/src/api`) serves
 Projects and their Databases in the caller's Accounts; another Account's
@@ -332,11 +335,14 @@ digest (#55).
   Bucket | Service)]`. A Domain belongs to exactly one Project and its Routes
   target only that Project's Buckets and Services, so ingress never crosses
   namespaces.
-- Every Project gets a default hostname under a separate customer domain
-  (for example `<project>.openupstream.app`; name to be chosen) that is on
-  the Public Suffix List, so one Project's site cannot set cookies for
-  another's. Bucket hostnames (`<bucket>.s3.…`) live there too.
-  `openupstream.com` is only for our own dashboard, API and sign-in.
+- Every Project gets a default hostname under a separate customer domain,
+  `openupstream.app` (#68), that is on the Public Suffix List, so one
+  Project's site cannot set cookies for another's. Bucket hostnames
+  (`<bucket>.s3.openupstream.app`) live there too.
+- `openupstream.com` is only for our own services (#67): the dashboard and
+  madAuth at `openupstream.com` (madAuth under `/auth/*` and
+  `/.well-known/*`, on the same site as the dashboard, as it requires), the
+  API at `api.openupstream.com`.
 - Both zones are hosted on bunny.net DNS (see Ingress and failover).
 - A custom domain is routed and gets a certificate only after the Account
   proves ownership with a TXT record at `_openupstream.<domain>`. A Domain
@@ -349,7 +355,9 @@ digest (#55).
   Route still targets cannot be deleted; deleting a Domain deletes its
   Routes.
 - Traefik and cert-manager do ingress and TLS; certificates for custom
-  domains use HTTP-01.
+  domains use HTTP-01. Wildcards (`*.s3.openupstream.app` for the Buckets)
+  need DNS-01, which cert-manager solves on bunny.net through a community
+  webhook, pinned and reviewed (#69).
 
 ## Project isolation
 
@@ -409,6 +417,8 @@ digest (#55).
 - An hourly job rolls the events up and sends them to Stripe Billing Meters.
   Stripe rates, invoices (one per Account, broken down per Project) and
   collects (SEPA enabled).
+- An Account has a Stripe customer with a payment method (card or SEPA)
+  before it can create a Resource; Projects themselves are free (#65).
 
 ## Backups
 
@@ -482,7 +492,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 29 | Demo apps are the acceptance test for v1; ProjectMatch migrates after v1 | ProjectMatch cutover as step 5 | ProjectMatch is a large migration (11 DynamoDB tables to Postgres, SQS, KMS); small demo apps prove each build step sooner |
 | 30 | Demo apps: `examples/notes`, `examples/spa-api`, `examples/worker`, plus Umami unmodified from its public registry | ProjectMatch only; third-party apps only | each covers one build step; `notes` doubles as the Site-failover test; Umami proves "any registry" with code we did not write |
 | 31 | Customer hostnames on a separate domain on the Public Suffix List; `openupstream.com` for our own services | default hostnames under `openupstream.com` | without the PSL entry, one Project's site could set cookies for every other Project's default hostname (why `vercel.app` and `github.io` exist) |
-| 32 | bunny.net DNS for our zones, with its health checks | Hetzner DNS plus our own watcher; Cloudflare | health checks run outside our Sites and outside every hosting provider's API; EU company; about $1/month. A cert-manager DNS-01 webhook for bunny.net is checked in build step 2 |
+| 32 | bunny.net DNS for our zones, with its health checks | Hetzner DNS plus our own watcher; Cloudflare | health checks run outside our Sites and outside every hosting provider's API; EU company; about $1/month. DNS-01 for certificates: #69 |
 | 33 | Before revenue: cloud VMs created and destroyed per working session; the target setup (about €150–165/month) from when the demo apps pass or the first customer arrives | dedicated servers from day one | the cluster does not need to run 24/7 while it is being built; hourly billing keeps the cost down |
 | 34 | Ingress is active-active: A/AAAA records for both compute Sites, failed Site dropped by DNS health checks | failover IP (Hetzner Floating or Robot IP), BGP anycast, Cloudflare Load Balancing | an IP cannot move between providers; anycast needs a leased /24 (about €150/month); Cloudflare would terminate every customer's TLS in a US company; AWS's own load balancers use the same multi-A pattern |
 | 35 | Control plane schema as plain SQL migrations run by node-pg-migrate; `pg` as the Postgres client | own migration runner, Drizzle, Kysely | triggers, partial unique indexes and composite foreign keys are written in SQL anyway; node-pg-migrate adds locking, ordering checks and a CLI on top of `pg`, the standard driver |
@@ -515,6 +525,12 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 62 | A signed-in madAuth user creates an Account with `POST /v1/accounts` and becomes its first Member; a user may have several | creating it on the first API call; madAuth's `user.signed_up` webhook | explicit and repeatable, no webhook to lose (madAuth does not retry), no stray Accounts from sign-ins; the dashboard calls it on first visit |
 | 63 | madAuth runs as its published image on a Postgres Database of the platform Project, two replicas; a sidecar from the control plane's image serves it the API key scopes and receives its webhooks on 127.0.0.1 | embedding madAuth in an own Node service; the image with SQLite (one replica); in-cluster TLS; changing madAuth to allow in-cluster http | no madAuth code in openupstream to build and patch; the users are in a Database with failover and backups like any other; madAuth only calls https or localhost, and the sidecar ships with the API it describes |
 | 64 | madAuth session tokens (ES256, `typ: madauth-session+jwt`, no audience) verified against its JWKS; API keys checked with madAuth (`/auth/api-keys/verify`), cached for a minute; scopes `openupstream:read` (GET) and `openupstream:write` (everything) | per-resource scopes; one full-access scope | madAuth has no audience and no OAuth flows; its API keys are opaque; two scopes allow read-only keys now and finer scopes later without breaking existing keys |
+| 65 | Anyone may sign up; an Account needs a payment method in Stripe (card or SEPA) before it creates its first Resource | an allow-list or invitations; free limits per Account until billing exists | no hand-picking of customers, and no unpaid resources: memory is reserved from the first Database on. Self-hosted installations will need other rules (Open question 16) |
+| 66 | madAuth's e-mails (sign-up, password reset) are sent through Amazon SES in an EU region, by the madAuth sidecar | an EU provider (Scaleway TEM, Brevo) | the maintainer already has it set up; the addresses stay in the EU region; AWS becomes a subprocessor. This is a US company, which decision 34 avoided for ingress: there Cloudflare would see every customer's traffic, here SES sees only a Member's address and the sign-in e-mails we send, never a Project's data; an EU provider remains a drop-in replacement in the sidecar |
+| 67 | Our own hostnames: dashboard and madAuth at `openupstream.com` (madAuth under `/auth/*` and `/.well-known/*`), the API at `api.openupstream.com` | dashboard at `app.openupstream.com`; everything on one host | madAuth must be on the same site as the dashboard; the API on its own host keeps its routes and limits apart, and the session cookie (Domain `openupstream.com`) reaches both |
+| 68 | The customer domain is `openupstream.app`: Projects' default hostnames and `<bucket>.s3.openupstream.app`, on the Public Suffix List | `openupstream.dev`; deciding later | short and clearly ours; `.app` is HTTPS-only (HSTS preloaded), like everything we serve |
+| 69 | cert-manager solves DNS-01 on bunny.net with a community webhook, pinned by digest and reviewed; HTTP-01 for custom domains | an own webhook; delegating `_acme-challenge` to acme-dns | wildcards (Buckets) need DNS-01; the webhook exists, so no code of ours; the bunny.net API key it needs is a Secret in cert-manager's namespace only |
+| 70 | DNS, certificates and e-mail are tested on the dev cluster through a dev subdomain delegated to bunny.net, Let's Encrypt staging and SES test mails | testing with a local CA and `/etc/hosts` first | the same path as production from the first session; staging keeps Let's Encrypt's rate limits out of the way |
 
 ## Open questions
 
@@ -564,18 +580,17 @@ Decisions table once it is settled.
     Services reach a Database. `psql` from a laptop or a migration from CI
     needs Traefik TCP routing with TLS SNI (Postgres 17 direct SSL), its
     certificates, and a way to hand out the password.
-14. **Mail for madAuth.** Sign-up and password reset need e-mails sent: a
-    provider (an EU one, e.g. Scaleway TEM or Brevo, or SES), sent from the
-    madAuth sidecar.
+14. ~~**Mail for madAuth.**~~ Settled by decision 66: Amazon SES.
 15. **madAuth's keys.** With `MADAUTH_KEY_SERVICE=local` the signing key is
     a Kubernetes Secret and in the process's memory; madAuth's alternative,
     AWS KMS, means an AWS dependency. And until the first admin exists,
     madAuth logs a setup token, which Loki would collect.
-16. **Who may sign up, and how much.** Any madAuth user can create Accounts,
-    and in them Projects and Databases, without limit. Before madAuth is
-    reachable from the internet: an allow-list or invitation for sign-ups
-    (madAuth's `user.signing_up` webhook, in the sidecar) and limits per
-    Account until billing exists.
+16. **Sign-up for those who run openupstream themselves.** The hosted
+    service lets anyone sign up and requires a payment method (decision 65).
+    A self-hosted installation may want something else: invitations only,
+    an allow-list of domains (madAuth's `user.signing_up` webhook, in the
+    sidecar), or no payment method. How these rules become configurable is
+    for later.
 
 ## Build order
 
@@ -593,11 +608,14 @@ Decisions table once it is settled.
    images; creating and deleting Projects and Databases through the
    public API, with the cleanup; madAuth with sign-up, API keys and
    Accounts created through the API (2026-10-17). Left: TopoLVM, restore
-   through the API, mail for madAuth (Open question 14), `oup login` and
-   `oup pg` commands. Public hostnames for madAuth and the API come with
-   step 2.
+   through the API, `oup login` and `oup pg` commands. Public hostnames for
+   madAuth and the API come with step 2, together with SES and the
+   payment-method gate that open sign-up needs.
 2. Object storage and static sites: Garage, routing table, Traefik,
-   cert-manager.
+   cert-manager. With Traefik come the public hostnames of the API and
+   madAuth, and so open sign-up: this step also brings the sidecar's SES
+   sender (#66) and the payment-method gate, a Stripe customer per Account
+   with a payment method checked before the first Resource (#65).
 3. Containers, Service mode.
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
@@ -623,5 +641,5 @@ one CloudFront distribution, SSM/Secrets Manager, KMS. The mapping:
 
 Not technical, but no customer is billed before these exist: a company (UG
 or GmbH), a data processing agreement (AVV) template, the TOMs, and the list
-of subprocessors (Hetzner, OVHcloud, netcup, bunny.net, Stripe, the mail
-provider).
+of subprocessors (Hetzner, OVHcloud, netcup, bunny.net, Stripe, Amazon Web
+Services for SES).

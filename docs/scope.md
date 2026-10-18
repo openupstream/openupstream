@@ -36,6 +36,9 @@ Billed by memory GB-h (configured limit), CPU-seconds, storage GB-h and
 egress GB (HTTP responses served to the internet). Copies in other Sites are
 included in the unit price, not billed separately.
 
+Anyone can sign up; a payment method (card or SEPA direct debit) is needed
+before the first Database, Bucket or Service is created.
+
 ## Deliberately not offered
 
 - **Queues.** Use `SELECT … FOR UPDATE SKIP LOCKED` on your Postgres; pg-boss
