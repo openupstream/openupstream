@@ -104,6 +104,31 @@ terms consistently in code, docs and issues.
   the control plane or an operator reads or writes, verify that its Role or
   ClusterRole grants it.
 
+## Work outside the repository
+
+Cloud consoles, DNS, accounts, credentials, CLI calls against live
+services: anything that changes the world outside this repository. A
+throwaway dev cluster (`infra/dev-cluster`) is the exception: once the
+maintainer has agreed to a test session, create it, run the tests on it and
+destroy it without asking per command.
+
+- **You can do it** (a CLI or API call with access already on the
+  machine): say in one or two sentences what you will run and what it
+  changes, then ask the maintainer for the go-ahead before running it.
+- **The maintainer does it**: creating identities, users, accounts or
+  credentials, accepting terms, anything that handles a secret. Give the
+  exact commands to paste in the same message, without being asked. Pipe a
+  secret straight into where it is kept (a CLI profile, a file with
+  `chmod 600`), so it never shows on screen or passes through the agent.
+- **A setting in a web console** (bunny.net, the domain registrar, Hetzner,
+  AWS): offer to make the change by driving the maintainer's browser (in
+  Claude Code: Claude in Chrome) and wait for the yes. What the previous
+  rule reserves for the maintainer stays with them, as click-by-click
+  steps.
+- Afterwards, check the result yourself with a read-only call (`dig`, a
+  `get` or `list` command) and record setup that others will repeat in
+  `docs/self-hosting.md`.
+
 ## Coding guidelines
 
 - Prefer immutable variables and pure functions.
