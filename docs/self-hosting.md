@@ -196,8 +196,8 @@ the domain's DNS is (ours: domaindiscount24).
    verified addresses: **Account dashboard → Request production access**.
 4. **A key that can only send.** An IAM policy that allows sending only
    through this identity and only as the sender, and an IAM user with just
-   that policy. With an admin profile on your machine, the policy (put your
-   account ID and region in):
+   that policy. With an admin profile on your machine, save the policy as
+   `ses-send-policy.json` (put your account ID and region in):
 
    ```json
    {
