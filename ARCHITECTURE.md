@@ -335,11 +335,14 @@ digest (#55).
   Bucket | Service)]`. A Domain belongs to exactly one Project and its Routes
   target only that Project's Buckets and Services, so ingress never crosses
   namespaces.
-- Every Project gets a default hostname under a separate customer domain
-  (for example `<project>.openupstream.app`; name to be chosen) that is on
-  the Public Suffix List, so one Project's site cannot set cookies for
-  another's. Bucket hostnames (`<bucket>.s3.…`) live there too.
-  `openupstream.com` is only for our own dashboard, API and sign-in.
+- Every Project gets a default hostname under a separate customer domain,
+  `openupstream.app` (#68), that is on the Public Suffix List, so one
+  Project's site cannot set cookies for another's. Bucket hostnames
+  (`<bucket>.s3.openupstream.app`) live there too.
+- `openupstream.com` is only for our own services (#67): the dashboard and
+  madAuth at `openupstream.com` (madAuth under `/auth/*` and
+  `/.well-known/*`, on the same site as the dashboard, as it requires), the
+  API at `api.openupstream.com`.
 - Both zones are hosted on bunny.net DNS (see Ingress and failover).
 - A custom domain is routed and gets a certificate only after the Account
   proves ownership with a TXT record at `_openupstream.<domain>`. A Domain
@@ -352,7 +355,9 @@ digest (#55).
   Route still targets cannot be deleted; deleting a Domain deletes its
   Routes.
 - Traefik and cert-manager do ingress and TLS; certificates for custom
-  domains use HTTP-01.
+  domains use HTTP-01. Wildcards (`*.s3.openupstream.app` for the Buckets)
+  need DNS-01, which cert-manager solves on bunny.net through a community
+  webhook, pinned and reviewed (#69).
 
 ## Project isolation
 
@@ -487,7 +492,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 29 | Demo apps are the acceptance test for v1; ProjectMatch migrates after v1 | ProjectMatch cutover as step 5 | ProjectMatch is a large migration (11 DynamoDB tables to Postgres, SQS, KMS); small demo apps prove each build step sooner |
 | 30 | Demo apps: `examples/notes`, `examples/spa-api`, `examples/worker`, plus Umami unmodified from its public registry | ProjectMatch only; third-party apps only | each covers one build step; `notes` doubles as the Site-failover test; Umami proves "any registry" with code we did not write |
 | 31 | Customer hostnames on a separate domain on the Public Suffix List; `openupstream.com` for our own services | default hostnames under `openupstream.com` | without the PSL entry, one Project's site could set cookies for every other Project's default hostname (why `vercel.app` and `github.io` exist) |
-| 32 | bunny.net DNS for our zones, with its health checks | Hetzner DNS plus our own watcher; Cloudflare | health checks run outside our Sites and outside every hosting provider's API; EU company; about $1/month. A cert-manager DNS-01 webhook for bunny.net is checked in build step 2 |
+| 32 | bunny.net DNS for our zones, with its health checks | Hetzner DNS plus our own watcher; Cloudflare | health checks run outside our Sites and outside every hosting provider's API; EU company; about $1/month. DNS-01 for certificates: #69 |
 | 33 | Before revenue: cloud VMs created and destroyed per working session; the target setup (about €150–165/month) from when the demo apps pass or the first customer arrives | dedicated servers from day one | the cluster does not need to run 24/7 while it is being built; hourly billing keeps the cost down |
 | 34 | Ingress is active-active: A/AAAA records for both compute Sites, failed Site dropped by DNS health checks | failover IP (Hetzner Floating or Robot IP), BGP anycast, Cloudflare Load Balancing | an IP cannot move between providers; anycast needs a leased /24 (about €150/month); Cloudflare would terminate every customer's TLS in a US company; AWS's own load balancers use the same multi-A pattern |
 | 35 | Control plane schema as plain SQL migrations run by node-pg-migrate; `pg` as the Postgres client | own migration runner, Drizzle, Kysely | triggers, partial unique indexes and composite foreign keys are written in SQL anyway; node-pg-migrate adds locking, ordering checks and a CLI on top of `pg`, the standard driver |
@@ -522,6 +527,10 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 64 | madAuth session tokens (ES256, `typ: madauth-session+jwt`, no audience) verified against its JWKS; API keys checked with madAuth (`/auth/api-keys/verify`), cached for a minute; scopes `openupstream:read` (GET) and `openupstream:write` (everything) | per-resource scopes; one full-access scope | madAuth has no audience and no OAuth flows; its API keys are opaque; two scopes allow read-only keys now and finer scopes later without breaking existing keys |
 | 65 | Anyone may sign up; an Account needs a payment method in Stripe (card or SEPA) before it creates its first Resource | an allow-list or invitations; free limits per Account until billing exists | no hand-picking of customers, and no unpaid resources: memory is reserved from the first Database on. Self-hosted installations will need other rules (Open question 16) |
 | 66 | madAuth's e-mails (sign-up, password reset) are sent through Amazon SES in an EU region, by the madAuth sidecar | an EU provider (Scaleway TEM, Brevo) | the maintainer already has it set up; the addresses stay in the EU region; AWS becomes a subprocessor. This is a US company, which decision 34 avoided for ingress: there Cloudflare would see every customer's traffic, here SES sees only a Member's address and the sign-in e-mails we send, never a Project's data; an EU provider remains a drop-in replacement in the sidecar |
+| 67 | Our own hostnames: dashboard and madAuth at `openupstream.com` (madAuth under `/auth/*` and `/.well-known/*`), the API at `api.openupstream.com` | dashboard at `app.openupstream.com`; everything on one host | madAuth must be on the same site as the dashboard; the API on its own host keeps its routes and limits apart, and the session cookie (Domain `openupstream.com`) reaches both |
+| 68 | The customer domain is `openupstream.app`: Projects' default hostnames and `<bucket>.s3.openupstream.app`, on the Public Suffix List | `openupstream.dev`; deciding later | short and clearly ours; `.app` is HTTPS-only (HSTS preloaded), like everything we serve |
+| 69 | cert-manager solves DNS-01 on bunny.net with a community webhook, pinned by digest and reviewed; HTTP-01 for custom domains | an own webhook; delegating `_acme-challenge` to acme-dns | wildcards (Buckets) need DNS-01; the webhook exists, so no code of ours; the bunny.net API key it needs is a Secret in cert-manager's namespace only |
+| 70 | DNS, certificates and e-mail are tested on the dev cluster through a dev subdomain delegated to bunny.net, Let's Encrypt staging and SES test mails | testing with a local CA and `/etc/hosts` first | the same path as production from the first session; staging keeps Let's Encrypt's rate limits out of the way |
 
 ## Open questions
 
