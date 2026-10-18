@@ -107,7 +107,10 @@ terms consistently in code, docs and issues.
 ## Work outside the repository
 
 Cloud consoles, DNS, accounts, credentials, CLI calls against live
-services: anything that changes the world outside this repository.
+services: anything that changes the world outside this repository. A
+throwaway dev cluster (`infra/dev-cluster`) is the exception: once the
+maintainer has agreed to a test session, create it, run the tests on it and
+destroy it without asking per command.
 
 - **You can do it** (a CLI or API call with access already on the
   machine): say in one or two sentences what you will run and what it
