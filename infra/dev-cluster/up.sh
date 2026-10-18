@@ -54,13 +54,16 @@ for site in "${SITES[@]}"; do IPS+=("$(ip "$site")"); done
 ADMIN_IP=$(curl -fsS -4 https://ifconfig.me)
 
 # The node-to-node ports only from the other nodes; SSH and the Kubernetes
-# API only from here (Tailscale replaces this on the real cluster).
+# API only from here (Tailscale replaces this on the real cluster); HTTP and
+# HTTPS from everywhere, for Traefik (ingress.sh).
 nodes_json=$(printf '"%s/32",' "${IPS[@]}" | sed 's/,$//')
 cat >"$STATE/firewall.json" <<EOF
 [
   {"direction": "in", "protocol": "icmp", "source_ips": ["0.0.0.0/0", "::/0"]},
   {"direction": "in", "protocol": "tcp", "port": "22", "source_ips": ["$ADMIN_IP/32"]},
   {"direction": "in", "protocol": "tcp", "port": "6443", "source_ips": ["$ADMIN_IP/32"]},
+  {"direction": "in", "protocol": "tcp", "port": "80", "source_ips": ["0.0.0.0/0", "::/0"]},
+  {"direction": "in", "protocol": "tcp", "port": "443", "source_ips": ["0.0.0.0/0", "::/0"]},
   {"direction": "in", "protocol": "tcp", "port": "any", "source_ips": [$nodes_json]},
   {"direction": "in", "protocol": "udp", "port": "any", "source_ips": [$nodes_json]}
 ]

@@ -1,0 +1,13 @@
+# cert-manager's DNS-01 webhook for bunny.net DNS
+# (oci://ghcr.io/aardbol/charts/cert-manager-webhook-bunny, chart 1.4.2,
+# reviewed 2026-10-18; ARCHITECTURE.md, decision 69). It may read exactly one
+# Secret, cert-manager/bunny-api, which holds the bunny.net API key.
+groupName: acme.openupstream.com
+image:
+  tag: v1.4.1@sha256:be5e446c5ed5a38150a21647752a6f9af4ea41db9dbbc27283df6e10a210cb8a
+secretAccess:
+  namespace: cert-manager
+  names: [bunny-api]
+resources:
+  requests: {cpu: 10m, memory: 32Mi}
+  limits: {memory: 64Mi}

@@ -1,0 +1,72 @@
+# Our own public hostnames (ARCHITECTURE.md, decision 67), in the platform
+# Project's namespace. PLATFORM_DOMAIN is `openupstream.com` in production
+# and `dev.openupstream.com` on a dev cluster; CLUSTER_ISSUER is
+# `letsencrypt` or `letsencrypt-staging`. infra/dev-cluster/platform.sh fills
+# both in.
+#
+# - PLATFORM_DOMAIN: madAuth under /auth/* and /.well-known/*, so it is on
+#   the same site as the dashboard, which will serve the rest.
+# - api.PLATFORM_DOMAIN: the public API. The internal API (port 8081) is
+#   never routed.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: platform
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  secretName: platform-tls
+  issuerRef: {kind: ClusterIssuer, name: CLUSTER_ISSUER}
+  dnsNames: [PLATFORM_DOMAIN, api.PLATFORM_DOMAIN]
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
+---
+# madAuth expects a per-IP limit in front of it; sign-in and sign-up are
+# where guessing and spamming happen.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: madauth-rate-limit
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  rateLimit:
+    average: 5
+    period: 1s
+    burst: 20
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: api-rate-limit
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  rateLimit:
+    average: 50
+    period: 1s
+    burst: 100
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: madauth
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`PLATFORM_DOMAIN`) && (PathPrefix(`/auth/`) || PathPrefix(`/.well-known/`))
+      kind: Rule
+      middlewares: [{name: madauth-rate-limit}]
+      services: [{name: madauth, port: 8787}]
+  tls: {secretName: platform-tls}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: api
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`api.PLATFORM_DOMAIN`)
+      kind: Rule
+      middlewares: [{name: api-rate-limit}]
+      services: [{name: control-plane, port: 8080}]
+  tls: {secretName: platform-tls}

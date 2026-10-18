@@ -9,7 +9,9 @@
 #
 # Needs the Secret madauth (MADAUTH_SIGNING_KEY, the same on every replica,
 # and WEBHOOK_SECRET) and the ConfigMap madauth-config (MADAUTH_ISSUER,
-# ALLOWED_ORIGINS, WEBHOOK_EVENTS, MAIL). The control plane's image is
+# ALLOWED_ORIGINS, WEBHOOK_EVENTS, and for the sidecar MAIL, MAIL_FROM,
+# SES_REGION), and with MAIL=ses the Secret madauth-ses (the
+# send-only key, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY). The control plane's image is
 # pinned by digest when applied (infra/dev-cluster/platform.sh).
 apiVersion: v1
 kind: ServiceAccount
@@ -88,6 +90,15 @@ spec:
             - name: MAIL
               valueFrom:
                 configMapKeyRef: {name: madauth-config, key: MAIL, optional: true}
+            - name: MAIL_FROM
+              valueFrom:
+                configMapKeyRef: {name: madauth-config, key: MAIL_FROM, optional: true}
+            - name: SES_REGION
+              valueFrom:
+                configMapKeyRef: {name: madauth-config, key: SES_REGION, optional: true}
+          # The send-only SES key (MAIL=ses).
+          envFrom:
+            - secretRef: {name: madauth-ses, optional: true}
           resources:
             requests: {cpu: 10m, memory: 64Mi}
             limits: {memory: 128Mi}
