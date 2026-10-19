@@ -242,8 +242,14 @@ the domain's DNS is (ours: domaindiscount24).
 
 ## Coming with build step 2
 
-- **Mollie** for the payment method an Account needs and its payments (#65,
-  #74), and **lexoffice** for the invoices.
+- **No payment method needed** when you run openupstream yourself: leave
+  `NEW_ACCOUNT_HOLDS` empty (the default) and every Account may create
+  Resources (ARCHITECTURE.md, decision 78). Your own rules can place and
+  lift Holds through the internal API (`BILLING_CALLERS`).
+- **Mollie** and **lexoffice**, for the hosted service only: its private
+  billing service (#77) takes the payment method an Account needs and the
+  payments (#65, #74), and issues the invoices. This setup moves to that
+  repository once it exists.
   In the Mollie profile, switch on the methods that create a mandate
   (#75): cards (with Apple Pay and Google Pay), PayPal and Pay by Bank,
   plus SEPA Direct Debit, without which Pay by Bank yields no mandate.

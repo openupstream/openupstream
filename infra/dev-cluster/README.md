@@ -63,7 +63,10 @@ and the Databases operator, with the GHCR images of the current commit
 pinned by digest (`IMAGE_TAG` to choose others; the commit must be pushed
 and its Images workflow done). The DatabaseConfig is `database-config.json`.
 madAuth sends real e-mails through SES; `MAIL=log ./platform.sh` writes
-them to the sidecar's log instead.
+them to the sidecar's log instead. To try the payment-method gate without a
+billing service, set `NEW_ACCOUNT_HOLDS=payment-method` and
+`BILLING_CALLERS` to a ServiceAccount you lift Holds with (control-plane
+README, "Internal API").
 
 madAuth is at `https://dev.openupstream.com/auth`, the API at
 `https://api.dev.openupstream.com`. Sign up with e-mail and password
