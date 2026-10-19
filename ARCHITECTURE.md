@@ -442,13 +442,16 @@ digest (#55).
   lexoffice issues the invoice through its API (one per Account, broken
   down per Project), with the invoice number, VAT, PDF and archiving.
 - Mollie collects the invoice total from the Account's mandate with a
-  recurring payment (card or SEPA Direct Debit) (#74). Failed payments, and
+  recurring payment (card, PayPal or SEPA Direct Debit) (#74, #75). Failed payments, and
   SEPA payments reversed up to 8 weeks later, are retried and reminded; an
   Account that stays unpaid is suspended (the rules: Open question 18).
 - An Account has a Mollie customer and a mandate before it can create a
-  Resource; Projects themselves are free (#65). For a card the mandate comes
-  from a first payment (€0); how a SEPA Direct Debit mandate is created for
-  German customers is Open question 18.
+  Resource; Projects themselves are free (#65). The mandate comes from a
+  first payment on Mollie's hosted checkout, paid by card (also Apple Pay
+  and Google Pay), PayPal or Pay by Bank; Pay by Bank yields a SEPA Direct
+  Debit mandate on the account it was paid from (#75). The checkout offers
+  what is switched on in the Mollie profile, so these methods are profile
+  settings, not code. The first payment's amount is Open question 18.
 
 ## Backups
 
@@ -555,7 +558,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 62 | A signed-in madAuth user creates an Account with `POST /v1/accounts` and becomes its first Member; a user may have several | creating it on the first API call; madAuth's `user.signed_up` webhook | explicit and repeatable, no webhook to lose (madAuth does not retry), no stray Accounts from sign-ins; the dashboard calls it on first visit |
 | 63 | madAuth runs as its published image on a Postgres Database of the platform Project, two replicas; a sidecar from the control plane's image serves it the API key scopes and receives its webhooks on 127.0.0.1 | embedding madAuth in an own Node service; the image with SQLite (one replica); in-cluster TLS; changing madAuth to allow in-cluster http | no madAuth code in openupstream to build and patch; the users are in a Database with failover and backups like any other; madAuth only calls https or localhost, and the sidecar ships with the API it describes |
 | 64 | madAuth session tokens (ES256, `typ: madauth-session+jwt`, no audience) verified against its JWKS; API keys checked with madAuth (`/auth/api-keys/verify`), cached for a minute; scopes `openupstream:read` (GET) and `openupstream:write` (everything) | per-resource scopes; one full-access scope | madAuth has no audience and no OAuth flows; its API keys are opaque; two scopes allow read-only keys now and finer scopes later without breaking existing keys |
-| 65 | Anyone may sign up; an Account needs a payment method (card or SEPA; a Mollie mandate since #74, first decided as Stripe) before it creates its first Resource | an allow-list or invitations; free limits per Account until billing exists | no hand-picking of customers, and no unpaid resources: memory is reserved from the first Database on. Self-hosted installations will need other rules (Open question 16) |
+| 65 | Anyone may sign up; an Account needs a payment method (card or SEPA, and PayPal since #75; a Mollie mandate since #74, first decided as Stripe) before it creates its first Resource | an allow-list or invitations; free limits per Account until billing exists | no hand-picking of customers, and no unpaid resources: memory is reserved from the first Database on. Self-hosted installations will need other rules (Open question 16) |
 | 66 | madAuth's e-mails (sign-up, password reset) are sent through Amazon SES in an EU region, by the madAuth sidecar | an EU provider (Scaleway TEM, Brevo) | the maintainer already has it set up; the addresses stay in the EU region; AWS becomes a subprocessor. This is a US company, which decision 34 avoided for ingress: there Cloudflare would see every customer's traffic, here SES sees only a Member's address and the sign-in e-mails we send, never a Project's data; an EU provider remains a drop-in replacement in the sidecar |
 | 67 | Our own hostnames: dashboard and madAuth at `openupstream.com` (madAuth under `/auth/*` and `/.well-known/*`), the API at `api.openupstream.com` | dashboard at `app.openupstream.com`; everything on one host | madAuth must be on the same site as the dashboard; the API on its own host keeps its routes and limits apart, and the session cookie (Domain `openupstream.com`) reaches both |
 | 68 | The customer domain is `openupstream.app`: Projects' default hostnames and `<bucket>.s3.openupstream.app`, on the Public Suffix List | `openupstream.dev`; deciding later | short and clearly ours; `.app` is HTTPS-only (HSTS preloaded), like everything we serve |
@@ -564,7 +567,8 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 71 | A Project's default hostname is `<project>-<random>.openupstream.app`, the suffix chosen once when the Project is created and kept when it is renamed | `<project>-<account>`; `<project>.<account>` | Project names are only unique per Account; a random suffix needs no unique Account names, leaks no Account name and survives renames |
 | 72 | Traefik is our own Helm release (official chart, pinned, image by digest); k3s's bundled Traefik stays disabled | k3s's bundled Traefik with a HelmChartConfig | upgrades on our schedule, not with k3s; we control its CRDs and values. Keeps decision 6's choice of Traefik |
 | 73 | Traefik as a DaemonSet on the compute nodes with hostPorts 80/443 (pods listen on 8000/8443, non-root, no added capabilities), no load balancer; platform routes dial with a 1 s timeout and retry on another pod | `hostNetwork`; a cloud or MetalLB load balancer | the nodes' own addresses are what bunny.net checks and hands out (#34); hostPorts keep the client address and need no root; the short dial timeout keeps a dark Site's pods from stalling requests through the other Site |
-| 74 | Billing: the control plane rates usage once a month (usage events × one price per unit), lexoffice issues the invoice through its API, Mollie collects it through the Account's mandate (card or SEPA); failed payments, reminders and suspension are ours | Stripe Billing Meters, invoices and payments (#18, #65); invoice PDFs of our own; sevDesk | Mollie is an EU company the maintainer already runs for ProjectMatch, and lexoffice is the maintainer's bookkeeping, so invoices are compliant (numbering, VAT, archiving) and land there. With lexoffice issuing the invoices, Stripe would only add rating (one sum per unit at one price) and dunning (a short state machine); no US payment processor. Supersedes the Stripe parts of #18 and #65 |
+| 74 | Billing: the control plane rates usage once a month (usage events × one price per unit), lexoffice issues the invoice through its API, Mollie collects it through the Account's mandate (card, PayPal or SEPA, #75); failed payments, reminders and suspension are ours | Stripe Billing Meters, invoices and payments (#18, #65); invoice PDFs of our own; sevDesk | Mollie is an EU company the maintainer already runs for ProjectMatch, and lexoffice is the maintainer's bookkeeping, so invoices are compliant (numbering, VAT, archiving) and land there. With lexoffice issuing the invoices, Stripe would only add rating (one sum per unit at one price) and dunning (a short state machine); no US payment processor. Supersedes the Stripe parts of #18 and #65 |
+| 75 | A mandate is created by a first payment on Mollie's hosted checkout with card (incl. Apple Pay and Google Pay), PayPal or Pay by Bank (which yields a SEPA Direct Debit mandate); the Mollie profile has these and SEPA Direct Debit switched on | an IBAN form of our own with Mollie's Mandates API; also iDEAL, Bancontact and EPS; one-off methods (Klarna, bank transfer) | Mollie charges these three later without the customer, and between them they cover nearly every customer in Germany and the EU. No IBAN handling and no SEPA mandate text of our own: the customer consents at their bank or card issuer. More methods that yield a mandate (iDEAL, Bancontact, EPS) are a profile setting away |
 
 ## Open questions
 
@@ -632,11 +636,8 @@ Decisions table once it is settled.
     bunny.net account that holds only the zones cert-manager writes to, or
     delegating `_acme-challenge` to such a zone.
 18. **Billing rules with Mollie and lexoffice.**
-    - A SEPA mandate: Sofort and giropay are gone, but in Germany Mollie
-      offers Pay by Bank for the first payment, besides cards (checked in
-      test mode, 2026-10-19), which yields a SEPA Direct Debit mandate.
-      Whether that suffices, or an IBAN form with Mollie's Mandates API and a
-      SEPA mandate text of our own is needed too.
+    - The first payment that creates the mandate (#75): €0.01 refunded at
+      once, kept, or a real first charge.
     - Small amounts: a month of an idle Database can cost less than the
       transaction fee or Mollie's minimum; carry it over, or a minimum
       charge.
@@ -670,7 +671,7 @@ Decisions table once it is settled.
    cert-manager. With Traefik come the public hostnames of the API and
    madAuth, and so open sign-up: this step also brings the sidecar's SES
    sender (#66) and the payment-method gate, a Mollie customer and mandate
-   per Account checked before the first Resource (#65, #74). Done on
+   per Account checked before the first Resource (#65, #74, #75). Done on
    the dev cluster (2026-10-19): Traefik, cert-manager with DNS-01 on
    bunny.net, health-checked DNS for both Sites, the API and madAuth on
    public HTTPS hostnames, SES. Left: Garage and Buckets, the routing table

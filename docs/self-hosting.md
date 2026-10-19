@@ -244,4 +244,9 @@ the domain's DNS is (ours: domaindiscount24).
 
 - **Mollie** for the payment method an Account needs and its payments (#65,
   #74), and **lexoffice** for the invoices.
+  In the Mollie profile, switch on the methods that create a mandate
+  (#75): cards (with Apple Pay and Google Pay), PayPal and Pay by Bank,
+  plus SEPA Direct Debit, without which Pay by Bank yields no mandate.
+  PayPal connected before January 2025 may need connecting again for
+  recurring payments.
 - The production DNS zones and public hostnames.
