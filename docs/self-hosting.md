@@ -230,7 +230,10 @@ the domain's DNS is (ours: domaindiscount24).
    read -r KEY_ID SECRET <<< "$(aws iam create-access-key --user-name openupstream-ses --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text)" && aws configure set aws_access_key_id "$KEY_ID" --profile openupstream-ses && aws configure set aws_secret_access_key "$SECRET" --profile openupstream-ses && aws configure set region eu-central-1 --profile openupstream-ses; unset KEY_ID SECRET
    ```
 
-5. **Send a test mail** with that profile, then check the headers (in
+5. `infra/dev-cluster/platform.sh` copies this profile into the cluster as
+   the Secret `madauth-ses`, which the madAuth sidecar sends with
+   (`MAIL=ses`, the default there).
+6. **Send a test mail** with that profile, then check the headers (in
    Gmail: **Show original**) for SPF, DKIM and DMARC **PASS**:
 
    ```bash
@@ -241,5 +244,3 @@ the domain's DNS is (ours: domaindiscount24).
 
 - **Stripe** for the payment method an Account needs (#65).
 - The production DNS zones and public hostnames.
-- The sidecar using the `openupstream-ses` key (until then it logs e-mails
-  on the dev cluster).
