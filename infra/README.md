@@ -11,6 +11,9 @@ which is why it lives in the monorepo.
   cert-manager, CloudNativePG, gVisor RuntimeClass, Prometheus/Loki/Grafana.
 - `garage/` — Garage cluster layout and configuration: replication factor 3,
   one zone per site.
+- `ingress/` — Traefik's values, cert-manager's DNS-01 webhook for bunny.net
+  and its issuers, and the platform's public routes (ARCHITECTURE.md,
+  "Ingress and failover"; decisions 69, 72, 73).
 - `madauth/` — madAuth, sign-in and API keys, as its published image with the
   control plane's sidecar (ARCHITECTURE.md, decision 63).
 - `dev-cluster/` — a throwaway three-Site k3s cluster on Hetzner Cloud for

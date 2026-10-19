@@ -43,6 +43,30 @@ spec:
     period: 1s
     burst: 100
 ---
+# When a Site goes dark, its pods stay in the Services' endpoints until
+# Kubernetes marks the node NotReady (20 s and more). Connecting to one of
+# them would hang for Traefik's default 30 s; give up after 1 s instead and
+# send the request to another pod. Only requests that never reached a
+# backend are retried, so a POST is never sent twice.
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: fail-fast
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  forwardingTimeouts:
+    dialTimeout: 1s
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: retry-other-pod
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  retry:
+    attempts: 3
+    initialInterval: 50ms
+---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -53,8 +77,8 @@ spec:
   routes:
     - match: Host(`PLATFORM_DOMAIN`) && (PathPrefix(`/auth/`) || PathPrefix(`/.well-known/`))
       kind: Rule
-      middlewares: [{name: madauth-rate-limit}]
-      services: [{name: madauth, port: 8787}]
+      middlewares: [{name: madauth-rate-limit}, {name: retry-other-pod}]
+      services: [{name: madauth, port: 8787, serversTransport: fail-fast}]
   tls: {secretName: platform-tls}
 ---
 apiVersion: traefik.io/v1alpha1
@@ -67,6 +91,6 @@ spec:
   routes:
     - match: Host(`api.PLATFORM_DOMAIN`)
       kind: Rule
-      middlewares: [{name: api-rate-limit}]
-      services: [{name: control-plane, port: 8080}]
+      middlewares: [{name: api-rate-limit}, {name: retry-other-pod}]
+      services: [{name: control-plane, port: 8080, serversTransport: fail-fast}]
   tls: {secretName: platform-tls}
