@@ -442,16 +442,18 @@ digest (#55).
   lexoffice issues the invoice through its API (one per Account, broken
   down per Project), with the invoice number, VAT, PDF and archiving.
 - Mollie collects the invoice total from the Account's mandate with a
-  recurring payment (card, PayPal or SEPA Direct Debit) (#74, #75). Failed payments, and
-  SEPA payments reversed up to 8 weeks later, are retried and reminded; an
-  Account that stays unpaid is suspended (the rules: Open question 18).
+  recurring payment (card, PayPal or SEPA Direct Debit) (#74, #75). Failed
+  payments, and SEPA payments reversed up to 8 weeks later, are retried and
+  reminded; an Account that stays unpaid is suspended (the rules: Open
+  question 18).
 - An Account has a Mollie customer and a mandate before it can create a
   Resource; Projects themselves are free (#65). The mandate comes from a
   first payment on Mollie's hosted checkout, paid by card (also Apple Pay
   and Google Pay), PayPal or Pay by Bank; Pay by Bank yields a SEPA Direct
   Debit mandate on the account it was paid from (#75). The checkout offers
-  what is switched on in the Mollie profile, so these methods are profile
-  settings, not code. The first payment's amount is Open question 18.
+  what is switched on in the Mollie profile, so the profile has exactly
+  these methods switched on; another method that yields a mandate is a new
+  decision, not just a profile setting. The first payment's amount is Open question 18.
 
 ## Backups
 
@@ -568,7 +570,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 72 | Traefik is our own Helm release (official chart, pinned, image by digest); k3s's bundled Traefik stays disabled | k3s's bundled Traefik with a HelmChartConfig | upgrades on our schedule, not with k3s; we control its CRDs and values. Keeps decision 6's choice of Traefik |
 | 73 | Traefik as a DaemonSet on the compute nodes with hostPorts 80/443 (pods listen on 8000/8443, non-root, no added capabilities), no load balancer; platform routes dial with a 1 s timeout and retry on another pod | `hostNetwork`; a cloud or MetalLB load balancer | the nodes' own addresses are what bunny.net checks and hands out (#34); hostPorts keep the client address and need no root; the short dial timeout keeps a dark Site's pods from stalling requests through the other Site |
 | 74 | Billing: the control plane rates usage once a month (usage events × one price per unit), lexoffice issues the invoice through its API, Mollie collects it through the Account's mandate (card, PayPal or SEPA, #75); failed payments, reminders and suspension are ours | Stripe Billing Meters, invoices and payments (#18, #65); invoice PDFs of our own; sevDesk | Mollie is an EU company the maintainer already runs for ProjectMatch, and lexoffice is the maintainer's bookkeeping, so invoices are compliant (numbering, VAT, archiving) and land there. With lexoffice issuing the invoices, Stripe would only add rating (one sum per unit at one price) and dunning (a short state machine); no US payment processor. Supersedes the Stripe parts of #18 and #65 |
-| 75 | A mandate is created by a first payment on Mollie's hosted checkout with card (incl. Apple Pay and Google Pay), PayPal or Pay by Bank (which yields a SEPA Direct Debit mandate); the Mollie profile has these and SEPA Direct Debit switched on | an IBAN form of our own with Mollie's Mandates API; also iDEAL, Bancontact and EPS; one-off methods (Klarna, bank transfer) | Mollie charges these three later without the customer, and between them they cover nearly every customer in Germany and the EU. No IBAN handling and no SEPA mandate text of our own: the customer consents at their bank or card issuer. More methods that yield a mandate (iDEAL, Bancontact, EPS) are a profile setting away |
+| 75 | A mandate is created by a first payment on Mollie's hosted checkout with card (incl. Apple Pay and Google Pay), PayPal or Pay by Bank (which yields a SEPA Direct Debit mandate); the Mollie profile has these and SEPA Direct Debit switched on | an IBAN form of our own with Mollie's Mandates API; also iDEAL, Bancontact and EPS; one-off methods (Klarna, bank transfer) | Mollie charges these three later without the customer, and between them they cover nearly every customer in Germany and the EU. No IBAN handling and no SEPA mandate text of our own: the customer consents at their bank, card issuer or PayPal. More methods that yield a mandate (iDEAL, Bancontact, EPS) are a profile setting away, recorded here first |
 
 ## Open questions
 
@@ -636,8 +638,9 @@ Decisions table once it is settled.
     bunny.net account that holds only the zones cert-manager writes to, or
     delegating `_acme-challenge` to such a zone.
 18. **Billing rules with Mollie and lexoffice.**
-    - The first payment that creates the mandate (#75): €0.01 refunded at
-      once, kept, or a real first charge.
+    - The first payment that creates the mandate (#75): €0 where Mollie
+      allows it (cards), €0.01 refunded at once or kept, or a real first
+      charge.
     - Small amounts: a month of an idle Database can cost less than the
       transaction fee or Mollie's minimum; carry it over, or a minimum
       charge.
