@@ -161,5 +161,6 @@ production servers exist; that part is written then.
 
 - **Amazon SES** for madAuth's e-mails (#66): an AWS profile allowed to send,
   its EU region and a verified sender.
-- **Stripe** for the payment method an Account needs (#65).
+- **Mollie** for the payment method an Account needs and its payments (#65,
+  #74), and **lexoffice** for the invoices.
 - The production DNS zones and public hostnames.
