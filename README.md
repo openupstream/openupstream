@@ -51,7 +51,8 @@ docs/            Architecture, decision records (adr/), runbooks
 - Traefik + cert-manager for ingress and TLS
 - CloudNativePG for customer databases, backups to Hetzner Object Storage
 - Garage for object storage
-- Usage events in Postgres, Stripe Billing Meters for rating and invoicing
+- Usage events in Postgres, rated monthly by the control plane; invoices
+  through lexoffice, payments through Mollie (card or SEPA Direct Debit)
 - madAuth for sign-in and API keys
 - Node.js 22 / TypeScript throughout the control plane
 

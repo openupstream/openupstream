@@ -9,7 +9,8 @@ Responsibilities:
 - projects and their resources: databases, buckets, sites, services, jobs
 - the routing table (`domain → prefix → target`)
 - secrets (envelope-encrypted, injected into containers as env)
-- usage events (stored here, rolled up hourly to Stripe Billing Meters)
+- usage events (stored here, rated monthly; invoices through lexoffice,
+  payments through Mollie)
 
 Not here: anything that reconciles cluster state in a loop. That is `operators/`.
 

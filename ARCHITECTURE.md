@@ -43,7 +43,7 @@ defined in [GLOSSARY.md](GLOSSARY.md).
             ▼                             ▼                          ▼
    CloudNativePG Cluster          Garage (S3), rf=3          control plane
    per Database, primary in       one zone per Site          API + operators
-   Home site, standby in the      public buckets = sites     usage events → Stripe
+   Home site, standby in the      public buckets = sites     usage → invoices, Mollie
    other compute Site, PgBouncer
    backups → Hetzner Object Storage NBG1 (a location that runs no Database)
 ```
@@ -203,8 +203,8 @@ The API accepts two kinds of madAuth credentials (#64):
 The subject is a madAuth user, which can be a Member of several Accounts.
 A signed-in user creates an Account with `POST /v1/accounts` and becomes its
 first Member (#62); invitations to existing Accounts come later. Anyone
-may sign up, but an Account needs a payment method in Stripe before it
-creates its first Resource (#65). How someone who runs openupstream
+may sign up, but an Account needs a payment method (a Mollie mandate)
+before it creates its first Resource (#65, #74). How someone who runs openupstream
 themselves changes these rules is Open question 16.
 
 The public API (Hono, zod validation, `control-plane/src/api`) serves
@@ -437,11 +437,18 @@ digest (#55).
   the customer configured or stored, not how many copies we keep.
 - Connections a Service opens to the internet are not metered or billed
   (Open question 4).
-- An hourly job rolls the events up and sends them to Stripe Billing Meters.
-  Stripe rates, invoices (one per Account, broken down per Project) and
-  collects (SEPA enabled).
-- An Account has a Stripe customer with a payment method (card or SEPA)
-  before it can create a Resource; Projects themselves are free (#65).
+- Once a month the control plane rates each Account's usage events of the
+  month before: units × the unit price, one price per unit for now (#74).
+  lexoffice issues the invoice through its API (one per Account, broken
+  down per Project), with the invoice number, VAT, PDF and archiving.
+- Mollie collects the invoice total from the Account's mandate with a
+  recurring payment (card or SEPA Direct Debit) (#74). Failed payments, and
+  SEPA payments reversed up to 8 weeks later, are retried and reminded; an
+  Account that stays unpaid is suspended (the rules: Open question 18).
+- An Account has a Mollie customer and a mandate before it can create a
+  Resource; Projects themselves are free (#65). For a card the mandate comes
+  from a first payment (€0); how a SEPA Direct Debit mandate is created for
+  German customers is Open question 18.
 
 ## Backups
 
@@ -501,7 +508,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 15 | Images from any registry with a pull secret, pinned by digest; no own registry | run a registry, build from source | least to operate; digest pinning makes restarts and failover reschedules run the same image. A registry outage during a Site failure can block restarts (Open question 5) |
 | 16 | Egress = HTTP response bytes through Traefik; Service-initiated connections not billed | per-pod byte accounting in the CNI | Traefik already exports per-router byte counters; no CNI gives per-pod internet bytes out of the box, and traffic on the Hetzner and OVH dedicated servers is unmetered |
 | 17 | Replicated resources metered in logical units, counted once | bill per copy | the customer sees what they configured or stored; unit prices cover the copies |
-| 18 | Usage events in the control plane's Database, hourly rollups to Stripe Billing Meters | OpenMeter self-hosted, OpenMeter Cloud, Lago | self-hosted OpenMeter needs Kafka and ClickHouse, too much for one operator; Stripe already rates and invoices |
+| 18 | Usage events in the control plane's Database, ~~hourly rollups to Stripe Billing Meters~~ (rating, invoices and payments: superseded by #74) | OpenMeter self-hosted, OpenMeter Cloud, Lago | self-hosted OpenMeter needs Kafka and ClickHouse, too much for one operator; ~~Stripe already rates and invoices~~ |
 | 19 | Each compute Site keeps capacity for every Service of the other | best-effort rescheduling | the product claims geo-redundancy; Database standbys already reserve their RAM |
 | 20 | Secrets: envelope encryption in the control plane's Database, rendered into Kubernetes Secrets | OpenBao/Vault | protects backups of the control plane's Database; Vault is too heavy for one operator; cluster-admin compromise is out of scope |
 | 21 | Customer logs are a live tail only, nothing retained | Loki with per-Project retention | no customer log data (often personal data) to store, secure and list in the TOMs |
@@ -548,7 +555,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 62 | A signed-in madAuth user creates an Account with `POST /v1/accounts` and becomes its first Member; a user may have several | creating it on the first API call; madAuth's `user.signed_up` webhook | explicit and repeatable, no webhook to lose (madAuth does not retry), no stray Accounts from sign-ins; the dashboard calls it on first visit |
 | 63 | madAuth runs as its published image on a Postgres Database of the platform Project, two replicas; a sidecar from the control plane's image serves it the API key scopes and receives its webhooks on 127.0.0.1 | embedding madAuth in an own Node service; the image with SQLite (one replica); in-cluster TLS; changing madAuth to allow in-cluster http | no madAuth code in openupstream to build and patch; the users are in a Database with failover and backups like any other; madAuth only calls https or localhost, and the sidecar ships with the API it describes |
 | 64 | madAuth session tokens (ES256, `typ: madauth-session+jwt`, no audience) verified against its JWKS; API keys checked with madAuth (`/auth/api-keys/verify`), cached for a minute; scopes `openupstream:read` (GET) and `openupstream:write` (everything) | per-resource scopes; one full-access scope | madAuth has no audience and no OAuth flows; its API keys are opaque; two scopes allow read-only keys now and finer scopes later without breaking existing keys |
-| 65 | Anyone may sign up; an Account needs a payment method in Stripe (card or SEPA) before it creates its first Resource | an allow-list or invitations; free limits per Account until billing exists | no hand-picking of customers, and no unpaid resources: memory is reserved from the first Database on. Self-hosted installations will need other rules (Open question 16) |
+| 65 | Anyone may sign up; an Account needs a payment method (card or SEPA; a Mollie mandate since #74, first decided as Stripe) before it creates its first Resource | an allow-list or invitations; free limits per Account until billing exists | no hand-picking of customers, and no unpaid resources: memory is reserved from the first Database on. Self-hosted installations will need other rules (Open question 16) |
 | 66 | madAuth's e-mails (sign-up, password reset) are sent through Amazon SES in an EU region, by the madAuth sidecar | an EU provider (Scaleway TEM, Brevo) | the maintainer already has it set up; the addresses stay in the EU region; AWS becomes a subprocessor. This is a US company, which decision 34 avoided for ingress: there Cloudflare would see every customer's traffic, here SES sees only a Member's address and the sign-in e-mails we send, never a Project's data; an EU provider remains a drop-in replacement in the sidecar |
 | 67 | Our own hostnames: dashboard and madAuth at `openupstream.com` (madAuth under `/auth/*` and `/.well-known/*`), the API at `api.openupstream.com` | dashboard at `app.openupstream.com`; everything on one host | madAuth must be on the same site as the dashboard; the API on its own host keeps its routes and limits apart, and the session cookie (Domain `openupstream.com`) reaches both |
 | 68 | The customer domain is `openupstream.app`: Projects' default hostnames and `<bucket>.s3.openupstream.app`, on the Public Suffix List | `openupstream.dev`; deciding later | short and clearly ours; `.app` is HTTPS-only (HSTS preloaded), like everything we serve |
@@ -557,6 +564,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 71 | A Project's default hostname is `<project>-<random>.openupstream.app`, the suffix chosen once when the Project is created and kept when it is renamed | `<project>-<account>`; `<project>.<account>` | Project names are only unique per Account; a random suffix needs no unique Account names, leaks no Account name and survives renames |
 | 72 | Traefik is our own Helm release (official chart, pinned, image by digest); k3s's bundled Traefik stays disabled | k3s's bundled Traefik with a HelmChartConfig | upgrades on our schedule, not with k3s; we control its CRDs and values. Keeps decision 6's choice of Traefik |
 | 73 | Traefik as a DaemonSet on the compute nodes with hostPorts 80/443 (pods listen on 8000/8443, non-root, no added capabilities), no load balancer; platform routes dial with a 1 s timeout and retry on another pod | `hostNetwork`; a cloud or MetalLB load balancer | the nodes' own addresses are what bunny.net checks and hands out (#34); hostPorts keep the client address and need no root; the short dial timeout keeps a dark Site's pods from stalling requests through the other Site |
+| 74 | Billing: the control plane rates usage once a month (usage events × one price per unit), lexoffice issues the invoice through its API, Mollie collects it through the Account's mandate (card or SEPA); failed payments, reminders and suspension are ours | Stripe Billing Meters, invoices and payments (#18, #65); invoice PDFs of our own; sevDesk | Mollie is an EU company the maintainer already runs for ProjectMatch, and lexoffice is the maintainer's bookkeeping, so invoices are compliant (numbering, VAT, archiving) and land there. With lexoffice issuing the invoices, Stripe would only add rating (one sum per unit at one price) and dunning (a short state machine); no US payment processor. Supersedes the Stripe parts of #18 and #65 |
 
 ## Open questions
 
@@ -623,6 +631,21 @@ Decisions table once it is settled.
     `cert-manager/bunny-api` controls all our DNS. Options: a separate
     bunny.net account that holds only the zones cert-manager writes to, or
     delegating `_acme-challenge` to such a zone.
+18. **Billing rules with Mollie and lexoffice.**
+    - A SEPA mandate: Sofort and giropay are gone, but in Germany Mollie
+      offers Pay by Bank for the first payment, besides cards (checked in
+      test mode, 2026-10-19), which yields a SEPA Direct Debit mandate.
+      Whether that suffices, or an IBAN form with Mollie's Mandates API and a
+      SEPA mandate text of our own is needed too.
+    - Small amounts: a month of an idle Database can cost less than the
+      transaction fee or Mollie's minimum; carry it over, or a minimum
+      charge.
+    - Mollie's maximum per recurring payment against an unusually large
+      month.
+    - How failed and reversed payments are retried and reminded, and after
+      how many days an Account is suspended.
+    - Which lexoffice tax types cover EU business customers (reverse charge)
+      and EU consumers (OSS).
 
 ## Build order
 
@@ -646,8 +669,8 @@ Decisions table once it is settled.
 2. Object storage and static sites: Garage, routing table, Traefik,
    cert-manager. With Traefik come the public hostnames of the API and
    madAuth, and so open sign-up: this step also brings the sidecar's SES
-   sender (#66) and the payment-method gate, a Stripe customer per Account
-   with a payment method checked before the first Resource (#65). Done on
+   sender (#66) and the payment-method gate, a Mollie customer and mandate
+   per Account checked before the first Resource (#65, #74). Done on
    the dev cluster (2026-10-19): Traefik, cert-manager with DNS-01 on
    bunny.net, health-checked DNS for both Sites, the API and madAuth on
    public HTTPS hostnames, SES. Left: Garage and Buckets, the routing table
@@ -678,5 +701,7 @@ one CloudFront distribution, SSM/Secrets Manager, KMS. The mapping:
 
 Not technical, but no customer is billed before these exist: a company (UG
 or GmbH), a data processing agreement (AVV) template, the TOMs, and the list
-of subprocessors (Hetzner, OVHcloud, netcup, bunny.net, Stripe, Amazon Web
-Services for SES).
+of subprocessors (Hetzner, OVHcloud, netcup, bunny.net, Mollie, lexoffice
+for invoices, Amazon Web Services for SES). Before the first invoice the
+billing run must also exist: the monthly rating, invoices through lexoffice
+and collection through Mollie (#74).

@@ -242,5 +242,6 @@ the domain's DNS is (ours: domaindiscount24).
 
 ## Coming with build step 2
 
-- **Stripe** for the payment method an Account needs (#65).
+- **Mollie** for the payment method an Account needs and its payments (#65,
+  #74), and **lexoffice** for the invoices.
 - The production DNS zones and public hostnames.
