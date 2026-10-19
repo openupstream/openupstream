@@ -15,9 +15,11 @@ local-path provisioner, not TopoLVM.
 
 ## Use
 
-Needs `hcloud` with a context for the dev Cloud project, `kubectl`, `jq`, Node, and the
-AWS CLI profile `openupstream-backup` with the S3 keys of the backup project
-on Hetzner Object Storage; [docs/self-hosting.md](../../docs/self-hosting.md)
+Needs `hcloud` with a context for the dev Cloud project, `kubectl`, `helm`,
+`jq`, Node, the AWS CLI profiles `openupstream-backup` (backups) and
+`openupstream-ses` (madAuth's e-mails), the bunny.net API key in
+`~/.config/openupstream/bunny-api-key` and the `dev.openupstream.com` zone
+delegated to bunny.net; [docs/self-hosting.md](../../docs/self-hosting.md)
 says how to set them up.
 
 ```bash
@@ -33,7 +35,8 @@ export KUBECONFIG=$PWD/.state/kubeconfig
 ```
 
 `up.sh` creates the VMs, a firewall (SSH and the Kubernetes API only from
-your IP, everything between the nodes) and k3s with embedded etcd and
+your IP, HTTP and HTTPS from everywhere, everything between the nodes) and
+k3s with embedded etcd and
 flannel `wireguard-native`. `operators.sh` installs cert-manager,
 CloudNativePG and the Barman Cloud Plugin at the versions in
 `operators/crds`, spreads CoreDNS and the CloudNativePG operator over the
@@ -41,43 +44,44 @@ compute Sites, and creates the backup credentials Secret in
 `openupstream-system`. Then:
 
 ```bash
+./ingress.sh
+```
+
+It installs cert-manager's DNS-01 webhook for bunny.net, the Let's Encrypt
+issuers and Traefik on both compute nodes, and points `dev.openupstream.com`
+and `api.dev.openupstream.com` at both nodes as health-checked bunny.net
+records (`dns.sh`). Then:
+
+```bash
 ./platform.sh
 ```
 
 It creates the platform Project's Databases (the control plane's and
-madAuth's), runs madAuth with its sidecar, the control plane and the
-Databases operator, with the
-GHCR images of the current commit pinned by digest (`IMAGE_TAG` to choose
-others; the commit must be pushed and its Images workflow done). The
-DatabaseConfig is `database-config.json`.
+madAuth's), runs madAuth with its sidecar, the control plane, the public
+routes with their certificate (Let's Encrypt staging: clients need `-k`)
+and the Databases operator, with the GHCR images of the current commit
+pinned by digest (`IMAGE_TAG` to choose others; the commit must be pushed
+and its Images workflow done). The DatabaseConfig is `database-config.json`.
+madAuth sends real e-mails through SES; `MAIL=log ./platform.sh` writes
+them to the sidecar's log instead.
 
-madAuth's public URL on the dev cluster is `http://localhost:8787`: forward
-it, and the API, from the platform Project's namespace:
-
-```bash
-kubectl -n project-00000000-0000-4000-8000-000000000002 port-forward svc/madauth 8787 &
-kubectl -n project-00000000-0000-4000-8000-000000000002 port-forward svc/control-plane 8080 &
-```
-
-Sign up with e-mail and password through madAuth's HTTP API (`Origin` must
-be the allowed origin), take the code from the sidecar's log, and confirm
-it; the session cookie `madauth_session` is a token for the API:
+madAuth is at `https://dev.openupstream.com/auth`, the API at
+`https://api.dev.openupstream.com`. Sign up with e-mail and password
+through madAuth's HTTP API (`Origin` must be the allowed origin), and
+confirm with the code from the e-mail; the session cookie
+`madauth_session` is a token for the API:
 
 ```bash
-curl -X POST -H 'Origin: http://localhost:8787' -H 'content-type: application/json' http://localhost:8787/auth/password/signup -d '{"email":"you@example.com","password":"a long passphrase","redirectTo":"http://localhost:8787/"}'
+curl -k -X POST -H 'Origin: https://dev.openupstream.com' -H 'content-type: application/json' https://dev.openupstream.com/auth/password/signup -d '{"email":"you@example.com","password":"a long passphrase","redirectTo":"https://dev.openupstream.com/"}'
 ```
 
 ```bash
-kubectl -n project-00000000-0000-4000-8000-000000000002 logs deploy/madauth -c sidecar
+curl -k -c jar -X POST -H 'Origin: https://dev.openupstream.com' -H 'content-type: application/json' https://dev.openupstream.com/auth/email/verify -d '{"email":"you@example.com","code":"<code>"}'
 ```
 
-```bash
-curl -c jar -X POST -H 'Origin: http://localhost:8787' -H 'content-type: application/json' http://localhost:8787/auth/email/verify -d '{"email":"you@example.com","code":"<code>"}'
-```
-
-Then `POST /v1/accounts` with that token creates your Account; API keys
-come from `POST /auth/api-keys/create` with the same cookie (scopes
-`openupstream:read` or `openupstream:write`).
+Then `POST https://api.dev.openupstream.com/v1/accounts` with that token
+creates your Account; API keys come from `POST /auth/api-keys/create` with
+the same cookie (scopes `openupstream:read` or `openupstream:write`).
 
 Without the control plane, one pass from this machine, from `operators/`:
 
@@ -97,5 +101,5 @@ When done:
 ./down.sh
 ```
 
-It deletes the VMs, the firewall, the SSH key and `.state/`. Backups the
-session wrote stay in the bucket.
+It deletes the DNS records, the VMs, the firewall, the SSH key and
+`.state/`. Backups the session wrote stay in the bucket.

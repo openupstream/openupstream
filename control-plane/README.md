@@ -75,8 +75,10 @@ madAuth-shaped session tokens for running the control plane without madAuth
 (`infra/madauth`): madAuth only calls https or localhost URLs, so this serves
 it on 127.0.0.1:8788 the API key scopes (`GET /api-key-scopes`) and receives
 its webhooks (`POST /webhooks`, Standard Webhooks signatures with
-`WEBHOOK_SECRET`). E-mails go to the log with `MAIL=log` (dev cluster) and
-are refused otherwise, until a mail provider is chosen.
+`WEBHOOK_SECRET`). E-mails (`src/madauth/mail.ts`) go through Amazon SES
+with `MAIL=ses` (`MAIL_FROM`, `SES_REGION` and the send-only key in
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`), to the log with `MAIL=log`,
+and are refused without `MAIL`.
 
 ## Cleanup
 

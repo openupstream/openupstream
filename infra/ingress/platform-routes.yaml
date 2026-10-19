@@ -1,0 +1,116 @@
+# Our own public hostnames (ARCHITECTURE.md, decision 67), in the platform
+# Project's namespace. PLATFORM_DOMAIN is `openupstream.com` in production
+# and `dev.openupstream.com` on a dev cluster; CLUSTER_ISSUER is
+# `letsencrypt` or `letsencrypt-staging`. infra/dev-cluster/platform.sh fills
+# both in.
+#
+# - PLATFORM_DOMAIN: madAuth under /auth/* and /.well-known/*, so it is on
+#   the same site as the dashboard, which will serve the rest.
+# - api.PLATFORM_DOMAIN: the public API. The internal API (port 8081) is
+#   never routed.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: platform
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  secretName: platform-tls
+  issuerRef: {kind: ClusterIssuer, name: CLUSTER_ISSUER}
+  dnsNames: [PLATFORM_DOMAIN, api.PLATFORM_DOMAIN]
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
+---
+# madAuth expects a per-IP limit in front of it; sign-in and sign-up are
+# where guessing and spamming happen.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: madauth-rate-limit
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  rateLimit:
+    average: 5
+    period: 1s
+    burst: 20
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: api-rate-limit
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  rateLimit:
+    average: 50
+    period: 1s
+    burst: 100
+---
+# When a Site goes dark, its pods stay in the Services' endpoints until
+# Kubernetes marks the node NotReady (20 s and more). Connecting to one of
+# them would hang for Traefik's default 30 s; give up after 1 s instead.
+# Traefik's retry resends any request that got no answer, also one the
+# backend may already have acted on, so only GET and HEAD are retried on
+# another pod; other methods fail fast and the client decides.
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: fail-fast
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  forwardingTimeouts:
+    dialTimeout: 1s
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: retry-other-pod
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  retry:
+    attempts: 3
+    initialInterval: 50ms
+---
+# Browsers keep to HTTPS for these hosts once they have seen it, so a later
+# http:// visit is never answered in clear text.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: hsts
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  headers:
+    stsSeconds: 31536000
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: madauth
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`PLATFORM_DOMAIN`) && (PathPrefix(`/auth/`) || PathPrefix(`/.well-known/`)) && (Method(`GET`) || Method(`HEAD`))
+      kind: Rule
+      middlewares: [{name: hsts}, {name: madauth-rate-limit}, {name: retry-other-pod}]
+      services: [{name: madauth, port: 8787, serversTransport: fail-fast}]
+    - match: Host(`PLATFORM_DOMAIN`) && (PathPrefix(`/auth/`) || PathPrefix(`/.well-known/`))
+      kind: Rule
+      middlewares: [{name: hsts}, {name: madauth-rate-limit}]
+      services: [{name: madauth, port: 8787, serversTransport: fail-fast}]
+  tls: {secretName: platform-tls}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: api
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`api.PLATFORM_DOMAIN`) && (Method(`GET`) || Method(`HEAD`))
+      kind: Rule
+      middlewares: [{name: hsts}, {name: api-rate-limit}, {name: retry-other-pod}]
+      services: [{name: control-plane, port: 8080, serversTransport: fail-fast}]
+    - match: Host(`api.PLATFORM_DOMAIN`)
+      kind: Rule
+      middlewares: [{name: hsts}, {name: api-rate-limit}]
+      services: [{name: control-plane, port: 8080, serversTransport: fail-fast}]
+  tls: {secretName: platform-tls}

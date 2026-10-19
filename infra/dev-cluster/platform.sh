@@ -5,17 +5,20 @@
 #    the control plane's and madAuth's, with one reconcile pass from this
 #    machine;
 # 2. madAuth with its sidecar, its signing key and webhook secret generated
-#    once; on the dev cluster its e-mails go to the sidecar's log (MAIL=log)
-#    and its public URL is http://localhost:8787 (a port-forward);
+#    once, its e-mails sent through Amazon SES with the AWS CLI profile
+#    openupstream-ses (MAIL=log writes them to the sidecar's log instead);
 # 3. the control plane, which migrates and seeds the platform rows, so from
 #    then on the operator owns those Databases too;
-# 4. the Databases operator, reconciling every 30 s with rows from the
+# 4. the public hostnames (after ingress.sh): madAuth at
+#    https://$PLATFORM_DOMAIN/auth, the API at https://api.$PLATFORM_DOMAIN,
+#    with a certificate from CLUSTER_ISSUER;
+# 5. the Databases operator, reconciling every 30 s with rows from the
 #    control plane.
 #
 # Images come from GHCR, pinned by digest: by default the ones built for the
 # current commit (.github/workflows/images.yml). Override with IMAGE_TAG.
 #
-# Needs: KUBECONFIG, kubectl, curl, jq, node.
+# Needs: KUBECONFIG, kubectl, curl, jq, node, aws (for MAIL=ses).
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -25,9 +28,15 @@ CONFIG=$PWD/database-config.json
 PLATFORM_NS=project-00000000-0000-4000-8000-000000000002
 PLATFORM_DB=db-00000000-0000-4000-8000-000000000003
 AUTH_DB=db-00000000-0000-4000-8000-000000000004
+# Our hostnames (ARCHITECTURE.md, decision 67): openupstream.com in
+# production, the delegated dev zone here.
+PLATFORM_DOMAIN=${PLATFORM_DOMAIN:-dev.openupstream.com}
+CLUSTER_ISSUER=${CLUSTER_ISSUER:-letsencrypt-staging}
 # madAuth's public URL: the issuer of its tokens, and the only app origin.
-# On the dev cluster: kubectl -n $PLATFORM_NS port-forward svc/madauth 8787
-MADAUTH_ISSUER=${MADAUTH_ISSUER:-http://localhost:8787}
+MADAUTH_ISSUER=https://$PLATFORM_DOMAIN
+MAIL=${MAIL:-ses}
+MAIL_FROM=${MAIL_FROM:-no-reply@openupstream.com}
+SES_PROFILE=${SES_PROFILE:-openupstream-ses}
 
 # Anonymous, like the cluster's pull: fails while a package is not public.
 digest() { # image name → image@sha256:…
@@ -66,7 +75,20 @@ kubectl -n "$PLATFORM_NS" create configmap madauth-config --dry-run=client -o ya
   --from-literal=MADAUTH_ISSUER="$MADAUTH_ISSUER" \
   --from-literal=ALLOWED_ORIGINS="$MADAUTH_ISSUER" \
   --from-literal=WEBHOOK_EVENTS=email.send_verification,email.send_password_reset,email.send_already_registered,email.send_password_reset_no_password \
-  --from-literal=MAIL=log | kubectl apply -f - >/dev/null
+  --from-literal=MAIL="$MAIL" \
+  --from-literal=MAIL_FROM="$MAIL_FROM" \
+  --from-literal=SES_REGION="${SES_REGION:-eu-central-1}" | kubectl apply -f - >/dev/null
+if [[ $MAIL == ses ]]; then
+  # The send-only key (docs/self-hosting.md, section 6), straight from the
+  # profile into the Secret. Read first: set -e does not see a failure
+  # inside $(…) in an argument.
+  SES_KEY_ID=$(aws configure get aws_access_key_id --profile "$SES_PROFILE")
+  SES_SECRET=$(aws configure get aws_secret_access_key --profile "$SES_PROFILE")
+  kubectl -n "$PLATFORM_NS" create secret generic madauth-ses --dry-run=client -o yaml \
+    --from-literal=AWS_ACCESS_KEY_ID="$SES_KEY_ID" --from-literal=AWS_SECRET_ACCESS_KEY="$SES_SECRET" |
+    kubectl apply -f - >/dev/null
+  unset SES_KEY_ID SES_SECRET
+fi
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/infra/madauth/madauth.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n "$PLATFORM_NS" rollout status deployment/madauth --timeout=5m
@@ -79,6 +101,10 @@ kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/control-plane/deploy/control-plane.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n "$PLATFORM_NS" rollout status deployment/control-plane --timeout=5m
+
+sed -e "s#PLATFORM_DOMAIN#$PLATFORM_DOMAIN#g" -e "s#CLUSTER_ISSUER#$CLUSTER_ISSUER#g" "$ROOT/infra/ingress/platform-routes.yaml" |
+  kubectl apply -f - >/dev/null
+kubectl -n "$PLATFORM_NS" wait certificate/platform --for=condition=Ready --timeout=10m
 
 kubectl apply -f "$ROOT/operators/deploy/databases-rbac.yaml" >/dev/null
 kubectl -n openupstream-system create configmap databases-operator-config --dry-run=client -o yaml \
