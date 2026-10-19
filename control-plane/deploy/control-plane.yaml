@@ -2,11 +2,12 @@
 # sdk/src/internal.ts): it runs next to its own Database, whose connection
 # Secret CloudNativePG creates in this namespace. Two replicas, one per
 # compute Site. Port 8080 is the public API, 8081 the internal API for the
-# operators (never routed by ingress).
+# operators and the billing service (never routed by ingress).
 #
 # The image is pinned by digest when applied (infra/dev-cluster/platform.sh).
 # Needs the ConfigMap control-plane-config (AUTH_ISSUER,
-# MADAUTH_URL, BACKUP_BUCKET, BACKUP_RETENTION) and the backup
+# MADAUTH_URL, BACKUP_BUCKET, BACKUP_RETENTION; optionally
+# NEW_ACCOUNT_HOLDS and BILLING_CALLERS) and the backup
 # credentials Secret backup-s3, which the Databases operator copies into
 # this namespace.
 apiVersion: v1

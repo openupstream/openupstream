@@ -18,6 +18,7 @@ import { INTERNAL_API_AUDIENCE } from '@openupstream/sdk';
 import pg from 'pg';
 import { createApi } from './api/app.js';
 import { apiKeyVerifier, keysFrom, madauthAuthenticator, sessionVerifier } from './api/auth.js';
+import { getAccountRecord, liftHold, placeHold } from './accounts/store.js';
 import { s3BackupStore } from './backups.js';
 import { type CleanupDeps, cleanupPass } from './cleanup.js';
 import { configFrom } from './config.js';
@@ -92,7 +93,11 @@ async function main(): Promise<void> {
     const internal = createInternalServer({
         authenticate: tokenReviewAuthenticator(kubeConfig, INTERNAL_API_AUDIENCE),
         allowedCallers: config.value.allowedCallers,
+        billingCallers: config.value.billingCallers,
         listDatabaseRows: () => listDatabaseRows(pool),
+        getAccount: (id) => getAccountRecord(pool, id),
+        placeHold: (accountId, reason) => placeHold(pool, accountId, reason),
+        liftHold: (accountId, reason) => liftHold(pool, accountId, reason),
         log,
     });
     internal.listen(config.value.internalPort);
@@ -100,6 +105,7 @@ async function main(): Promise<void> {
     const api = createApi({
         pool,
         kube,
+        newAccountHolds: config.value.newAccountHolds,
         authenticate: madauthAuthenticator(
             sessionVerifier({
                 issuer: auth.issuer,
@@ -115,6 +121,8 @@ async function main(): Promise<void> {
         port: config.value.port,
         internalPort: config.value.internalPort,
         allowedCallers: [...config.value.allowedCallers],
+        billingCallers: [...config.value.billingCallers],
+        newAccountHolds: config.value.newAccountHolds,
     });
 
     const stop = new AbortController();
