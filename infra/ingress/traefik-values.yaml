@@ -1,0 +1,63 @@
+# Traefik, the official chart (oci://ghcr.io/traefik/helm/traefik, 42.0.0),
+# our own release instead of the one bundled with k3s (ARCHITECTURE.md,
+# decisions 6, 72 and 73).
+#
+# One pod per compute Site: a DaemonSet on the compute nodes, taking the
+# node's ports 80 and 443 as hostPorts. The pod itself listens on 8000 and
+# 8443, so it runs as the chart's non-root user without extra capabilities.
+# Clients reach a Site through the A records of both compute nodes; bunny.net
+# drops the record of a Site whose port 80 stops answering (decision 34).
+image:
+  digest: sha256:575fa15b135078fe5e50aa847987d96dbddd7b093c172429618404df73f3fa7c
+# The image above, by digest; the chart reads its version from here.
+versionOverride: v3.7.14
+
+deployment:
+  kind: DaemonSet
+
+# A hostPort can be held by one pod per node: replace, never surge.
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 0
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+
+# No LoadBalancer: the nodes' own addresses are in DNS.
+service:
+  enabled: false
+
+ports:
+  web:
+    hostPort: 80
+    # Everything on 80 goes to HTTPS; bunny.net's health check (any non-5xx
+    # on port 80) counts the redirect as healthy.
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    hostPort: 443
+
+providers:
+  kubernetesCRD:
+    enabled: true
+    # IngressRoutes may only use Services of their own namespace: a Project's
+    # routes never reach another Project.
+    allowCrossNamespace: false
+  kubernetesIngress:
+    enabled: false
+
+log:
+  format: json
+accessLog:
+  enabled: true
+  format: json

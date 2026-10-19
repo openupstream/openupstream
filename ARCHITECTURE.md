@@ -107,6 +107,17 @@ Germany.
 
 - Traefik serves traffic in both compute Sites at the same time
   (active-active). Either one routes to Services and Buckets in either Site.
+  It is our own pinned Helm release (`infra/ingress`, #72): a DaemonSet on
+  the compute nodes that takes their ports 80 and 443 as hostPorts, as the
+  chart's non-root user; no load balancer in front (#73).
+- A Site that goes dark stays in a Service's endpoints until Kubernetes
+  marks its node NotReady. So that the other Site's Traefik does not wait
+  for it, routes give up connecting after 1 s and retry on another pod;
+  only requests that never reached a backend are retried. Measured on the
+  dev cluster (2026-10-19): without this, 2 of 4 API requests through the
+  healthy Site failed while the other went dark; with it, none of 97.
+  Only GET and HEAD are retried; Traefik would also resend a request the
+  dead pod had received, which must not happen to a POST.
 - `ingress.<customer domain>` has A and AAAA records for both compute Sites,
   TTL 60 s. Custom domains CNAME to it. An apex domain cannot be a CNAME, and
   A/AAAA records copied into the customer's zone would never drop a failed
@@ -114,7 +125,10 @@ Germany.
   DNS provider, or a `www` Domain with the apex redirecting to it.
 - bunny.net DNS health-checks both Sites over HTTP every 30 s from three
   regions and drops a failed Site's records. The checks run outside our
-  Sites and do not depend on any hosting provider's API.
+  Sites and do not depend on any hosting provider's API. They only ask port
+  80 and count any answer below 500 as healthy, Traefik's HTTPS redirect
+  included; their path cannot be configured. Measured: a powered-off Site
+  was gone from bunny.net's answers within 35–45 s.
 - What clients see when a compute Site fails: if the Site refuses
   connections, clients move to the other address within milliseconds. If it
   goes dark, Safari, iOS and Node move within about 2 s; Chrome and Firefox
@@ -166,7 +180,13 @@ Site (`infra/madauth`, #63). madAuth only calls https or localhost URLs, so
 a sidecar from the control plane's image, in the same pod, serves it the API
 key scopes and receives its webhooks (e-mails to send, events) on
 127.0.0.1. It sends madAuth's e-mails through Amazon SES in an EU region
-(#66); on the dev cluster it writes them to its log instead.
+(#66) with a key that may only send as `no-reply@openupstream.com`; with
+`MAIL=log` it writes them to its log instead. madAuth is served at
+`https://openupstream.com/auth/*` and the API at `https://api.openupstream.com`
+(`infra/ingress/platform-routes.yaml`, #67), with a per-IP rate limit in
+front of each. madAuth needs its Database for every sign-in: while that
+Database fails over, sign-in is unavailable (53 s measured on the dev
+cluster).
 
 The API accepts two kinds of madAuth credentials (#64):
 
@@ -337,7 +357,8 @@ digest (#55).
   namespaces.
 - Every Project gets a default hostname under a separate customer domain,
   `openupstream.app` (#68), that is on the Public Suffix List, so one
-  Project's site cannot set cookies for another's. Bucket hostnames
+  Project's site cannot set cookies for another's. The hostname is
+  `<project>-<random>.openupstream.app`, its suffix chosen once (#71). Bucket hostnames
   (`<bucket>.s3.openupstream.app`) live there too.
 - `openupstream.com` is only for our own services (#67): the dashboard and
   madAuth at `openupstream.com` (madAuth under `/auth/*` and
@@ -357,7 +378,9 @@ digest (#55).
 - Traefik and cert-manager do ingress and TLS; certificates for custom
   domains use HTTP-01. Wildcards (`*.s3.openupstream.app` for the Buckets)
   need DNS-01, which cert-manager solves on bunny.net through a community
-  webhook, pinned and reviewed (#69).
+  webhook, pinned and reviewed (#69). Port 80 redirects every request to
+  HTTPS today; HTTP-01 for custom domains will need its challenge path
+  exempted from that redirect.
 
 ## Project isolation
 
@@ -466,7 +489,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 3 | Postgres via CloudNativePG, one instance per Database | shared cluster with database-per-customer, dedicated VM per customer, YugabyteDB | a per-Database instance gives kernel-level isolation and per-Database backup/version/extensions; shared cluster has no per-DB resource limits; Yugabyte is far heavier to run |
 | 4 | Async streaming replication | synchronous multi-site | RPO of seconds is acceptable for the target customers; sync replication across 300 km costs every write |
 | 5 | Garage for object storage | SeaweedFS, MinIO, reselling Hetzner Object Storage | built for small geo-distributed clusters; MinIO is AGPL and drifting; Hetzner's buckets are single-site and give no replication story |
-| 6 | Traefik + cert-manager | Caddy outside the cluster | ships with k3s, routing table maps directly onto IngressRoute CRDs, one proxy instead of two |
+| 6 | Traefik + cert-manager (Traefik as our own release, not the one bundled with k3s: #72) | Caddy outside the cluster | ships with k3s, routing table maps directly onto IngressRoute CRDs, one proxy instead of two |
 | 7 | ~~OpenMeter + Stripe~~, superseded by #18 | Lago, own rating engine | — |
 | 8 | No queue product | SQS-like service | `SKIP LOCKED` on the customer's Postgres covers the volume of the target customers and gives transactional enqueue for free |
 | 9 | Static sites as a bucket feature | separate product, dropping it | avoids CORS for every SPA+API customer; it is a routing rule on top of storage that exists anyway |
@@ -529,8 +552,11 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 66 | madAuth's e-mails (sign-up, password reset) are sent through Amazon SES in an EU region, by the madAuth sidecar | an EU provider (Scaleway TEM, Brevo) | the maintainer already has it set up; the addresses stay in the EU region; AWS becomes a subprocessor. This is a US company, which decision 34 avoided for ingress: there Cloudflare would see every customer's traffic, here SES sees only a Member's address and the sign-in e-mails we send, never a Project's data; an EU provider remains a drop-in replacement in the sidecar |
 | 67 | Our own hostnames: dashboard and madAuth at `openupstream.com` (madAuth under `/auth/*` and `/.well-known/*`), the API at `api.openupstream.com` | dashboard at `app.openupstream.com`; everything on one host | madAuth must be on the same site as the dashboard; the API on its own host keeps its routes and limits apart, and the session cookie (Domain `openupstream.com`) reaches both |
 | 68 | The customer domain is `openupstream.app`: Projects' default hostnames and `<bucket>.s3.openupstream.app`, on the Public Suffix List | `openupstream.dev`; deciding later | short and clearly ours; `.app` is HTTPS-only (HSTS preloaded), like everything we serve |
-| 69 | cert-manager solves DNS-01 on bunny.net with a community webhook, pinned by digest and reviewed; HTTP-01 for custom domains | an own webhook; delegating `_acme-challenge` to acme-dns | wildcards (Buckets) need DNS-01; the webhook exists, so no code of ours; the bunny.net API key it needs is a Secret in cert-manager's namespace only |
+| 69 | cert-manager solves DNS-01 on bunny.net with a community webhook (`aardbol/cert-manager-webhook-bunny`, chart 1.4.2, image v1.4.1 by digest, reviewed 2026-10-18; it may read one Secret); HTTP-01 for custom domains | an own webhook; delegating `_acme-challenge` to acme-dns | wildcards (Buckets) need DNS-01; the webhook exists, so no code of ours; the bunny.net API key it needs is a Secret in cert-manager's namespace only |
 | 70 | DNS, certificates and e-mail are tested on the dev cluster through a dev subdomain delegated to bunny.net, Let's Encrypt staging and SES test mails | testing with a local CA and `/etc/hosts` first | the same path as production from the first session; staging keeps Let's Encrypt's rate limits out of the way |
+| 71 | A Project's default hostname is `<project>-<random>.openupstream.app`, the suffix chosen once when the Project is created and kept when it is renamed | `<project>-<account>`; `<project>.<account>` | Project names are only unique per Account; a random suffix needs no unique Account names, leaks no Account name and survives renames |
+| 72 | Traefik is our own Helm release (official chart, pinned, image by digest); k3s's bundled Traefik stays disabled | k3s's bundled Traefik with a HelmChartConfig | upgrades on our schedule, not with k3s; we control its CRDs and values. Keeps decision 6's choice of Traefik |
+| 73 | Traefik as a DaemonSet on the compute nodes with hostPorts 80/443 (pods listen on 8000/8443, non-root, no added capabilities), no load balancer; platform routes dial with a 1 s timeout and retry on another pod | `hostNetwork`; a cloud or MetalLB load balancer | the nodes' own addresses are what bunny.net checks and hands out (#34); hostPorts keep the client address and need no root; the short dial timeout keeps a dark Site's pods from stalling requests through the other Site |
 
 ## Open questions
 
@@ -591,6 +617,12 @@ Decisions table once it is settled.
     an allow-list of domains (madAuth's `user.signing_up` webhook, in the
     sidecar), or no payment method. How these rules become configurable is
     for later.
+17. **The bunny.net API key in the cluster.** cert-manager's DNS-01 webhook
+    needs it, and bunny.net has one key per account with full access (no
+    DNS-only key, checked 2026-10-18): whoever reads the Secret
+    `cert-manager/bunny-api` controls all our DNS. Options: a separate
+    bunny.net account that holds only the zones cert-manager writes to, or
+    delegating `_acme-challenge` to such a zone.
 
 ## Build order
 
@@ -615,7 +647,12 @@ Decisions table once it is settled.
    cert-manager. With Traefik come the public hostnames of the API and
    madAuth, and so open sign-up: this step also brings the sidecar's SES
    sender (#66) and the payment-method gate, a Stripe customer per Account
-   with a payment method checked before the first Resource (#65).
+   with a payment method checked before the first Resource (#65). Done on
+   the dev cluster (2026-10-19): Traefik, cert-manager with DNS-01 on
+   bunny.net, health-checked DNS for both Sites, the API and madAuth on
+   public HTTPS hostnames, SES. Left: Garage and Buckets, the routing table
+   with default hostnames (#71) and custom domains, the payment-method gate,
+   the production DNS zones.
 3. Containers, Service mode.
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
