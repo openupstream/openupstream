@@ -423,8 +423,9 @@ digest (#55).
   SEPA payments reversed up to 8 weeks later, are retried and reminded; an
   Account that stays unpaid is suspended (the rules: Open question 18).
 - An Account has a Mollie customer and a mandate before it can create a
-  Resource; Projects themselves are free (#65). The mandate comes from a
-  first payment: a €0.01 verification, or €0 for cards.
+  Resource; Projects themselves are free (#65). For a card the mandate comes
+  from a first payment (€0); how a SEPA Direct Debit mandate is created for
+  German customers is Open question 18.
 
 ## Backups
 
@@ -598,11 +599,20 @@ Decisions table once it is settled.
     an allow-list of domains (madAuth's `user.signing_up` webhook, in the
     sidecar), or no payment method. How these rules become configurable is
     for later.
-18. **Billing rules with Mollie and lexoffice.** Mollie's maximum per
-    recurring payment against an unusually large month; how failed and
-    reversed payments are retried and reminded, and after how many days an
-    Account is suspended; and which lexoffice tax types cover EU business
-    customers (reverse charge) and EU consumers (OSS).
+18. **Billing rules with Mollie and lexoffice.**
+    - A SEPA mandate: Mollie's first payment needs a bank method that issues
+      one, and the German ones (Sofort, giropay) are gone; the alternative
+      is Mollie's Mandates API with the customer's IBAN and a SEPA mandate
+      text of our own.
+    - Small amounts: a month of an idle Database can cost less than the
+      transaction fee or Mollie's minimum; carry it over, or a minimum
+      charge.
+    - Mollie's maximum per recurring payment against an unusually large
+      month.
+    - How failed and reversed payments are retried and reminded, and after
+      how many days an Account is suspended.
+    - Which lexoffice tax types cover EU business customers (reverse charge)
+      and EU consumers (OSS).
 
 ## Build order
 
