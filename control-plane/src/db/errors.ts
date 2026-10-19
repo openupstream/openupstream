@@ -4,15 +4,23 @@ import { type Result, err, ok } from '../result.js';
 
 export const UNIQUE_VIOLATION = '23505';
 
+/** Raised when a Resource is inserted for an Account with a Hold (migrations, account-holds). */
+export const ACCOUNT_HELD = 'OUHLD';
+
 /**
- * The query's result, or `onConflict` when it broke a unique constraint.
- * Any other error still rejects: it is a bug or an outage, not an answer.
+ * The query's result, or the answer listed for the error code it failed
+ * with. Any other error still rejects: it is a bug or an outage, not an
+ * answer.
  */
-export const unlessUnique = <T, E>(query: Promise<T>, onConflict: E): Promise<Result<T, E>> =>
+export const unlessCodes = <T, E>(query: Promise<T>, answers: Readonly<Record<string, E>>): Promise<Result<T, E>> =>
     query.then(
         (value) => ok(value),
         (error: unknown) =>
-            error instanceof pg.DatabaseError && error.code === UNIQUE_VIOLATION
-                ? err(onConflict)
+            error instanceof pg.DatabaseError && error.code !== undefined && Object.hasOwn(answers, error.code)
+                ? err(answers[error.code] as E)
                 : Promise.reject(error),
     );
+
+/** The query's result, or `onConflict` when it broke a unique constraint. */
+export const unlessUnique = <T, E>(query: Promise<T>, onConflict: E): Promise<Result<T, E>> =>
+    unlessCodes(query, { [UNIQUE_VIOLATION]: onConflict });

@@ -19,7 +19,7 @@ import {
     poolerName,
     projectNamespace,
 } from '@openupstream/sdk';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import type pg from 'pg';
 import { z } from 'zod';
 import { createAccount, holdsOf, listAccounts } from '../accounts/store.js';
@@ -118,6 +118,9 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         issues: issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
     });
     const body = (c: { req: { json: () => Promise<unknown> } }) => c.req.json().catch(() => undefined);
+    /** An Account with a Hold, e.g. one without a payment method yet, creates no Resources (the schema refuses them). */
+    const held = (c: Context<Env>, holds: string[]) =>
+        c.json({ error: `this Account may not create Resources now: ${holds.join(', ')}`, holds }, 402);
 
     app.get('/v1/accounts', async (c) => c.json(await listAccounts(pool, c.get('identity').subject)));
 
@@ -186,15 +189,12 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (!input.success) {
             return c.json(invalid(input.error.issues), 400);
         }
-        // An Account with a Hold, e.g. one without a payment method yet, creates no Resources.
-        const holds = await holdsOf(pool, project.accountId);
-        if (holds.length > 0) {
-            return c.json({ error: `this Account may not create Resources now: ${holds.join(', ')}`, holds }, 402);
-        }
         const { homeSite, ...rest } = input.data;
         const created = await createDatabase(pool, project.id, homeSite === undefined ? rest : { ...rest, homeSite });
         if (!created.ok) {
-            return c.json({ error: `a Database named ${created.error.name} exists` }, 409);
+            return created.error.kind === 'held'
+                ? held(c, await holdsOf(pool, project.accountId))
+                : c.json({ error: `a Database named ${created.error.name} exists` }, 409);
         }
         c.header('location', `/v1/projects/${project.id}/databases/${created.value.id}`);
         // The operator creates the Cluster within one pass.

@@ -172,7 +172,8 @@ node-pg-migrate; queries go through `pg` (node-postgres). The schema enforces
 the data model's invariants itself: a hostname is routed for at most one
 Domain, Routes only target Resources of their Domain's Project, deleting a
 Project cascades to everything in it, an Account with Projects cannot be
-deleted, and usage events are append-only. Its tests run against a real
+deleted, an Account with a Hold creates no Resource, and usage events are
+append-only. Its tests run against a real
 Postgres in Docker. The API types are in `sdk/src/model.ts`.
 
 The dashboard (`dashboard/`) is a Next.js app on the same API.

@@ -380,6 +380,15 @@ describe('Holds', () => {
         assert.equal(await placeHold(db.pool, accountId, 'unpaid'), true);
         assert.equal(await placeHold(db.pool, accountId, 'unpaid'), true, 'placing it twice is the same');
         assert.equal((await createDb('invoices')).status, 402);
+        // The schema refuses every kind of Resource, whichever route inserts it.
+        await assert.rejects(db.pool.query(`insert into buckets (project_id, name) values ($1, 'erin-assets')`, [projectId]), /has a Hold/);
+        await assert.rejects(
+            db.pool.query(
+                `insert into services (project_id, name, image, memory_mb, cpu_millicores, port) values ($1, 'web', 'nginx', 128, 100, 80)`,
+                [projectId],
+            ),
+            /has a Hold/,
+        );
         // The Database it already has stays.
         assert.equal((await gatedCall('GET', `/v1/projects/${projectId}/databases`)).status, 200);
         assert.equal(await liftHold(db.pool, accountId, 'unpaid'), true);
