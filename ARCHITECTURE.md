@@ -114,8 +114,10 @@ Germany.
   marks its node NotReady. So that the other Site's Traefik does not wait
   for it, routes give up connecting after 1 s and retry on another pod;
   only requests that never reached a backend are retried. Measured on the
-  dev cluster (2026-10-19): without this, 2 of 4 requests through the
+  dev cluster (2026-10-19): without this, 2 of 4 API requests through the
   healthy Site failed while the other went dark; with it, none of 97.
+  Only GET and HEAD are retried; Traefik would also resend a request the
+  dead pod had received, which must not happen to a POST.
 - `ingress.<customer domain>` has A and AAAA records for both compute Sites,
   TTL 60 s. Custom domains CNAME to it. An apex domain cannot be a CNAME, and
   A/AAAA records copied into the customer's zone would never drop a failed

@@ -45,9 +45,10 @@ spec:
 ---
 # When a Site goes dark, its pods stay in the Services' endpoints until
 # Kubernetes marks the node NotReady (20 s and more). Connecting to one of
-# them would hang for Traefik's default 30 s; give up after 1 s instead and
-# send the request to another pod. Only requests that never reached a
-# backend are retried, so a POST is never sent twice.
+# them would hang for Traefik's default 30 s; give up after 1 s instead.
+# Traefik's retry resends any request that got no answer, also one the
+# backend may already have acted on, so only GET and HEAD are retried on
+# another pod; other methods fail fast and the client decides.
 apiVersion: traefik.io/v1alpha1
 kind: ServersTransport
 metadata:
@@ -67,6 +68,17 @@ spec:
     attempts: 3
     initialInterval: 50ms
 ---
+# Browsers keep to HTTPS for these hosts once they have seen it, so a later
+# http:// visit is never answered in clear text.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: hsts
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  headers:
+    stsSeconds: 31536000
+---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
@@ -75,9 +87,13 @@ metadata:
 spec:
   entryPoints: [websecure]
   routes:
+    - match: Host(`PLATFORM_DOMAIN`) && (PathPrefix(`/auth/`) || PathPrefix(`/.well-known/`)) && (Method(`GET`) || Method(`HEAD`))
+      kind: Rule
+      middlewares: [{name: hsts}, {name: madauth-rate-limit}, {name: retry-other-pod}]
+      services: [{name: madauth, port: 8787, serversTransport: fail-fast}]
     - match: Host(`PLATFORM_DOMAIN`) && (PathPrefix(`/auth/`) || PathPrefix(`/.well-known/`))
       kind: Rule
-      middlewares: [{name: madauth-rate-limit}, {name: retry-other-pod}]
+      middlewares: [{name: hsts}, {name: madauth-rate-limit}]
       services: [{name: madauth, port: 8787, serversTransport: fail-fast}]
   tls: {secretName: platform-tls}
 ---
@@ -89,8 +105,12 @@ metadata:
 spec:
   entryPoints: [websecure]
   routes:
+    - match: Host(`api.PLATFORM_DOMAIN`) && (Method(`GET`) || Method(`HEAD`))
+      kind: Rule
+      middlewares: [{name: hsts}, {name: api-rate-limit}, {name: retry-other-pod}]
+      services: [{name: control-plane, port: 8080, serversTransport: fail-fast}]
     - match: Host(`api.PLATFORM_DOMAIN`)
       kind: Rule
-      middlewares: [{name: api-rate-limit}, {name: retry-other-pod}]
+      middlewares: [{name: hsts}, {name: api-rate-limit}]
       services: [{name: control-plane, port: 8080, serversTransport: fail-fast}]
   tls: {secretName: platform-tls}
