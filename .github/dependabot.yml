@@ -1,0 +1,11 @@
+# Proposes updates of the actions pinned by SHA in .github/workflows
+# (AGENTS.md, "Coding guidelines"), as PRs that are reviewed like any other.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
