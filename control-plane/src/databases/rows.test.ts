@@ -20,8 +20,8 @@ test('no Databases, no rows', async () => {
 });
 
 test('the platform rows are seeded once and listed like any Database', async () => {
-    await seedPlatform(db.pool);
-    await seedPlatform(db.pool);
+    await seedPlatform(db.pool, { billing: false });
+    await seedPlatform(db.pool, { billing: false });
     const project = { ...PLATFORM.project, createdAt: '2026-10-17T00:00:00.000Z' };
     assert.deepEqual(await listDatabaseRows(db.pool), [
         { project, database: { ...PLATFORM.database, createdAt: '2026-10-17T00:00:00.000Z' } },
@@ -31,9 +31,15 @@ test('the platform rows are seeded once and listed like any Database', async () 
 
 test('seeding never changes an existing platform row', async () => {
     await db.pool.query('update databases set memory_mb = 1024 where id = $1', [PLATFORM.database.id]);
-    await seedPlatform(db.pool);
+    await seedPlatform(db.pool, { billing: false });
     const rows = await listDatabaseRows(db.pool);
     assert.equal(rows.find((row) => row.database.id === PLATFORM.database.id)?.database.memoryMb, 1024);
+});
+
+test("with a billing service the billing service's Database is seeded too", async () => {
+    await seedPlatform(db.pool, { billing: true });
+    const billing = (await listDatabaseRows(db.pool)).find((row) => row.database.id === PLATFORM.billingDatabase.id);
+    assert.deepEqual(billing?.database, { ...PLATFORM.billingDatabase, createdAt: '2026-10-20T00:00:00.000Z' });
 });
 
 test("each Database comes with its own Project, in creation order", async () => {

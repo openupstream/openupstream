@@ -150,7 +150,9 @@ Database on the cluster, provisioned the same way as a customer's: it belongs
 to a fixed platform Account and Project (`PLATFORM` in
 `sdk/src/internal.ts`). The bootstrap creates that Database once; the
 control plane seeds the platform rows at startup, and from then on the
-operator reconciles it like any other (#56).
+operator reconciles it like any other (#56). Where a billing service runs
+(`BILLING_CALLERS` set), it also seeds the billing service's Database, which
+has no bootstrap: the operator creates it from the row (#79).
 
 It runs as two replicas, one per compute Site, in the platform Project's
 namespace, next to its Database, whose connection Secret CloudNativePG
@@ -450,7 +452,8 @@ digest (#55).
   (Open question 4).
 - Payments, invoices and dunning are a separate program, the billing
   service, kept in a private repository with its own image and its own
-  Database in the platform Project (#77). It sees Accounts and usage only
+  Database in the platform Project (#77, #79). It takes the internal API's
+  types from `@openupstream/sdk` on npm (#80). It sees Accounts and usage only
   through the control plane's internal API and stops an Account through
   Holds (#78). Everything below is the billing service's.
 - Once a month the billing service rates each Account's usage events of the
@@ -592,6 +595,8 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 76 | The first payment that creates the mandate is €0.01 for every method, refunded through Mollie's Refunds API as soon as it is paid | €0 for cards where Mollie allows it; keeping the €0.01; a first month in advance | one amount and one flow for card, PayPal and Pay by Bank; the customer is charged nothing for adding a payment method; usage-based pricing has nothing to charge in advance. Costs a transaction fee per added payment method |
 | 77 | Payments, invoices and dunning live in a private billing service: its own repository, image and Database in the platform Project. The open repository keeps Accounts, Members, usage events and Holds | billing in the open repository, switched off with a setting | someone who runs openupstream needs the hosting code, not how we take payments; the Mollie and lexoffice keys never reach the open control plane; the seam (#78) is generic, so others can plug in their own rules. Costs a second repository, CI and a private image the cluster needs a pull Secret for; customers can read how their usage is measured, not how it becomes an invoice |
 | 78 | An Account's Holds stop it from creating Resources (402, the Holds listed; they also show in the Account). New Accounts start with the Holds in `NEW_ACCOUNT_HOLDS`, none by default. The billing service reads Accounts and places and lifts Holds through the internal API, allowed only for the ServiceAccounts in `BILLING_CALLERS` | one "may create Resources" flag; asking the billing service on every create | independent reasons (no payment method, unpaid) add up without their setters knowing of each other; creating a Resource never waits for the billing service; with no Holds configured there is no gate. Existing Resources keep running; suspending them is dunning (Open question 18) |
+| 79 | The billing service's Database is a third fixed platform Database (`PLATFORM.billingDatabase`, id …0005), seeded by the control plane only when `BILLING_CALLERS` is set | the billing service creating its own Database through a new internal API route | failover and backups like the other platform Databases, no new route or permission; installations without a billing service get no Database for it |
+| 80 | `@openupstream/sdk` is published to npm by a GitHub Actions workflow on a `sdk-v<version>` tag, with npm trusted publishing (OIDC) and provenance; the billing service depends on it for the internal API's types | the billing service keeping its own copy of the types; a long-lived npm token in a repository secret | one definition of the contract between the two repositories; publishing needs no secret, and every version can be traced to its commit. The package was meant for customers anyway |
 
 ## Open questions
 

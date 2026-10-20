@@ -1,0 +1,33 @@
+name: Release sdk
+
+# Publishes @openupstream/sdk to npm when a tag `sdk-v<version>` is pushed,
+# e.g. `sdk-v0.1.0` for the version in sdk/package.json. npm trusted
+# publishing (OIDC) authenticates this workflow, so no npm token is stored
+# anywhere, and npm records the provenance (ARCHITECTURE.md, decision 80).
+
+on:
+  push:
+    tags: ['sdk-v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later; Node 22 ships npm 10.
+      - run: npm install -g npm@11.20.0
+      - run: npm ci
+      - name: The tag names the package's version
+        run: test "sdk-v$(node -p "require('./sdk/package.json').version")" = "$GITHUB_REF_NAME"
+      - run: npm run build -w sdk
+      - name: SDK_VERSION names the same version
+        run: node --input-type=module -e "import { SDK_VERSION } from './sdk/dist/index.js'; if ('sdk-v' + SDK_VERSION !== process.env.GITHUB_REF_NAME) { console.error('SDK_VERSION is ' + SDK_VERSION); process.exit(1); }"
+      - run: npm test -w sdk
+      - run: npm publish -w sdk

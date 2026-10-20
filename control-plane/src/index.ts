@@ -84,7 +84,8 @@ async function main(): Promise<void> {
     // A failover or switchover of our Database ends idle connections; without
     // a listener the pool's 'error' event would end the process.
     pool.on('error', (error) => log({ msg: 'idle database connection lost', error: error.message }));
-    await seedPlatform(pool);
+    // A billing service needs its Database (ARCHITECTURE.md, decision 79).
+    await seedPlatform(pool, { billing: config.value.billingCallers.size > 0 });
 
     const kubeConfig = new KubeConfig();
     kubeConfig.loadFromDefault();

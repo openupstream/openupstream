@@ -18,4 +18,13 @@ if (project.ok) {
 
 Every call returns `{ ok: true, value }` or `{ ok: false, error: { status, message } }`
 (status 0: the API was not reached); nothing throws. `src/internal.ts` holds
-the contract between the control plane and the operators, not for customers.
+the contract between the control plane and its internal callers (the
+operators and the billing service), not for customers.
+
+## Releasing
+
+Raise `version` in `package.json` (and `SDK_VERSION` in `src/index.ts`),
+merge, then tag that commit `sdk-v<version>` and push the tag. The workflow
+`.github/workflows/sdk-release.yml` checks that the tag names the version,
+builds, tests and publishes with npm trusted publishing: no npm token
+exists anywhere (ARCHITECTURE.md, decision 80).

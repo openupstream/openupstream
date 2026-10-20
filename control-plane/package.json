@@ -31,7 +31,7 @@
     "@hono/node-server": "^2.1.5",
     "@kubernetes/client-node": "^2.0.0",
     "@madauth/server": "0.7.0-beta.2",
-    "@openupstream/sdk": "^0.0.0",
+    "@openupstream/sdk": "^0.1.0",
     "hono": "^4.13.13",
     "jose": "^6.2.12",
     "node-pg-migrate": "^9.0.0",
