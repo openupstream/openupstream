@@ -2,13 +2,16 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import { type DatabaseRow, INTERNAL_DATABASES_PATH, PLATFORM } from '@openupstream/sdk';
+import { type AccountRecord, type DatabaseRow, INTERNAL_ACCOUNTS_PATH, INTERNAL_DATABASES_PATH, PLATFORM } from '@openupstream/sdk';
 import { err, ok } from '../result.js';
 import type { Authenticate } from './auth.js';
 import { createInternalServer } from './server.js';
 
 const operator = 'system:serviceaccount:openupstream-system:databases-operator';
+const billing = 'system:serviceaccount:project-00000000-0000-4000-8000-000000000002:billing';
 const rows: DatabaseRow[] = [{ project: PLATFORM.project, database: PLATFORM.database }];
+const accountId = '0b7c3f1e-2d4a-4c8b-9e6f-1a2b3c4d5e6f';
+const unknownId = '0b7c3f1e-2d4a-4c8b-9e6f-000000000000';
 
 /** Tokens are the username they authenticate as; `broken` makes the review fail. */
 const authenticate: Authenticate = async (token) =>
@@ -19,19 +22,33 @@ const authenticate: Authenticate = async (token) =>
           : err({ kind: 'unauthenticated', reason: 'invalid' });
 
 let listFails = false;
+/** The one Account's Holds, as the fake store keeps them. */
+const holds = new Set<string>();
 let server: Server;
 let base: string;
+
+const record = (): AccountRecord => ({
+    id: accountId,
+    name: 'Erin AG',
+    createdAt: '2026-10-20T00:00:00.000Z',
+    holds: [...holds].sort(),
+    members: [{ authSubject: 'erin', email: 'erin@example.test' }],
+});
 
 before(async () => {
     server = createInternalServer({
         authenticate,
         allowedCallers: new Set([operator]),
+        billingCallers: new Set([billing]),
         listDatabaseRows: async () => {
             if (listFails) {
                 throw new Error('database down');
             }
             return rows;
         },
+        getAccount: async (id) => (id === accountId ? record() : undefined),
+        placeHold: async (id, reason) => id === accountId && (holds.add(reason), true),
+        liftHold: async (id, reason) => id === accountId && (holds.delete(reason), true),
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -79,4 +96,37 @@ test('a failing database answers 500 without details', async () => {
     listFails = false;
     assert.equal(response.status, 500);
     assert.deepEqual(await response.json(), { error: 'internal error' });
+});
+
+test('the billing service reads an Account with its Holds and Members', async () => {
+    const response = await get(billing, `${INTERNAL_ACCOUNTS_PATH}/${accountId}`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), record());
+    assert.equal((await get(billing, `${INTERNAL_ACCOUNTS_PATH}/${unknownId}`)).status, 404);
+    assert.equal((await get(billing, `${INTERNAL_ACCOUNTS_PATH}/not-a-uuid`)).status, 404);
+});
+
+test('the billing service places and lifts Holds; both are idempotent', async () => {
+    const hold = `${INTERNAL_ACCOUNTS_PATH}/${accountId}/holds/payment-method`;
+    for (const _ of [1, 2]) {
+        const placed = await get(billing, hold, 'PUT');
+        assert.equal(placed.status, 204);
+        assert.equal(await placed.text(), '');
+    }
+    assert.deepEqual([...holds], ['payment-method']);
+    assert.equal((await get(billing, hold, 'DELETE')).status, 204);
+    assert.equal((await get(billing, hold, 'DELETE')).status, 204);
+    assert.deepEqual([...holds], []);
+    assert.equal((await get(billing, `${INTERNAL_ACCOUNTS_PATH}/${unknownId}/holds/payment-method`, 'PUT')).status, 404);
+    assert.equal((await get(billing, `${INTERNAL_ACCOUNTS_PATH}/${accountId}/holds/Not_A_Label`, 'PUT')).status, 404);
+    const post = await get(billing, hold, 'POST');
+    assert.equal(post.status, 405);
+    assert.equal(post.headers.get('allow'), 'PUT, DELETE');
+});
+
+test('each caller only gets its own routes', async () => {
+    assert.equal((await get(operator, `${INTERNAL_ACCOUNTS_PATH}/${accountId}`)).status, 403);
+    assert.equal((await get(operator, `${INTERNAL_ACCOUNTS_PATH}/${accountId}/holds/unpaid`, 'DELETE')).status, 403);
+    assert.equal((await get(billing)).status, 403);
+    assert.deepEqual([...holds], []);
 });

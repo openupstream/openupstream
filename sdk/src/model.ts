@@ -17,6 +17,11 @@ export interface Account {
     id: Id;
     name: string;
     createdAt: Timestamp;
+    /**
+     * Why the Account may not create Resources now, e.g. `payment-method`;
+     * empty when it may. Existing Resources keep running.
+     */
+    holds: string[];
 }
 
 /** A person who can sign in to an Account. Sign-in is madAuth's. */

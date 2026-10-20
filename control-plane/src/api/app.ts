@@ -19,10 +19,10 @@ import {
     poolerName,
     projectNamespace,
 } from '@openupstream/sdk';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import type pg from 'pg';
 import { z } from 'zod';
-import { createAccount, listAccounts } from '../accounts/store.js';
+import { createAccount, holdsOf, listAccounts } from '../accounts/store.js';
 import { createDatabase, deleteDatabase, getDatabase, listDatabases } from '../databases/store.js';
 import { type ControlPlaneKube, stateOf } from '../kube.js';
 import { createProject, deleteProject, getProject, listProjects } from '../projects/store.js';
@@ -32,6 +32,8 @@ export interface ApiDeps {
     readonly pool: pg.Pool;
     readonly authenticate: Authenticate;
     readonly kube: ControlPlaneKube;
+    /** The Holds every new Account starts with (ARCHITECTURE.md, decision 78). */
+    readonly newAccountHolds?: readonly string[];
     readonly log?: (entry: Record<string, unknown>) => void;
 }
 
@@ -116,6 +118,9 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         issues: issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
     });
     const body = (c: { req: { json: () => Promise<unknown> } }) => c.req.json().catch(() => undefined);
+    /** An Account with a Hold, e.g. one without a payment method yet, creates no Resources (the schema refuses them). */
+    const held = (c: Context<Env>, holds: string[]) =>
+        c.json({ error: `this Account may not create Resources now: ${holds.join(', ')}`, holds }, 402);
 
     app.get('/v1/accounts', async (c) => c.json(await listAccounts(pool, c.get('identity').subject)));
 
@@ -128,7 +133,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (email === undefined) {
             return c.json({ error: 'your madAuth user has no e-mail address' }, 400);
         }
-        const account = await createAccount(pool, subject, email, input.data.name);
+        const account = await createAccount(pool, subject, email, input.data.name, deps.newAccountHolds ?? []);
         c.header('location', `/v1/accounts/${account.id}`);
         return c.json(account, 201);
     });
@@ -187,7 +192,9 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         const { homeSite, ...rest } = input.data;
         const created = await createDatabase(pool, project.id, homeSite === undefined ? rest : { ...rest, homeSite });
         if (!created.ok) {
-            return c.json({ error: `a Database named ${created.error.name} exists` }, 409);
+            return created.error.kind === 'held'
+                ? held(c, await holdsOf(pool, project.accountId))
+                : c.json({ error: `a Database named ${created.error.name} exists` }, 409);
         }
         c.header('location', `/v1/projects/${project.id}/databases/${created.value.id}`);
         // The operator creates the Cluster within one pass.

@@ -2,6 +2,7 @@
  * The control plane's settings, from its environment (control-plane/deploy).
  * Every problem is reported at once, before anything starts.
  */
+import { DNS_LABEL } from '@openupstream/sdk';
 import { BACKUP_ENDPOINT } from './backups.js';
 import { retentionInterval } from './cleanup.js';
 import { type Result, err, ok } from './result.js';
@@ -11,6 +12,10 @@ export interface Config {
     readonly port: number;
     readonly internalPort: number;
     readonly allowedCallers: ReadonlySet<string>;
+    /** ServiceAccounts that may read Accounts and place or lift Holds: the billing service. None by default. */
+    readonly billingCallers: ReadonlySet<string>;
+    /** The Holds every new Account starts with, e.g. `payment-method`. None by default: no gate. */
+    readonly newAccountHolds: readonly string[];
     readonly auth: {
         /** madAuth's public URL, the `iss` of its session tokens. */
         readonly issuer: string;
@@ -50,6 +55,9 @@ const isJwks = (text: string): boolean => {
     return typeof parsed === 'object' && parsed !== null && 'keys' in parsed && Array.isArray(parsed.keys);
 };
 
+/** A comma-separated list, without empty entries. */
+const list = (value: string | undefined): string[] => (value ?? '').split(',').map((item) => item.trim()).filter((item) => item !== '');
+
 const port = (value: string | undefined, fallback: number): number | undefined => {
     const n = Number(value ?? fallback);
     return Number.isInteger(n) && n > 0 && n < 65536 ? n : undefined;
@@ -87,6 +95,10 @@ export function configFrom(env: Env): Result<Config, string[]> {
     if (publicPort === undefined || internalPort === undefined) {
         problems.push('PORT and INTERNAL_PORT must be port numbers');
     }
+    const newAccountHolds = list(env['NEW_ACCOUNT_HOLDS']);
+    if (!newAccountHolds.every((reason) => DNS_LABEL.test(reason))) {
+        problems.push('NEW_ACCOUNT_HOLDS must be reasons that are DNS labels, e.g. payment-method');
+    }
     const cleanupSeconds = Number(env['CLEANUP_INTERVAL_SECONDS'] ?? 30);
     if (!Number.isFinite(cleanupSeconds) || cleanupSeconds < 1) {
         problems.push('CLEANUP_INTERVAL_SECONDS must be a number of seconds, at least 1');
@@ -98,9 +110,9 @@ export function configFrom(env: Env): Result<Config, string[]> {
         databaseUrl,
         port: publicPort,
         internalPort,
-        allowedCallers: new Set(
-            (env['ALLOWED_CALLERS'] ?? DEFAULT_ALLOWED_CALLERS.join(',')).split(',').filter((name) => name !== ''),
-        ),
+        allowedCallers: new Set(list(env['ALLOWED_CALLERS'] ?? DEFAULT_ALLOWED_CALLERS.join(','))),
+        billingCallers: new Set(list(env['BILLING_CALLERS'])),
+        newAccountHolds,
         auth: { issuer, madauthUrl, ...(jwks === '' ? {} : { jwks }) },
         backup: {
             endpoint: env['BACKUP_ENDPOINT'] ?? BACKUP_ENDPOINT,

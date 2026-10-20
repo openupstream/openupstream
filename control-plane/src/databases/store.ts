@@ -7,7 +7,7 @@
  */
 import type { Database, DatabaseInput, Site } from '@openupstream/sdk';
 import type pg from 'pg';
-import { unlessUnique } from '../db/errors.js';
+import { ACCOUNT_HELD, UNIQUE_VIOLATION, unlessCodes } from '../db/errors.js';
 import { type Result, ok } from '../result.js';
 
 interface DatabaseRow {
@@ -48,7 +48,7 @@ export async function getDatabase(pool: pg.Pool, projectId: string, id: string):
     return rows.map(toDatabase)[0];
 }
 
-export type CreateDatabaseError = { readonly kind: 'name-taken'; readonly name: string };
+export type CreateDatabaseError = { readonly kind: 'name-taken'; readonly name: string } | { readonly kind: 'held' };
 
 /** `input` is validated by the API; the schema enforces the same rules again. */
 export async function createDatabase(
@@ -56,13 +56,13 @@ export async function createDatabase(
     projectId: string,
     input: DatabaseInput,
 ): Promise<Result<Database, CreateDatabaseError>> {
-    const inserted = await unlessUnique(
+    const inserted = await unlessCodes<pg.QueryResult<DatabaseRow>, CreateDatabaseError>(
         pool.query<DatabaseRow>(
             `insert into databases (project_id, name, home_site, memory_mb, storage_gb)
              values ($1, $2, coalesce($3, 'hetzner-fsn1'), $4, $5) returning ${COLUMNS}`,
             [projectId, input.name, input.homeSite ?? null, input.memoryMb, input.storageGb],
         ),
-        { kind: 'name-taken', name: input.name } as const,
+        { [UNIQUE_VIOLATION]: { kind: 'name-taken', name: input.name }, [ACCOUNT_HELD]: { kind: 'held' } },
     );
     // An insert … returning without a conflict always returns its row.
     return inserted.ok ? ok(toDatabase(inserted.value.rows[0] as DatabaseRow)) : inserted;

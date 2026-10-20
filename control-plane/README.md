@@ -5,14 +5,18 @@ own Postgres for state, talks to the Kubernetes API to provision.
 
 Responsibilities:
 
-- accounts, members, API keys (sign-in and keys via madAuth)
+- accounts, members, API keys (sign-in and keys via madAuth), and the Holds
+  that stop an Account from creating Resources
 - projects and their resources: databases, buckets, sites, services, jobs
 - the routing table (`domain → prefix → target`)
 - secrets (envelope-encrypted, injected into containers as env)
-- usage events (stored here, rated monthly; invoices through lexoffice,
-  payments through Mollie)
+- usage events (stored here; rated, invoiced and collected by the private
+  billing service)
 
-Not here: anything that reconciles cluster state in a loop. That is `operators/`.
+Not here: anything that reconciles cluster state in a loop. That is
+`operators/`. Nor payments: the billing service (ARCHITECTURE.md, decision
+77) sees Accounts through the internal API and holds them until they have a
+payment method.
 
 ## Schema
 
@@ -32,7 +36,10 @@ npm run migrate:create -w control-plane add-something
 
 `npm run build -w control-plane`, then `node control-plane/dist/index.js`
 with the environment `src/config.ts` lists (`DATABASE_URL`, the `AUTH_*`
-and `BACKUP_*` settings and the backup credentials). At startup it applies pending migrations and seeds the
+and `BACKUP_*` settings and the backup credentials; optionally
+`NEW_ACCOUNT_HOLDS`, the Holds every new Account starts with, e.g.
+`payment-method`, and `BILLING_CALLERS`, the billing service's
+ServiceAccount). At startup it applies pending migrations and seeds the
 platform's own Account, Project and Database rows (`src/platform.ts`), then
 listens on `PORT` (8080, public API) and `INTERNAL_PORT` (8081).
 
@@ -50,18 +57,19 @@ inside the cluster) for the issuer `AUTH_ISSUER`, or an API key
 (`madauth_…`), which madAuth checks for us; a key needs `openupstream:read`
 for GET and `openupstream:write` for anything else. The caller acts for
 every Account its madAuth user is a Member of. A Project of another
-Account answers 404, like one that does not exist.
+Account answers 404, like one that does not exist. An Account with a Hold
+gets 402 when it creates a Resource, with `{error, holds}`.
 
 | Route | |
 | --- | --- |
-| `GET /v1/accounts` | the caller's Accounts |
+| `GET /v1/accounts` | the caller's Accounts, each with its `holds` |
 | `POST /v1/accounts` | `{name}` → 201: a new Account, the caller its first Member |
 | `GET /v1/projects` | the Projects of the caller's Accounts |
 | `POST /v1/projects` | `{accountId, name}` → 201; 409 if the name is taken in the Account |
 | `GET /v1/projects/{id}` | |
 | `DELETE /v1/projects/{id}` | 202: the Project and its Databases are deleted, see Cleanup |
 | `GET /v1/projects/{id}/databases` | with each Database's `state` and in-cluster `connection` |
-| `POST /v1/projects/{id}/databases` | `{name, homeSite?, memoryMb, storageGb}` → 201, `state: provisioning` |
+| `POST /v1/projects/{id}/databases` | `{name, homeSite?, memoryMb, storageGb}` → 201, `state: provisioning`; 402 if the Account has a Hold |
 | `GET /v1/projects/{id}/databases/{id}` | `state` read live from the Cluster |
 | `DELETE /v1/projects/{id}/databases/{id}` | 202 |
 
@@ -95,15 +103,20 @@ into a new one (`docs/runbooks/restore-from-backup.md`).
 
 ## Internal API
 
-For the operators only, on its own port, never routed by ingress
-(`src/internal/`). Callers send their ServiceAccount token for the audience
-`openupstream-control-plane`; a TokenReview confirms it, and only the
-ServiceAccounts in `ALLOWED_CALLERS` (default: the Databases operator) get an
-answer: 401 without a valid token, 403 for anyone else, 503 when the token
-cannot be checked.
+For the operators and the billing service, on its own port, never routed
+by ingress (`src/internal/`). Callers send their ServiceAccount token for
+the audience `openupstream-control-plane`; a TokenReview confirms it, and
+only the ServiceAccounts listed for the route get an answer: 401 without a
+valid token, 403 for anyone else, 503 when the token cannot be checked.
 
 - `GET /internal/v1/databases`: every Database with its Project
-  (`DatabaseRow` in `sdk/src/internal.ts`).
+  (`DatabaseRow` in `sdk/src/internal.ts`). For `ALLOWED_CALLERS`
+  (default: the Databases operator).
+- `GET /internal/v1/accounts/{id}`: the Account with its Holds and Members
+  (`AccountRecord`). For `BILLING_CALLERS` (default: none).
+- `PUT` and `DELETE /internal/v1/accounts/{id}/holds/{reason}`: place or
+  lift a Hold; 204 whether or not it was there, 404 for an unknown Account.
+  A reason is a DNS label. For `BILLING_CALLERS`.
 
 The control plane's ServiceAccount is bound to `system:auth-delegator` to
 create TokenReviews.

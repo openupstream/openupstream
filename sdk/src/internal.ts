@@ -1,10 +1,10 @@
 /**
- * The control plane's internal API, which only the operators call
- * (ARCHITECTURE.md, "Operators"). Not part of the public API: it is served
- * on its own port, never routed by ingress, and callers authenticate with
- * their Kubernetes ServiceAccount token.
+ * The control plane's internal API, which the operators and the billing
+ * service call (ARCHITECTURE.md, "Operators" and "Billing"). Not part of the
+ * public API: it is served on its own port, never routed by ingress, and
+ * callers authenticate with their Kubernetes ServiceAccount token.
  */
-import type { Account, Database, Id, Project } from './model.js';
+import type { Account, Database, Id, Member, Project } from './model.js';
 
 /**
  * Kubernetes names, by id (ARCHITECTURE.md, decision 42): the operators
@@ -33,6 +33,18 @@ export const INTERNAL_API_AUDIENCE = 'openupstream-control-plane';
 
 /** `GET` lists every Database with its Project. */
 export const INTERNAL_DATABASES_PATH = '/internal/v1/databases';
+
+/**
+ * `GET <path>/<account id>`: the Account with its Holds and Members.
+ * `PUT` and `DELETE <path>/<account id>/holds/<reason>`: place or lift a
+ * Hold; both answer 204 whether or not the Hold was there. A reason is a
+ * DNS label.
+ */
+export const INTERNAL_ACCOUNTS_PATH = '/internal/v1/accounts';
+
+export interface AccountRecord extends Account {
+    readonly members: readonly Pick<Member, 'authSubject' | 'email'>[];
+}
 
 export interface DatabaseRow {
     readonly project: Project;
@@ -76,7 +88,7 @@ export const PLATFORM = {
         storageGb: 2,
         createdAt: '2026-10-17T00:00:00Z',
     },
-} as const satisfies { account: Account; project: Project; database: Database; authDatabase: Database };
+} as const satisfies { account: Omit<Account, 'holds'>; project: Project; database: Database; authDatabase: Database };
 
 /** The platform's Database rows, as the operator gets them. */
 export const PLATFORM_ROWS: readonly DatabaseRow[] = [

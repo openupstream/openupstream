@@ -43,9 +43,10 @@ defined in [GLOSSARY.md](GLOSSARY.md).
             ▼                             ▼                          ▼
    CloudNativePG Cluster          Garage (S3), rf=3          control plane
    per Database, primary in       one zone per Site          API + operators
-   Home site, standby in the      public buckets = sites     usage → invoices, Mollie
-   other compute Site, PgBouncer
-   backups → Hetzner Object Storage NBG1 (a location that runs no Database)
+   Home site, standby in the      public buckets = sites     usage events, Holds
+   other compute Site, PgBouncer                             ▲ internal API
+   backups → Hetzner Object Storage NBG1 (a location         billing service (private):
+   that runs no Database)                                    Mollie, lexoffice
 ```
 
 ## Sites and failure handling
@@ -156,18 +157,23 @@ namespace, next to its Database, whose connection Secret CloudNativePG
 creates there (`control-plane/deploy/`). At startup it applies pending
 migrations; node-pg-migrate's lock lets only one replica do so (#57). It
 serves two ports: the public API on 8080, and on 8081 an internal API for
-the operators that ingress never routes. The internal API accepts a request
-only with a ServiceAccount token issued for the audience
-`openupstream-control-plane`, checked with a TokenReview, from an allowed
-ServiceAccount (#53). Its one endpoint, `GET /internal/v1/databases`, lists
-every Database with its Project.
+the operators and the billing service that ingress never routes. The
+internal API accepts a request only with a ServiceAccount token issued for
+the audience `openupstream-control-plane`, checked with a TokenReview, from
+a ServiceAccount listed for that route (#53). `GET /internal/v1/databases`
+lists every Database with its Project, for the operators
+(`ALLOWED_CALLERS`). `GET /internal/v1/accounts/{id}` returns an Account
+with its Holds and Members, and `PUT` and `DELETE
+/internal/v1/accounts/{id}/holds/{reason}` place and lift a Hold, for the
+billing service (`BILLING_CALLERS`, none by default; #78).
 
 The schema is plain SQL migrations in `control-plane/migrations`, applied with
 node-pg-migrate; queries go through `pg` (node-postgres). The schema enforces
 the data model's invariants itself: a hostname is routed for at most one
 Domain, Routes only target Resources of their Domain's Project, deleting a
 Project cascades to everything in it, an Account with Projects cannot be
-deleted, and usage events are append-only. Its tests run against a real
+deleted, an Account with a Hold creates no Resource, and usage events are
+append-only. Its tests run against a real
 Postgres in Docker. The API types are in `sdk/src/model.ts`.
 
 The dashboard (`dashboard/`) is a Next.js app on the same API.
@@ -204,16 +210,21 @@ The subject is a madAuth user, which can be a Member of several Accounts.
 A signed-in user creates an Account with `POST /v1/accounts` and becomes its
 first Member (#62); invitations to existing Accounts come later. Anyone
 may sign up, but an Account needs a payment method (a Mollie mandate)
-before it creates its first Resource (#65, #74). How someone who runs openupstream
-themselves changes these rules is Open question 16.
+before it creates its first Resource (#65, #74). The control plane knows
+nothing of payments; it enforces this with Holds (#78). An Account with a
+Hold gets 402 when it creates a Resource, with the Holds listed; Projects
+stay free, and existing Resources keep running. New Accounts start with the
+Holds in `NEW_ACCOUNT_HOLDS` (`payment-method` for the hosted service), and
+the billing service lifts that Hold once the Account has a mandate. Without
+a billing service nothing is held, which is what someone who runs
+openupstream themselves gets by default (Open question 16).
 
 The public API (Hono, zod validation, `control-plane/src/api`) serves
 Projects and their Databases in the caller's Accounts; another Account's
 Project answers 404 (#61). A Database's state (`provisioning`, `ready`,
 `degraded`, `unknown`) is read live from its Cluster. Its connection details
 (the Pooler's in-cluster address, database and user `app`) are returned,
-the password never. Accounts and Members are not created through the API
-yet.
+the password never. Members are not added through the API yet.
 
 Deleting a Project or Database only marks its row; a cleanup loop in the
 control plane carries the delete out (#58): every 30 s, on one replica at a
@@ -437,17 +448,23 @@ digest (#55).
   the customer configured or stored, not how many copies we keep.
 - Connections a Service opens to the internet are not metered or billed
   (Open question 4).
-- Once a month the control plane rates each Account's usage events of the
+- Payments, invoices and dunning are a separate program, the billing
+  service, kept in a private repository with its own image and its own
+  Database in the platform Project (#77). It sees Accounts and usage only
+  through the control plane's internal API and stops an Account through
+  Holds (#78). Everything below is the billing service's.
+- Once a month the billing service rates each Account's usage events of the
   month before: units × the unit price, one price per unit for now (#74).
   lexoffice issues the invoice through its API (one per Account, broken
   down per Project), with the invoice number, VAT, PDF and archiving.
 - Mollie collects the invoice total from the Account's mandate with a
   recurring payment (card, PayPal or SEPA Direct Debit) (#74, #75). Failed
   payments, and SEPA payments reversed up to 8 weeks later, are retried and
-  reminded; an Account that stays unpaid is suspended (the rules: Open
-  question 18).
+  reminded; an Account that stays unpaid gets a Hold, and is later
+  suspended (the rules: Open question 18).
 - An Account has a Mollie customer and a mandate before it can create a
-  Resource; Projects themselves are free (#65). The mandate comes from a
+  Resource; Projects themselves are free (#65). Until then it has the Hold
+  `payment-method` (#78). The mandate comes from a
   first payment on Mollie's hosted checkout, paid by card (also Apple Pay
   and Google Pay), PayPal or Pay by Bank; Pay by Bank yields a SEPA Direct
   Debit mandate on the account it was paid from (#75). The checkout offers
@@ -549,7 +566,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 50 | PgBouncer drops connections to a dead primary: TCP keepalives (10 s idle, 3 probes 5 s apart), `tcp_user_timeout` 10 s, `server_connect_timeout` 5 s | PgBouncer's defaults | a primary in a dark Site sends no TCP reset; with the defaults PgBouncer kept its connections until `server_idle_timeout` and writes stalled 3 minutes past the promotion |
 | 51 | A restore is a new Database bootstrapped from the source's ObjectStore at a target time; never in place | restore into the existing Database | CloudNativePG bootstraps a Cluster only when it is created; the new id gives the restore its own archive folder, so the source's history stays intact |
 | 52 | Development cluster: three Hetzner Cloud VMs per working session (fsn1; hel1 standing in for Limburg; nbg1 for the third Site) from shell scripts on the hcloud CLI in `infra/dev-cluster`; local-path storage | Terraform; TopoLVM on cloud volumes | no state to keep for a cluster that lives a few hours (#33); nodes carry the real Site names, so manifests apply unchanged. TopoLVM is not tested yet |
-| 53 | The operators authenticate to the control plane's internal API with their ServiceAccount token for the audience `openupstream-control-plane`, checked by a TokenReview; only listed ServiceAccounts are answered | a shared static token in a Secret; NetworkPolicy only | no secret of our own to create or rotate; the audience check keeps every other ServiceAccount token in the cluster, which is valid for the API server, from working |
+| 53 | The operators authenticate to the control plane's internal API with their ServiceAccount token for the audience `openupstream-control-plane`, checked by a TokenReview; only listed ServiceAccounts are answered, per route since #78 | a shared static token in a Secret; NetworkPolicy only | no secret of our own to create or rotate; the audience check keeps every other ServiceAccount token in the cluster, which is valid for the API server, from working |
 | 54 | The Databases operator makes a full pass every 30 s | a long-poll that returns early when a row changes (LISTEN/NOTIFY) | level-triggered and simple: every restart and missed change heals within one interval; a new Database waits up to 30 s |
 | 55 | Images are built by GitHub Actions and published to GHCR as public packages, tagged with the commit; clusters pin them by digest | building locally and importing into k3s; private packages with a pull secret | no registry to run; the code is public anyway; pinning by digest makes every node run the same image |
 | 56 | The control plane's Database belongs to a fixed platform Account and Project; the bootstrap creates it once, the control plane seeds its rows, the operator reconciles it from then on. The control plane runs in that Project's namespace | a separate Cluster outside the operator | one way to run Postgres, also for our own state; a pod can only read a Secret of its own namespace, and CloudNativePG creates the connection Secret next to the Cluster |
@@ -561,7 +578,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 62 | A signed-in madAuth user creates an Account with `POST /v1/accounts` and becomes its first Member; a user may have several | creating it on the first API call; madAuth's `user.signed_up` webhook | explicit and repeatable, no webhook to lose (madAuth does not retry), no stray Accounts from sign-ins; the dashboard calls it on first visit |
 | 63 | madAuth runs as its published image on a Postgres Database of the platform Project, two replicas; a sidecar from the control plane's image serves it the API key scopes and receives its webhooks on 127.0.0.1 | embedding madAuth in an own Node service; the image with SQLite (one replica); in-cluster TLS; changing madAuth to allow in-cluster http | no madAuth code in openupstream to build and patch; the users are in a Database with failover and backups like any other; madAuth only calls https or localhost, and the sidecar ships with the API it describes |
 | 64 | madAuth session tokens (ES256, `typ: madauth-session+jwt`, no audience) verified against its JWKS; API keys checked with madAuth (`/auth/api-keys/verify`), cached for a minute; scopes `openupstream:read` (GET) and `openupstream:write` (everything) | per-resource scopes; one full-access scope | madAuth has no audience and no OAuth flows; its API keys are opaque; two scopes allow read-only keys now and finer scopes later without breaking existing keys |
-| 65 | Anyone may sign up; an Account needs a payment method (card or SEPA, and PayPal since #75; a Mollie mandate since #74, first decided as Stripe) before it creates its first Resource | an allow-list or invitations; free limits per Account until billing exists | no hand-picking of customers, and no unpaid resources: memory is reserved from the first Database on. Self-hosted installations will need other rules (Open question 16) |
+| 65 | Anyone may sign up; an Account needs a payment method (card or SEPA, and PayPal since #75; a Mollie mandate since #74, first decided as Stripe) before it creates its first Resource; enforced with a Hold since #78 | an allow-list or invitations; free limits per Account until billing exists | no hand-picking of customers, and no unpaid resources: memory is reserved from the first Database on. Self-hosted installations will need other rules (Open question 16) |
 | 66 | madAuth's e-mails (sign-up, password reset) are sent through Amazon SES in an EU region, by the madAuth sidecar | an EU provider (Scaleway TEM, Brevo) | the maintainer already has it set up; the addresses stay in the EU region; AWS becomes a subprocessor. This is a US company, which decision 34 avoided for ingress: there Cloudflare would see every customer's traffic, here SES sees only a Member's address and the sign-in e-mails we send, never a Project's data; an EU provider remains a drop-in replacement in the sidecar |
 | 67 | Our own hostnames: dashboard and madAuth at `openupstream.com` (madAuth under `/auth/*` and `/.well-known/*`), the API at `api.openupstream.com` | dashboard at `app.openupstream.com`; everything on one host | madAuth must be on the same site as the dashboard; the API on its own host keeps its routes and limits apart, and the session cookie (Domain `openupstream.com`) reaches both |
 | 68 | The customer domain is `openupstream.app`: Projects' default hostnames and `<bucket>.s3.openupstream.app`, on the Public Suffix List | `openupstream.dev`; deciding later | short and clearly ours; `.app` is HTTPS-only (HSTS preloaded), like everything we serve |
@@ -570,9 +587,11 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 71 | A Project's default hostname is `<project>-<random>.openupstream.app`, the suffix chosen once when the Project is created and kept when it is renamed | `<project>-<account>`; `<project>.<account>` | Project names are only unique per Account; a random suffix needs no unique Account names, leaks no Account name and survives renames |
 | 72 | Traefik is our own Helm release (official chart, pinned, image by digest); k3s's bundled Traefik stays disabled | k3s's bundled Traefik with a HelmChartConfig | upgrades on our schedule, not with k3s; we control its CRDs and values. Keeps decision 6's choice of Traefik |
 | 73 | Traefik as a DaemonSet on the compute nodes with hostPorts 80/443 (pods listen on 8000/8443, non-root, no added capabilities), no load balancer; platform routes dial with a 1 s timeout and retry on another pod | `hostNetwork`; a cloud or MetalLB load balancer | the nodes' own addresses are what bunny.net checks and hands out (#34); hostPorts keep the client address and need no root; the short dial timeout keeps a dark Site's pods from stalling requests through the other Site |
-| 74 | Billing: the control plane rates usage once a month (usage events × one price per unit), lexoffice issues the invoice through its API, Mollie collects it through the Account's mandate (card, PayPal or SEPA, #75); failed payments, reminders and suspension are ours | Stripe Billing Meters, invoices and payments (#18, #65); invoice PDFs of our own; sevDesk | Mollie is an EU company the maintainer already runs for ProjectMatch, and lexoffice is the maintainer's bookkeeping, so invoices are compliant (numbering, VAT, archiving) and land there. With lexoffice issuing the invoices, Stripe would only add rating (one sum per unit at one price) and dunning (a short state machine); no US payment processor. Supersedes the Stripe parts of #18 and #65 |
+| 74 | Billing: the billing service (the control plane until #77) rates usage once a month (usage events × one price per unit), lexoffice issues the invoice through its API, Mollie collects it through the Account's mandate (card, PayPal or SEPA, #75); failed payments, reminders and suspension are ours | Stripe Billing Meters, invoices and payments (#18, #65); invoice PDFs of our own; sevDesk | Mollie is an EU company the maintainer already runs for ProjectMatch, and lexoffice is the maintainer's bookkeeping, so invoices are compliant (numbering, VAT, archiving) and land there. With lexoffice issuing the invoices, Stripe would only add rating (one sum per unit at one price) and dunning (a short state machine); no US payment processor. Supersedes the Stripe parts of #18 and #65 |
 | 75 | A mandate is created by a first payment on Mollie's hosted checkout with card (incl. Apple Pay and Google Pay), PayPal or Pay by Bank (which yields a SEPA Direct Debit mandate); the Mollie profile has these and SEPA Direct Debit switched on | an IBAN form of our own with Mollie's Mandates API; also iDEAL, Bancontact and EPS; one-off methods (Klarna, bank transfer) | Mollie charges these three later without the customer, and between them they cover nearly every customer in Germany and the EU. No IBAN handling and no SEPA mandate text of our own: the customer consents at their bank, card issuer or PayPal. More methods that yield a mandate (iDEAL, Bancontact, EPS) are a profile setting away, recorded here first |
 | 76 | The first payment that creates the mandate is €0.01 for every method, refunded through Mollie's Refunds API as soon as it is paid | €0 for cards where Mollie allows it; keeping the €0.01; a first month in advance | one amount and one flow for card, PayPal and Pay by Bank; the customer is charged nothing for adding a payment method; usage-based pricing has nothing to charge in advance. Costs a transaction fee per added payment method |
+| 77 | Payments, invoices and dunning live in a private billing service: its own repository, image and Database in the platform Project. The open repository keeps Accounts, Members, usage events and Holds | billing in the open repository, switched off with a setting | someone who runs openupstream needs the hosting code, not how we take payments; the Mollie and lexoffice keys never reach the open control plane; the seam (#78) is generic, so others can plug in their own rules. Costs a second repository, CI and a private image the cluster needs a pull Secret for; customers can read how their usage is measured, not how it becomes an invoice |
+| 78 | An Account's Holds stop it from creating Resources (402, the Holds listed; they also show in the Account). New Accounts start with the Holds in `NEW_ACCOUNT_HOLDS`, none by default. The billing service reads Accounts and places and lifts Holds through the internal API, allowed only for the ServiceAccounts in `BILLING_CALLERS` | one "may create Resources" flag; asking the billing service on every create | independent reasons (no payment method, unpaid) add up without their setters knowing of each other; creating a Resource never waits for the billing service; with no Holds configured there is no gate. Existing Resources keep running; suspending them is dunning (Open question 18) |
 
 ## Open questions
 
@@ -629,17 +648,20 @@ Decisions table once it is settled.
     madAuth logs a setup token, which Loki would collect.
 16. **Sign-up for those who run openupstream themselves.** The hosted
     service lets anyone sign up and requires a payment method (decision 65).
-    A self-hosted installation may want something else: invitations only,
+    Without a billing service nothing is held (decision 78), so a
+    self-hosted installation needs no payment method. Invitations only or
     an allow-list of domains (madAuth's `user.signing_up` webhook, in the
-    sidecar), or no payment method. How these rules become configurable is
-    for later.
+    sidecar) are not configurable yet.
 17. **The bunny.net API key in the cluster.** cert-manager's DNS-01 webhook
     needs it, and bunny.net has one key per account with full access (no
     DNS-only key, checked 2026-10-18): whoever reads the Secret
     `cert-manager/bunny-api` controls all our DNS. Options: a separate
     bunny.net account that holds only the zones cert-manager writes to, or
     delegating `_acme-challenge` to such a zone.
-18. **Billing rules with Mollie and lexoffice.**
+18. **Billing rules with Mollie and lexoffice** (in the billing service,
+    decision 77).
+    - How the billing service reads usage events: an internal API route per
+      Account and month, like the Holds routes.
     - Small amounts: a month of an idle Database can cost less than the
       transaction fee or Mollie's minimum; carry it over, or a minimum
       charge.
@@ -676,9 +698,11 @@ Decisions table once it is settled.
    per Account checked before the first Resource (#65, #74, #75). Done on
    the dev cluster (2026-10-19): Traefik, cert-manager with DNS-01 on
    bunny.net, health-checked DNS for both Sites, the API and madAuth on
-   public HTTPS hostnames, SES. Left: Garage and Buckets, the routing table
-   with default hostnames (#71) and custom domains, the payment-method gate,
-   the production DNS zones.
+   public HTTPS hostnames, SES; Holds with their internal API routes, the
+   open half of the gate (2026-10-20, #78). Left: Garage and Buckets, the
+   routing table with default hostnames (#71) and custom domains, the
+   private billing service with the Mollie mandate (#75–77), the production
+   DNS zones.
 3. Containers, Service mode.
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
@@ -707,4 +731,4 @@ or GmbH), a data processing agreement (AVV) template, the TOMs, and the list
 of subprocessors (Hetzner, OVHcloud, netcup, bunny.net, Mollie, lexoffice
 for invoices, Amazon Web Services for SES). Before the first invoice the
 billing run must also exist: the monthly rating, invoices through lexoffice
-and collection through Mollie (#74).
+and collection through Mollie, in the billing service (#74, #77).

@@ -37,6 +37,11 @@ MADAUTH_ISSUER=https://$PLATFORM_DOMAIN
 MAIL=${MAIL:-ses}
 MAIL_FROM=${MAIL_FROM:-no-reply@openupstream.com}
 SES_PROFILE=${SES_PROFILE:-openupstream-ses}
+# Without a billing service every Account may create Resources. With one,
+# e.g. NEW_ACCOUNT_HOLDS=payment-method and BILLING_CALLERS set to its
+# ServiceAccount (ARCHITECTURE.md, decision 78).
+NEW_ACCOUNT_HOLDS=${NEW_ACCOUNT_HOLDS:-}
+BILLING_CALLERS=${BILLING_CALLERS:-}
 
 # Anonymous, like the cluster's pull: fails while a package is not public.
 digest() { # image name → image@sha256:…
@@ -97,7 +102,9 @@ kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client
   --from-literal=AUTH_ISSUER="$MADAUTH_ISSUER" \
   --from-literal=MADAUTH_URL="http://madauth.$PLATFORM_NS.svc:8787" \
   --from-literal=BACKUP_BUCKET="$(jq -r .backup.bucket "$CONFIG")" \
-  --from-literal=BACKUP_RETENTION="$(jq -r .backup.retention "$CONFIG")" | kubectl apply -f - >/dev/null
+  --from-literal=BACKUP_RETENTION="$(jq -r .backup.retention "$CONFIG")" \
+  --from-literal=NEW_ACCOUNT_HOLDS="$NEW_ACCOUNT_HOLDS" \
+  --from-literal=BILLING_CALLERS="$BILLING_CALLERS" | kubectl apply -f - >/dev/null
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/control-plane/deploy/control-plane.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n "$PLATFORM_NS" rollout status deployment/control-plane --timeout=5m

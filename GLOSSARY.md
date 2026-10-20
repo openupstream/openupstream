@@ -14,6 +14,12 @@ _Avoid_: tenant, organization, subscription, customer (in code)
 A person who can sign in to an Account and act on its Projects.
 _Avoid_: user (ambiguous with the customer's own users)
 
+**Hold**:
+A reason an Account may not create Resources now, such as a missing
+payment method. An Account without Holds may; its existing Resources keep
+running either way.
+_Avoid_: block, lock, suspension (suspending Resources is something else)
+
 **Project**:
 The unit of isolation and lifecycle inside an Account. Every Resource
 belongs to exactly one Project; deleting a Project deletes everything in it.

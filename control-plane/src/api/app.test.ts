@@ -2,6 +2,7 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { type CryptoKey, SignJWT, createLocalJWKSet, createRemoteJWKSet, exportJWK, generateKeyPair } from 'jose';
 import { API_KEY_SCOPES, type Account, type DatabaseDetails, type Project } from '@openupstream/sdk';
+import { getAccountRecord, liftHold, placeHold } from '../accounts/store.js';
 import { listDatabaseRows } from '../databases/rows.js';
 import { type ClusterStatus, type ControlPlaneKube } from '../kube.js';
 import { err, ok } from '../result.js';
@@ -321,5 +322,108 @@ describe('Databases', () => {
             /is deleted/,
         );
         assert.equal((await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'db-tests' })).status, 201);
+    });
+});
+
+describe('Holds', () => {
+    /** The API as the platform runs it with a billing service: new Accounts wait for a payment method. */
+    let gated: ReturnType<typeof createApi>;
+    let accountId: string;
+    let projectId: string;
+
+    before(() => {
+        gated = createApi({
+            pool: db.pool,
+            kube,
+            newAccountHolds: ['payment-method'],
+            authenticate: madauthAuthenticator(sessionVerifier({ issuer: ISSUER, keys: createLocalJWKSet({ keys: [] }) }), apiKeys),
+        });
+    });
+
+    const gatedCall = (method: string, path: string, body?: unknown) =>
+        gated.request(path, {
+            method,
+            headers: { authorization: 'Bearer madauth_erin_write', ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+    const createDb = (name: string) => gatedCall('POST', `/v1/projects/${projectId}/databases`, { name, memoryMb: 256, storageGb: 1 });
+
+    test('a new Account starts with the configured Holds and shows them', async () => {
+        const created = await gatedCall('POST', '/v1/accounts', { name: 'Erin AG' });
+        assert.equal(created.status, 201);
+        const account = (await created.json()) as Account;
+        accountId = account.id;
+        assert.deepEqual(account.holds, ['payment-method']);
+        const listed = (await (await gatedCall('GET', '/v1/accounts')).json()) as Account[];
+        assert.deepEqual(listed.map((a) => a.holds), [['payment-method']]);
+    });
+
+    test('Projects are free; a Resource in an Account with a Hold: 402', async () => {
+        const project = await gatedCall('POST', '/v1/projects', { accountId, name: 'shop' });
+        assert.equal(project.status, 201);
+        projectId = ((await project.json()) as Project).id;
+        const refused = await createDb('orders');
+        assert.equal(refused.status, 402);
+        assert.deepEqual(await refused.json(), {
+            error: 'this Account may not create Resources now: payment-method',
+            holds: ['payment-method'],
+        });
+        assert.equal((await db.pool.query('select 1 from databases where project_id = $1', [projectId])).rowCount, 0);
+    });
+
+    test('lifting the last Hold lets it create Resources; another Hold stops it again', async () => {
+        assert.equal(await placeHold(db.pool, accountId, 'unpaid'), true);
+        assert.equal(await liftHold(db.pool, accountId, 'payment-method'), true);
+        assert.equal((await createDb('orders')).status, 402);
+        assert.equal(await liftHold(db.pool, accountId, 'unpaid'), true);
+        assert.equal((await createDb('orders')).status, 201);
+        assert.equal(await placeHold(db.pool, accountId, 'unpaid'), true);
+        assert.equal(await placeHold(db.pool, accountId, 'unpaid'), true, 'placing it twice is the same');
+        assert.equal((await createDb('invoices')).status, 402);
+        // The schema refuses every kind of Resource, whichever route inserts it.
+        await assert.rejects(db.pool.query(`insert into buckets (project_id, name) values ($1, 'erin-assets')`, [projectId]), /has a Hold/);
+        await assert.rejects(
+            db.pool.query(
+                `insert into services (project_id, name, image, memory_mb, cpu_millicores, port) values ($1, 'web', 'nginx', 128, 100, 80)`,
+                [projectId],
+            ),
+            /has a Hold/,
+        );
+        // The Database it already has stays.
+        assert.equal((await gatedCall('GET', `/v1/projects/${projectId}/databases`)).status, 200);
+        assert.equal(await liftHold(db.pool, accountId, 'unpaid'), true);
+        assert.equal(await liftHold(db.pool, accountId, 'unpaid'), true, 'lifting a Hold that is not there is fine');
+    });
+
+    test('without configured Holds a new Account may create Resources at once', async () => {
+        const account = (await (await call('POST', '/v1/accounts', 'frank', { name: 'Frank' })).json()) as Account;
+        assert.deepEqual(account.holds, []);
+    });
+
+    test('the billing view of an Account has its Members; unknown Accounts are reported', async () => {
+        const { rows } = await db.pool.query<{ id: string; created_at: Date }>(
+            `insert into accounts (name) values ('Gina') returning id, created_at`,
+        );
+        const [{ id, created_at }] = rows as [{ id: string; created_at: Date }];
+        await db.pool.query(
+            `insert into members (account_id, auth_subject, email, created_at) values
+             ($1, 'gina', 'gina@g.test', now()), ($1, 'hal', 'hal@g.test', now() + interval '1 second')`,
+            [id],
+        );
+        await placeHold(db.pool, id, 'payment-method');
+        assert.deepEqual(await getAccountRecord(db.pool, id), {
+            id,
+            name: 'Gina',
+            createdAt: created_at.toISOString(),
+            holds: ['payment-method'],
+            members: [
+                { authSubject: 'gina', email: 'gina@g.test' },
+                { authSubject: 'hal', email: 'hal@g.test' },
+            ],
+        });
+        const unknown = '00000000-0000-4000-8000-0000000000ff';
+        assert.equal(await getAccountRecord(db.pool, unknown), undefined);
+        assert.equal(await placeHold(db.pool, unknown, 'unpaid'), false);
+        assert.equal(await liftHold(db.pool, unknown, 'unpaid'), false);
     });
 });

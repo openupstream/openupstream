@@ -21,6 +21,21 @@ test('a complete environment, with defaults for the rest', () => {
     assert.equal(config.value.backup.retention, '30 days');
     assert.deepEqual(config.value.auth, { issuer: env.AUTH_ISSUER, madauthUrl: env.MADAUTH_URL });
     assert.equal(config.value.cleanupIntervalMs, 30_000);
+    assert.deepEqual(config.value.billingCallers, new Set());
+    assert.deepEqual(config.value.newAccountHolds, []);
+});
+
+test('a billing service: its ServiceAccount and the Holds new Accounts start with', () => {
+    const config = configFrom({
+        ...env,
+        BILLING_CALLERS: 'system:serviceaccount:project-x:billing',
+        NEW_ACCOUNT_HOLDS: 'payment-method, ',
+    });
+    assert.ok(config.ok);
+    assert.deepEqual(config.value.billingCallers, new Set(['system:serviceaccount:project-x:billing']));
+    assert.deepEqual(config.value.newAccountHolds, ['payment-method']);
+    const bad = configFrom({ ...env, NEW_ACCOUNT_HOLDS: 'Payment Method' });
+    assert.deepEqual(bad.ok ? [] : bad.error, ['NEW_ACCOUNT_HOLDS must be reasons that are DNS labels, e.g. payment-method']);
 });
 
 test('every problem is reported at once', () => {
