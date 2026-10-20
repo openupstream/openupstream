@@ -705,8 +705,8 @@ Decisions table once it is settled.
    bunny.net, health-checked DNS for both Sites, the API and madAuth on
    public HTTPS hostnames, SES; Holds with their internal API routes, the
    open half of the gate (2026-10-20, #78); the private billing service
-   with the Mollie mandate, the other half (2026-10-20, #75–77,
-   `openupstream/billing#1`): a card first payment in Mollie's test mode,
+   with the Mollie mandate, the other half (2026-10-20, #75–77): a card
+   first payment in Mollie's test mode,
    its webhook, the mandate lifting the Hold `payment-method` and the
    €0.01 refunded. Left: Garage and Buckets, the routing table with
    default hostnames (#71) and custom domains, the production DNS zones.
