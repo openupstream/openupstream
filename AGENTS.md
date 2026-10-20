@@ -115,16 +115,22 @@ destroy it without asking per command.
 - **You can do it** (a CLI or API call with access already on the
   machine): say in one or two sentences what you will run and what it
   changes, then ask the maintainer for the go-ahead before running it.
-- **The maintainer does it**: creating identities, users, accounts or
-  credentials, accepting terms, anything that handles a secret. Give the
-  exact commands to paste in the same message, without being asked. Pipe a
-  secret straight into where it is kept (a CLI profile, a file with
-  `chmod 600`), so it never shows on screen or passes through the agent.
-- **A setting in a web console** (bunny.net, the domain registrar, Hetzner,
-  AWS): offer to make the change by driving the maintainer's browser (in
-  Claude Code: Claude in Chrome) and wait for the yes. What the previous
-  rule reserves for the maintainer stays with them, as click-by-click
-  steps.
+- **You can do it in the maintainer's browser** (in Claude Code: Claude in
+  Chrome, with their sign-ins): a setting in a web console (bunny.net, the
+  domain registrar, Hetzner, AWS, npm), or creating something inside an
+  account they are signed in to, such as an organization. Do not hand over
+  click-by-click steps: say in one sentence what you will do there and ask
+  for it with a button to confirm (in Claude Code: the next-step box, or
+  AskUserQuestion), then do it once they click.
+- **The maintainer does it**: creating new logins, users or accounts with
+  a provider, typing passwords, two-factor codes or payment details,
+  creating credentials and API keys, accepting terms, anything that handles
+  a secret. Give the exact commands to paste in the same message, without
+  being asked. Pipe a secret straight into where it is kept (a CLI profile,
+  a file with `chmod 600`), so it never shows on screen or passes through
+  the agent. A step that waits on them in the middle of your work (a
+  sign-in or two-factor prompt in a terminal or browser) is theirs; the
+  rest of the task stays yours.
 - Afterwards, check the result yourself with a read-only call (`dig`, a
   `get` or `list` command) and record setup that others will repeat in
   `docs/self-hosting.md`.
