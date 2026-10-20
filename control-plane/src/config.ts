@@ -5,6 +5,7 @@
 import { DNS_LABEL } from '@openupstream/sdk';
 import { BACKUP_ENDPOINT } from './backups.js';
 import { retentionInterval } from './cleanup.js';
+import type { GarageConfig } from './garage.js';
 import { type Result, err, ok } from './result.js';
 
 export interface Config {
@@ -33,6 +34,9 @@ export interface Config {
         /** A Postgres interval, e.g. `7 days`. */
         readonly retention: string;
     };
+    readonly garage: GarageConfig;
+    /** Customer hostnames live under it, e.g. Buckets at `<bucket>.s3.<customerDomain>` (decision 68). */
+    readonly customerDomain: string;
     readonly cleanupIntervalMs: number;
 }
 
@@ -90,6 +94,16 @@ export function configFrom(env: Env): Result<Config, string[]> {
     if (retention === undefined && env['BACKUP_RETENTION']) {
         problems.push('BACKUP_RETENTION must be days, e.g. 30d');
     }
+    const garageAdminUrl = required('GARAGE_ADMIN_URL');
+    const garageS3Url = required('GARAGE_S3_URL');
+    if ([garageAdminUrl, garageS3Url].some((url) => url !== '' && !URL.canParse(url))) {
+        problems.push('GARAGE_ADMIN_URL and GARAGE_S3_URL must be URLs');
+    }
+    const garageAdminToken = required('GARAGE_ADMIN_TOKEN');
+    const customerDomain = required('CUSTOMER_DOMAIN');
+    if (customerDomain !== '' && !/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/.test(customerDomain)) {
+        problems.push('CUSTOMER_DOMAIN must be a domain name, e.g. openupstream.app');
+    }
     const publicPort = port(env['PORT'], 8080);
     const internalPort = port(env['INTERNAL_PORT'], 8081);
     if (publicPort === undefined || internalPort === undefined) {
@@ -122,6 +136,8 @@ export function configFrom(env: Env): Result<Config, string[]> {
             secretAccessKey,
             retention,
         },
+        garage: { adminUrl: garageAdminUrl, adminToken: garageAdminToken, s3Url: garageS3Url },
+        customerDomain,
         cleanupIntervalMs: cleanupSeconds * 1000,
     });
 }

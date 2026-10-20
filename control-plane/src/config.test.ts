@@ -10,6 +10,10 @@ const env = {
     ACCESS_KEY_ID: 'id',
     ACCESS_SECRET_KEY: 'secret',
     BACKUP_RETENTION: '30d',
+    GARAGE_ADMIN_URL: 'http://garage.garage.svc.cluster.local:3903',
+    GARAGE_ADMIN_TOKEN: 'admin-token',
+    GARAGE_S3_URL: 'http://garage.garage.svc.cluster.local:3900',
+    CUSTOMER_DOMAIN: 'openupstream.app',
 };
 
 test('a complete environment, with defaults for the rest', () => {
@@ -23,6 +27,22 @@ test('a complete environment, with defaults for the rest', () => {
     assert.equal(config.value.cleanupIntervalMs, 30_000);
     assert.deepEqual(config.value.billingCallers, new Set());
     assert.deepEqual(config.value.newAccountHolds, []);
+});
+
+test('Garage inside the cluster, and the customer domain', () => {
+    const config = configFrom(env);
+    assert.ok(config.ok);
+    assert.deepEqual(config.value.garage, {
+        adminUrl: env.GARAGE_ADMIN_URL,
+        adminToken: 'admin-token',
+        s3Url: env.GARAGE_S3_URL,
+    });
+    assert.equal(config.value.customerDomain, 'openupstream.app');
+    const bad = configFrom({ ...env, GARAGE_S3_URL: 'not a url', CUSTOMER_DOMAIN: 'https://openupstream.app' });
+    assert.deepEqual(bad.ok ? [] : bad.error, [
+        'GARAGE_ADMIN_URL and GARAGE_S3_URL must be URLs',
+        'CUSTOMER_DOMAIN must be a domain name, e.g. openupstream.app',
+    ]);
 });
 
 test('a billing service: its ServiceAccount and the Holds new Accounts start with', () => {
@@ -49,6 +69,10 @@ test('every problem is reported at once', () => {
         'ACCESS_KEY_ID is not set',
         'ACCESS_SECRET_KEY is not set',
         'BACKUP_RETENTION must be days, e.g. 30d',
+        'GARAGE_ADMIN_URL is not set',
+        'GARAGE_S3_URL is not set',
+        'GARAGE_ADMIN_TOKEN is not set',
+        'CUSTOMER_DOMAIN is not set',
         'PORT and INTERNAL_PORT must be port numbers',
     ]);
 });

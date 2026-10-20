@@ -6,10 +6,11 @@
 #
 # The image is pinned by digest when applied (infra/dev-cluster/platform.sh).
 # Needs the ConfigMap control-plane-config (AUTH_ISSUER,
-# MADAUTH_URL, BACKUP_BUCKET, BACKUP_RETENTION; optionally
-# NEW_ACCOUNT_HOLDS and BILLING_CALLERS) and the backup
-# credentials Secret backup-s3, which the Databases operator copies into
-# this namespace.
+# MADAUTH_URL, BACKUP_BUCKET, BACKUP_RETENTION, GARAGE_ADMIN_URL,
+# GARAGE_S3_URL, CUSTOMER_DOMAIN; optionally NEW_ACCOUNT_HOLDS and
+# BILLING_CALLERS), the backup credentials Secret backup-s3, which the
+# Databases operator copies into this namespace, and the Secret
+# garage-admin with Garage's admin token (infra/dev-cluster/garage.sh).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -104,6 +105,7 @@ spec:
           envFrom:
             - configMapRef: {name: control-plane-config}
             - secretRef: {name: backup-s3}
+            - secretRef: {name: garage-admin}
           ports:
             - {name: http, containerPort: 8080}
             - {name: internal, containerPort: 8081}

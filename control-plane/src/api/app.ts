@@ -1,6 +1,6 @@
 /**
  * The public API (ARCHITECTURE.md, "Control plane"): the caller's Accounts,
- * and the Projects and Databases in them. Every route under /v1 except the
+ * and the Projects, Databases and Buckets in them. Every route under /v1 except the
  * health check needs a madAuth session token or API key (./auth.ts); an
  * API key needs `openupstream:read` for GET and `openupstream:write` for
  * anything else. Another Account's Project answers 404, like one that does
@@ -8,10 +8,13 @@
  */
 import {
     API_KEY_SCOPES,
+    BUCKET_NAME,
     COMPUTE_SITES,
     DATABASE_MIN_MEMORY_MB,
     DNS_LABEL,
     UUID,
+    type Bucket,
+    type BucketDetails,
     type Database,
     type DatabaseDetails,
     type DatabaseState,
@@ -23,15 +26,21 @@ import { type Context, Hono } from 'hono';
 import type pg from 'pg';
 import { z } from 'zod';
 import { createAccount, holdsOf, listAccounts } from '../accounts/store.js';
+import { type BucketRecord, createBucket, deleteBucket, getBucket, listBuckets } from '../buckets/store.js';
 import { createDatabase, deleteDatabase, getDatabase, listDatabases } from '../databases/store.js';
+import { GARAGE_REGION, type ObjectStorage } from '../garage.js';
 import { type ControlPlaneKube, stateOf } from '../kube.js';
 import { createProject, deleteProject, getProject, listProjects } from '../projects/store.js';
+import { type Result, ok } from '../result.js';
 import { type Authenticate, type Identity, accountsOf } from './auth.js';
 
 export interface ApiDeps {
     readonly pool: pg.Pool;
     readonly authenticate: Authenticate;
     readonly kube: ControlPlaneKube;
+    readonly storage: ObjectStorage;
+    /** Where Buckets are reached: `<bucket>.s3.<customerDomain>` (decision 68). */
+    readonly customerDomain: string;
     /** The Holds every new Account starts with (ARCHITECTURE.md, decision 78). */
     readonly newAccountHolds?: readonly string[];
     readonly log?: (entry: Record<string, unknown>) => void;
@@ -60,6 +69,10 @@ const databaseInput = z.strictObject({
     storageGb: z.int().min(1),
 });
 
+const bucketInput = z.strictObject({
+    name: z.string().regex(BUCKET_NAME, 'a hostname label of 3 to 63 lowercase letters, digits and hyphens'),
+});
+
 /** In-cluster connection through the Database's PgBouncer; CloudNativePG's application user and database. */
 const connectionOf = (database: Database) => ({
     host: `${poolerName(database)}.${projectNamespace(database.projectId)}.svc.cluster.local`,
@@ -71,7 +84,7 @@ const connectionOf = (database: Database) => ({
 type Env = { Variables: { identity: Identity; accountIds: string[] } };
 
 export function createApi(deps: ApiDeps): Hono<Env> {
-    const { pool, authenticate, kube } = deps;
+    const { pool, authenticate, kube, storage } = deps;
     const app = new Hono<Env>();
 
     /** The state from the Cluster; `unknown` when Kubernetes cannot be asked, rather than failing the request. */
@@ -215,6 +228,91 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     app.delete('/v1/projects/:projectId/databases/:databaseId', async (c) => {
         const database = await databaseOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('databaseId'));
         const deleted = database !== undefined && (await deleteDatabase(pool, database.projectId, database.id));
+        return deleted ? c.body(null, 202) : c.json(notFound, 404);
+    });
+
+    /** The Bucket without its Garage ids, which are ours. */
+    const publicBucket = ({ id, projectId, name, createdAt }: BucketRecord): Bucket => ({ id, projectId, name, createdAt });
+    /** The Bucket with its key; Garage keeps the secret, so it is asked each time. */
+    const detailsOf = async (bucket: BucketRecord): Promise<Result<BucketDetails, string>> => {
+        const secret = await storage.secretOf(bucket.accessKeyId);
+        return secret.ok
+            ? ok({
+                  ...publicBucket(bucket),
+                  access: {
+                      endpoint: `https://${bucket.name}.s3.${deps.customerDomain}`,
+                      region: GARAGE_REGION,
+                      accessKeyId: bucket.accessKeyId,
+                      secretAccessKey: secret.value,
+                  },
+              })
+            : secret;
+    };
+    const unavailable = (c: Context<Env>, reason: string) => {
+        deps.log?.({ msg: 'object storage unavailable', error: reason });
+        return c.json({ error: 'object storage is unavailable now' }, 503);
+    };
+
+    app.get('/v1/projects/:projectId/buckets', async (c) => {
+        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
+        if (project === undefined) {
+            return c.json(notFound, 404);
+        }
+        return c.json((await listBuckets(pool, project.id)).map(publicBucket));
+    });
+
+    app.post('/v1/projects/:projectId/buckets', async (c) => {
+        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
+        if (project === undefined) {
+            return c.json(notFound, 404);
+        }
+        const input = bucketInput.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        // Checked first so a held Account makes no Garage calls; the schema checks again.
+        const holds = await holdsOf(pool, project.accountId);
+        if (holds.length > 0) {
+            return held(c, holds);
+        }
+        const created = await createBucket(pool, storage, project.id, input.data.name);
+        if (!created.ok) {
+            switch (created.error.kind) {
+                case 'held':
+                    return held(c, await holdsOf(pool, project.accountId));
+                case 'name-taken':
+                    return c.json({ error: `the Bucket name ${created.error.name} is taken` }, 409);
+                case 'project-deleted':
+                    return c.json(notFound, 404);
+                case 'unavailable':
+                    return unavailable(c, created.error.reason);
+            }
+        }
+        const details = await detailsOf(created.value);
+        if (!details.ok) {
+            return unavailable(c, details.error);
+        }
+        c.header('location', `/v1/projects/${project.id}/buckets/${created.value.id}`);
+        return c.json(details.value, 201);
+    });
+
+    const bucketOf = async (accountIds: string[], projectId: string, id: string) => {
+        const project = await projectOf(accountIds, projectId);
+        return project === undefined || !UUID.test(id) ? undefined : getBucket(pool, project.id, id);
+    };
+
+    app.get('/v1/projects/:projectId/buckets/:bucketId', async (c) => {
+        const bucket = await bucketOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('bucketId'));
+        if (bucket === undefined) {
+            return c.json(notFound, 404);
+        }
+        const details = await detailsOf(bucket);
+        return details.ok ? c.json(details.value) : unavailable(c, details.error);
+    });
+
+    app.delete('/v1/projects/:projectId/buckets/:bucketId', async (c) => {
+        const bucket = await bucketOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('bucketId'));
+        const deleted = bucket !== undefined && (await deleteBucket(pool, bucket.projectId, bucket.id));
         return deleted ? c.body(null, 202) : c.json(notFound, 404);
     });
 

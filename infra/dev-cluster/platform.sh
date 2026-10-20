@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Bootstraps the platform on the dev cluster, after operators.sh:
+# Bootstraps the platform on the dev cluster, after operators.sh, ingress.sh
+# and garage.sh:
 #
 # 1. the platform Project's Databases (PLATFORM in sdk/src/internal.ts):
 #    the control plane's and madAuth's, with one reconcile pass from this
@@ -8,7 +9,8 @@
 #    once, its e-mails sent through Amazon SES with the AWS CLI profile
 #    openupstream-ses (MAIL=log writes them to the sidecar's log instead);
 # 3. the control plane, which migrates and seeds the platform rows, so from
-#    then on the operator owns those Databases too;
+#    then on the operator owns those Databases too; it manages Buckets in
+#    Garage with the admin token garage.sh left it;
 # 4. the public hostnames (after ingress.sh): madAuth at
 #    https://$PLATFORM_DOMAIN/auth, the API at https://api.$PLATFORM_DOMAIN,
 #    with a certificate from CLUSTER_ISSUER;
@@ -31,6 +33,8 @@ AUTH_DB=db-00000000-0000-4000-8000-000000000004
 # Our hostnames (ARCHITECTURE.md, decision 67): openupstream.com in
 # production, the delegated dev zone here.
 PLATFORM_DOMAIN=${PLATFORM_DOMAIN:-dev.openupstream.com}
+# The customer domain (decision 68), as garage.sh set it up.
+CUSTOMER_DOMAIN=${CUSTOMER_DOMAIN:-dev.openupstream.app}
 CLUSTER_ISSUER=${CLUSTER_ISSUER:-letsencrypt-staging}
 # madAuth's public URL: the issuer of its tokens, and the only app origin.
 MADAUTH_ISSUER=https://$PLATFORM_DOMAIN
@@ -104,7 +108,10 @@ kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client
   --from-literal=BACKUP_BUCKET="$(jq -r .backup.bucket "$CONFIG")" \
   --from-literal=BACKUP_RETENTION="$(jq -r .backup.retention "$CONFIG")" \
   --from-literal=NEW_ACCOUNT_HOLDS="$NEW_ACCOUNT_HOLDS" \
-  --from-literal=BILLING_CALLERS="$BILLING_CALLERS" | kubectl apply -f - >/dev/null
+  --from-literal=BILLING_CALLERS="$BILLING_CALLERS" \
+  --from-literal=GARAGE_ADMIN_URL=http://garage.garage.svc:3903 \
+  --from-literal=GARAGE_S3_URL=http://garage.garage.svc:3900 \
+  --from-literal=CUSTOMER_DOMAIN="$CUSTOMER_DOMAIN" | kubectl apply -f - >/dev/null
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/control-plane/deploy/control-plane.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n "$PLATFORM_NS" rollout status deployment/control-plane --timeout=5m

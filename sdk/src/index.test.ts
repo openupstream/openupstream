@@ -57,6 +57,13 @@ describe('API calls', () => {
         assert.equal(seen[1]?.url, '/v1/projects/p/databases/d');
     });
 
+    test('Buckets live under their Project', async () => {
+        assert.deepEqual(await client.deleteBucket('p', 'b'), { ok: true, value: undefined });
+        assert.deepEqual([seen.at(-1)?.method, seen.at(-1)?.url], ['DELETE', '/v1/projects/p/buckets/b']);
+        await client.createBucket('p', { name: 'shop-assets' });
+        assert.deepEqual([seen.at(-1)?.method, seen.at(-1)?.url, seen.at(-1)?.body], ['POST', '/v1/projects/p/buckets', '{"name":"shop-assets"}']);
+    });
+
     test("refusals carry the API's message; other failures the status text", async () => {
         assert.deepEqual(await client.createProject({ accountId: 'a', name: 'shop' }), {
             ok: false,

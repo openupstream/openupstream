@@ -9,8 +9,11 @@
  * 2. once the retention window has passed, deletes its backups from the
  *    bucket, then its ObjectStore, then its row. Until then it can be
  *    restored into a new Database;
- * 3. removes a deleted Project's namespace once it has no Database rows left,
- *    then its row (which cascades to its Secrets and the like).
+ * 3. deletes a deleted Bucket's key, objects and Garage bucket, then its
+ *    row (decision 82): unlike a Database, nothing of it is kept;
+ * 4. removes a deleted Project's namespace once it has no Database or
+ *    Bucket rows left, then its row (which cascades to its Secrets and the
+ *    like).
  *
  * Every step is idempotent and only recorded after it succeeded, so a failed
  * step is retried by the next pass.
@@ -18,12 +21,14 @@
 import { backupPrefix, clusterName, poolerName, projectNamespace } from '@openupstream/sdk';
 import type pg from 'pg';
 import type { BackupStore } from './backups.js';
+import type { ObjectStorage } from './garage.js';
 import type { ControlPlaneKube, ObjectRef } from './kube.js';
 
 export interface CleanupDeps {
     readonly pool: pg.Pool;
     readonly kube: ControlPlaneKube;
     readonly backups: BackupStore;
+    readonly storage: ObjectStorage;
     /** How long a deleted Database's backups are kept, as a Postgres interval, e.g. `7 days`. */
     readonly retention: string;
     readonly log: (entry: Record<string, unknown>) => void;
@@ -109,10 +114,26 @@ async function purgeExpiredDatabases(deps: CleanupDeps): Promise<void> {
     }
 }
 
+async function purgeDeletedBuckets(deps: CleanupDeps): Promise<void> {
+    const { rows } = await deps.pool.query<{ id: string; garage_bucket_id: string; access_key_id: string }>(
+        'select id, garage_bucket_id, access_key_id from buckets where deleted_at is not null order by deleted_at',
+    );
+    for (const row of rows) {
+        const deleted = await deps.storage.deleteBucket({ bucketId: row.garage_bucket_id, accessKeyId: row.access_key_id });
+        if (!deleted.ok) {
+            deps.log({ msg: 'cleanup: cannot delete Bucket from Garage', bucket: row.id, error: deleted.error });
+            continue;
+        }
+        await deps.pool.query('delete from buckets where id = $1', [row.id]);
+        deps.log({ msg: 'cleanup: Bucket purged', bucket: row.id, objects: deleted.value });
+    }
+}
+
 async function purgeEmptyProjects(deps: CleanupDeps): Promise<void> {
     const { rows } = await deps.pool.query<{ id: string }>(
         `select id from projects p where deleted_at is not null
-         and not exists (select 1 from databases d where d.project_id = p.id) order by deleted_at`,
+         and not exists (select 1 from databases d where d.project_id = p.id)
+         and not exists (select 1 from buckets b where b.project_id = p.id) order by deleted_at`,
     );
     for (const row of rows) {
         const error = await removeAll(deps.kube, [{ apiVersion: 'v1', kind: 'Namespace', name: projectNamespace(row.id) }]);
@@ -129,6 +150,7 @@ async function purgeEmptyProjects(deps: CleanupDeps): Promise<void> {
 export async function cleanupPass(deps: CleanupDeps): Promise<void> {
     await removeRunningObjects(deps);
     await purgeExpiredDatabases(deps);
+    await purgeDeletedBuckets(deps);
     await purgeEmptyProjects(deps);
 }
 

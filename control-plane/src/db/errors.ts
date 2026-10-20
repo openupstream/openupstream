@@ -4,6 +4,9 @@ import { type Result, err, ok } from '../result.js';
 
 export const UNIQUE_VIOLATION = '23505';
 
+/** Also raised by the triggers that refuse a Resource in a deleted Project (migrations). */
+export const FOREIGN_KEY_VIOLATION = '23503';
+
 /** Raised when a Resource is inserted for an Account with a Hold (migrations, account-holds). */
 export const ACCOUNT_HELD = 'OUHLD';
 

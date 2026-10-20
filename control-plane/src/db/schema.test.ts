@@ -43,7 +43,7 @@ const createProject = (accountId: string): Promise<string> =>
     insert('insert into projects (account_id, name) values ($1, $2)', [accountId, unique('p')]);
 
 const createBucket = (projectId: string): Promise<string> =>
-    insert('insert into buckets (project_id, name) values ($1, $2)', [projectId, unique('b')]);
+    insert("insert into buckets (project_id, name, garage_bucket_id, access_key_id) values ($1, $2, 'b', 'GK')", [projectId, unique('b')]);
 
 const createService = (projectId: string): Promise<string> =>
     insert(
@@ -228,8 +228,8 @@ describe('Resources', () => {
         const { projectId: a } = await newProject();
         const { projectId: b } = await newProject();
         const name = unique('assets');
-        await db.pool.query('insert into buckets (project_id, name) values ($1, $2)', [a, name]);
-        await rejectsWith(db.pool.query('insert into buckets (project_id, name) values ($1, $2)', [b, name]), UNIQUE_VIOLATION);
+        await db.pool.query("insert into buckets (project_id, name, garage_bucket_id, access_key_id) values ($1, $2, 'b', 'GK')", [a, name]);
+        await rejectsWith(db.pool.query("insert into buckets (project_id, name, garage_bucket_id, access_key_id) values ($1, $2, 'b', 'GK')", [b, name]), UNIQUE_VIOLATION);
     });
 
     test('a Database has at least the memory floor and runs in a compute Site', async () => {

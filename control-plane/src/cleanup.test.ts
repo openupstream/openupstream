@@ -5,6 +5,7 @@ import { type CleanupDeps, cleanupPass, retentionInterval } from './cleanup.js';
 import type { ControlPlaneKube, ObjectRef } from './kube.js';
 import { err, ok } from './result.js';
 import { type TestDatabase, createTestDatabase } from './testing/postgres.js';
+import { type FakeStorage, fakeStorage } from './testing/storage.js';
 
 let db: TestDatabase;
 let accountId: string;
@@ -34,9 +35,11 @@ const fakes = () => {
             return ok(3);
         },
     };
+    const storage = fakeStorage();
     return {
         removed,
         prefixes,
+        storage,
         failKinds,
         failBackupsWith: (fail: boolean) => {
             failBackups = fail;
@@ -45,6 +48,7 @@ const fakes = () => {
             pool: db.pool,
             kube,
             backups,
+            storage,
             retention: '7 days',
             log: (entry) => logs.push(entry),
         }),
@@ -168,6 +172,57 @@ test("a deleted Project's namespace goes only after its last Database row", asyn
     await cleanupPass(deps());
     assert.ok(removed.includes(`Namespace project-${projectId}`));
     assert.equal((await db.pool.query('select 1 from projects where id = $1', [projectId])).rowCount, 0);
+});
+
+/** A Bucket of the current Project, created in the fake Garage first, as the API does. */
+const createBucket = async (storage: FakeStorage, name: string) => {
+    const created = await storage.createBucket(name);
+    assert.ok(created.ok);
+    const { rows } = await db.pool.query<{ id: string }>(
+        'insert into buckets (project_id, name, garage_bucket_id, access_key_id) values ($1, $2, $3, $4) returning id',
+        [projectId, name, created.value.bucketId, created.value.accessKeyId],
+    );
+    return rows[0]?.id ?? '';
+};
+const bucketRow = async (id: string) => (await db.pool.query('select 1 from buckets where id = $1', [id])).rowCount === 1;
+
+test('a deleted Bucket is deleted from Garage at once, then its row; a failure is retried', async () => {
+    const { storage, deps } = fakes();
+    const logs: Record<string, unknown>[] = [];
+    const live = await createBucket(storage, `live-${projectId.slice(0, 8)}`);
+    const doomed = await createBucket(storage, `doomed-${projectId.slice(0, 8)}`);
+    await db.pool.query('update buckets set deleted_at = now() where id = $1', [doomed]);
+
+    storage.down = true;
+    await cleanupPass(deps(logs));
+    assert.ok(await bucketRow(doomed), 'the row stays while Garage still has the bucket');
+    assert.ok(logs.some((entry) => entry['msg'] === 'cleanup: cannot delete Bucket from Garage'));
+
+    storage.down = false;
+    await cleanupPass(deps(logs));
+    assert.equal(await bucketRow(doomed), false);
+    assert.ok(await bucketRow(live));
+    assert.deepEqual([...storage.buckets.keys()], [`live-${projectId.slice(0, 8)}`]);
+});
+
+test("a deleted Project's namespace waits for its Buckets too", async () => {
+    const { storage, removed, deps } = fakes();
+    const bucket = await createBucket(storage, `p-${projectId.slice(0, 8)}`);
+    await db.pool.query(
+        `with p as (update projects set deleted_at = now() where id = $1 returning id, deleted_at),
+         d as (update databases d set deleted_at = p.deleted_at - interval '8 days' from p where d.project_id = p.id)
+         update buckets b set deleted_at = p.deleted_at from p where b.project_id = p.id`,
+        [projectId],
+    );
+    storage.down = true;
+    await cleanupPass(deps());
+    await cleanupPass(deps());
+    assert.ok(!removed.includes(`Namespace project-${projectId}`), 'its Bucket is still in Garage');
+
+    storage.down = false;
+    await cleanupPass(deps());
+    assert.equal(await bucketRow(bucket), false);
+    assert.ok(removed.includes(`Namespace project-${projectId}`));
 });
 
 test('retention in days, as the DatabaseConfig writes it', () => {
