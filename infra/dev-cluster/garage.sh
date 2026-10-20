@@ -47,7 +47,8 @@ for pod in garage-0 garage-1 garage-2; do
 done
 kubectl -n garage wait pod -l app.kubernetes.io/name=garage --for=jsonpath='{.status.phase}'=Running --timeout=5m >/dev/null
 
-garage() { kubectl -n garage exec garage-0 -- /garage "$@"; }
+# The CLI logs its connection to stderr; its exit code still counts.
+garage() { kubectl -n garage exec garage-0 -- /garage "$@" 2>/dev/null; }
 
 # The nodes find each other through their GarageNode objects; wait for all three.
 for _ in $(seq 60); do
@@ -56,11 +57,11 @@ for _ in $(seq 60); do
 done
 
 # A node's zone is its pod's Site.
-if [[ $(garage layout show 2>/dev/null | grep -c 'Current cluster layout version: 0') -eq 1 ]]; then
+if [[ $(garage layout show | grep -c 'Current cluster layout version: 0') -eq 1 ]]; then
   for pod in garage-0 garage-1 garage-2; do
     node=$(kubectl -n garage get pod "$pod" -o jsonpath='{.spec.nodeName}')
     site=$(kubectl get node "$node" -o jsonpath='{.metadata.labels.topology\.kubernetes\.io/zone}')
-    id=$(kubectl -n garage exec "$pod" -- /garage node id -q | cut -d@ -f1)
+    id=$(kubectl -n garage exec "$pod" -- /garage node id -q 2>/dev/null | cut -d@ -f1)
     garage layout assign -z "$site" -c "$GARAGE_CAPACITY" "$id" >/dev/null
     echo "garage: $pod ($site) ${id:0:16}"
   done

@@ -56,7 +56,8 @@ Other names that are ours today and need yours:
 | --- | --- |
 | The backup bucket | `infra/dev-cluster/database-config.json` (section 4) |
 | madAuth's public URL | `MADAUTH_ISSUER` in `infra/dev-cluster/platform.sh` (on the dev cluster `http://localhost:8787`) |
-| Our hostnames (`openupstream.com`, `api.`) and the customer domain (`openupstream.app`) | decisions 67 and 68; they become settings with build step 2, which is the first to use them |
+| Our hostnames (`openupstream.com`, `api.`) | decision 67; `PLATFORM_DOMAIN` in `infra/dev-cluster/platform.sh` |
+| The customer domain (`openupstream.app`), under which Buckets are reached | decision 68; `CUSTOMER_DOMAIN` in `infra/dev-cluster/garage.sh` and `platform.sh` |
 
 ## 3. Hetzner Cloud: the development cluster
 
@@ -115,10 +116,12 @@ All of openupstream's DNS zones are on bunny.net DNS, whose health checks
 drop a failed Site from the ingress records (#32, #34). cert-manager also
 uses it for DNS-01 certificate challenges (#69).
 
-The development cluster gets its own subdomain, delegated to bunny.net, so
-each session can point records at its VMs while the parent domain stays
-where it is (#70). Ours is `dev.openupstream.com`; the parent domain is
-registered and served by domaindiscount24.
+The development cluster gets its own subdomains, delegated to bunny.net, so
+each session can point records at its VMs while the parent domains stay
+where they are (#70): one for our own hostnames, ours
+`dev.openupstream.com`, and one under the customer domain for the Buckets,
+ours `dev.openupstream.app`. Both parent domains are registered and served
+by domaindiscount24. Do steps 2 to 4 once per subdomain.
 
 1. Create an account at [bunny.net](https://bunny.net).
 2. **DNS → Add DNS Zone**: enter the subdomain itself, e.g.

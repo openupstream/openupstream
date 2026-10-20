@@ -326,13 +326,27 @@ digest (#55).
 ### Object storage
 
 - Garage with replication factor 3, one zone per Site, `consistent` mode.
-  Every object is stored once in each Site.
+  Every object is stored once in each Site; reads and writes need two of
+  three, so they keep working while any one Site is down. It runs from our
+  own manifests (`infra/garage`): a StatefulSet with one node per Site, the
+  third Site included, that find each other through Kubernetes; the layout
+  (a node's zone is its Site) is assigned once when the cluster is set up
+  (#83).
 - Keys and buckets are managed by the control plane through Garage's admin
-  API.
+  API (`control-plane/src/garage.ts`). A Bucket is a Garage bucket with the
+  Bucket's name as its global alias and a key of its own that may read and
+  write that bucket and no other; the API shows the key with the Bucket,
+  since Garage keeps the secret (#81). Creating one calls Garage while the
+  request waits, and the row is recorded only once Garage has both: a 201
+  means the Bucket is usable, a Garage outage is a 503 (#82).
+- Deleting a Bucket deletes every object in it; nothing is kept, unlike a
+  Database's backups. The cleanup deletes its key first, so the customer can
+  no longer write, then empties the bucket with the control plane's own key
+  and deletes it. The name stays taken until then (#82).
 - The S3 API is served through Traefik, virtual-hosted style only
   (`<bucket>.s3.<customer domain>`), so every request is attributable to one
   Bucket for metering. Bucket names are hostnames, so they are unique across
-  all Projects.
+  all Projects. One wildcard certificate covers them (DNS-01, #69).
 - No bucket event notifications (Garage does not implement them).
 
 ### Static sites
@@ -597,6 +611,9 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 78 | An Account's Holds stop it from creating Resources (402, the Holds listed; they also show in the Account). New Accounts start with the Holds in `NEW_ACCOUNT_HOLDS`, none by default. The billing service reads Accounts and places and lifts Holds through the internal API, allowed only for the ServiceAccounts in `BILLING_CALLERS` | one "may create Resources" flag; asking the billing service on every create | independent reasons (no payment method, unpaid) add up without their setters knowing of each other; creating a Resource never waits for the billing service; with no Holds configured there is no gate. Existing Resources keep running; suspending them is dunning (Open question 18) |
 | 79 | The billing service's Database is a third fixed platform Database (`PLATFORM.billingDatabase`, id …0005), seeded by the control plane only when `BILLING_CALLERS` is set | the billing service creating its own Database through a new internal API route | failover and backups like the other platform Databases, no new route or permission; installations without a billing service get no Database for it |
 | 80 | `@openupstream/sdk` is published to npm by a GitHub Actions workflow on a `sdk-v<version>` tag, with npm trusted publishing (OIDC) and provenance; the billing service depends on it for the internal API's types. Only admins may create `sdk-v*` tags (a tag ruleset); the job runs in the GitHub Environment `npm-release`, which needs a maintainer's approval, and npm trusts only that workflow in that environment; every action is pinned to a commit SHA | the billing service keeping its own copy of the types; a long-lived npm token in a repository secret; npm's staged publishing, approved on npmjs.com | one definition of the contract between the two repositories; publishing needs no secret, every version can be traced to its commit, and a release needs an admin's tag and an approval click on GitHub. The package was meant for customers anyway |
+| 81 | Every Bucket has a Garage key of its own, created with it, that may read and write that Bucket and no other; the API shows it with the Bucket (Garage keeps the secret) | keys per Project with permissions the customer chooses (read-only, several Buckets); one key per Project for all its Buckets | the simplest model that is still least privilege: a leaked key exposes one Bucket, and a Service can later get exactly the keys of the Buckets it uses. Keys of their own, read-only keys or one key for several Buckets are a later addition |
+| 82 | A Bucket is created in Garage while the API request waits, and its row recorded only after that; deleting marks the row and the cleanup removes key, objects and bucket, keeping nothing. Buckets are reached at `https://<bucket>.s3.<customer domain>` through Traefik with one wildcard certificate | a row first and a reconcile loop, as for Databases; a retention window for deleted Buckets; the S3 endpoint only inside the cluster | a 201 means the Bucket can be used at once, with no state to poll and no second loop; Garage being down is a 503 the client can retry. Deleting is what the customer asked for, and keeping objects would mean billing for storage they deleted. A process that dies between Garage and the insert leaves an empty Garage bucket whose name stays taken |
+| 83 | Garage runs from our own manifests: a StatefulSet with one node per Site, Kubernetes discovery with its CustomResourceDefinition installed by us, the layout assigned once by the setup script | Garage's Helm chart (not published to a chart repository, only in Garage's git repository); letting Garage create its CustomResourceDefinition; connecting nodes by hand | a hundred lines of YAML we can read in one go, like the rest of `infra/`; Garage only needs rights on its own GarageNode objects, not to create any CustomResourceDefinition; nodes find each other again after restarts without a script |
 
 ## Open questions
 
@@ -707,9 +724,12 @@ Decisions table once it is settled.
    open half of the gate (2026-10-20, #78); the private billing service
    with the Mollie mandate, the other half (2026-10-20, #75–77): a card
    first payment in Mollie's test mode, its webhook, the mandate lifting
-   the Hold `payment-method` and the €0.01 refunded. Left: Garage and
-   Buckets, the routing table with default hostnames (#71) and custom
-   domains, the production DNS zones.
+   the Hold `payment-method` and the €0.01 refunded. Garage and Buckets
+   (2026-10-20, #81–83): Garage on all three Sites, Buckets created and
+   deleted through the API with a key of their own, reached at
+   `https://<bucket>.s3.dev.openupstream.app`. Left: static sites, the
+   routing table with default hostnames (#71) and custom domains, the
+   production DNS zones.
 3. Containers, Service mode.
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`

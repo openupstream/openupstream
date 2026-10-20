@@ -1,7 +1,8 @@
 # control-plane
 
 The API behind the dashboard, the CLI and the SDK. Single Node.js process,
-own Postgres for state, talks to the Kubernetes API to provision.
+own Postgres for state, talks to the Kubernetes API to provision and to
+Garage's admin API for Buckets.
 
 Responsibilities:
 
@@ -36,7 +37,10 @@ npm run migrate:create -w control-plane add-something
 
 `npm run build -w control-plane`, then `node control-plane/dist/index.js`
 with the environment `src/config.ts` lists (`DATABASE_URL`, the `AUTH_*`
-and `BACKUP_*` settings and the backup credentials; optionally
+and `BACKUP_*` settings and the backup credentials; Garage's admin API and
+S3 API inside the cluster, `GARAGE_ADMIN_URL` and `GARAGE_S3_URL`, with
+`GARAGE_ADMIN_TOKEN`; `CUSTOMER_DOMAIN`, under which Buckets are reached
+at `<bucket>.s3.<CUSTOMER_DOMAIN>`; optionally
 `NEW_ACCOUNT_HOLDS`, the Holds every new Account starts with, e.g.
 `payment-method`, and `BILLING_CALLERS`, the billing service's
 ServiceAccount). At startup it applies pending migrations and seeds the
@@ -67,11 +71,21 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `GET /v1/projects` | the Projects of the caller's Accounts |
 | `POST /v1/projects` | `{accountId, name}` → 201; 409 if the name is taken in the Account |
 | `GET /v1/projects/{id}` | |
-| `DELETE /v1/projects/{id}` | 202: the Project and its Databases are deleted, see Cleanup |
+| `DELETE /v1/projects/{id}` | 202: the Project and its Databases and Buckets are deleted, see Cleanup |
 | `GET /v1/projects/{id}/databases` | with each Database's `state` and in-cluster `connection` |
 | `POST /v1/projects/{id}/databases` | `{name, homeSite?, memoryMb, storageGb}` → 201, `state: provisioning`; 402 if the Account has a Hold |
 | `GET /v1/projects/{id}/databases/{id}` | `state` read live from the Cluster |
 | `DELETE /v1/projects/{id}/databases/{id}` | 202 |
+| `GET /v1/projects/{id}/buckets` | the Buckets, without their keys |
+| `POST /v1/projects/{id}/buckets` | `{name}` → 201 with `access`: the Bucket's `endpoint`, `region` and its own key; 409 if the name is taken in any Project, also by a Bucket still being deleted; 402 if the Account has a Hold; 503 if Garage cannot be reached |
+| `GET /v1/projects/{id}/buckets/{id}` | with `access`, the secret read from Garage |
+| `DELETE /v1/projects/{id}/buckets/{id}` | 202: deleted with every object, see Cleanup |
+
+A Bucket name is a hostname label of 3 to 63 characters. Creating one
+creates its Garage bucket (the name as its global alias) and a key that may
+read and write only that bucket, through Garage's admin API while the
+request waits (`src/garage.ts`); the row is inserted only after Garage has
+both, and if the insert fails, the Garage bucket is deleted again.
 
 The sdk's `OpenUpstreamClient` wraps these. `scripts/dev-token.mjs` mints
 madAuth-shaped session tokens for running the control plane without madAuth
@@ -91,15 +105,23 @@ and are refused without `MAIL`.
 ## Cleanup
 
 Deleting only marks rows (`deleted_at`): the operator stops seeing them at
-once, and the name can be used again. `src/cleanup.ts` then, every 30 s and
+once, and a Database's name can be used again. `src/cleanup.ts` then, every 30 s and
 on one replica at a time (a Postgres advisory lock), removes a deleted
 Database's Cluster, Pooler and ScheduledBackup, and again on every pass for
 5 minutes, in case an operator pass that read the row before the delete
 re-applies them; after `BACKUP_RETENTION` it
 deletes the Database's backup folder from the bucket, its ObjectStore and its
-row; and once a deleted Project has no Database rows left, its namespace and
-its row. Until the retention has passed a deleted Database can be restored
+row. Until the retention has passed a deleted Database can be restored
 into a new one (`docs/runbooks/restore-from-backup.md`).
+
+A deleted Bucket keeps nothing: the next pass deletes its key (so the
+customer can no longer write), deletes every object and unfinished upload
+with the control plane's own Garage key (`openupstream-control-plane`,
+created on first use), then the Garage bucket and the row. Until then its
+name stays taken.
+
+Once a deleted Project has neither Database nor Bucket rows left, the pass
+removes its namespace and its row.
 
 ## Internal API
 
