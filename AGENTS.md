@@ -136,7 +136,8 @@ destroy it without asking per command.
 - Avoid try-catch blocks for branching. Prefer to check whether something
   exists over handling exceptions.
 - GitHub Actions: pin every action to a full commit SHA, with its version
-  in a comment (`uses: actions/checkout@<sha> # v4.4.0`).
+  in a comment (`uses: actions/checkout@<sha> # v4.4.0`). Dependabot
+  (`.github/dependabot.yml`) proposes the updates.
 
 ## Testing
 
