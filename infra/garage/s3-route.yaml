@@ -1,0 +1,56 @@
+# The public S3 endpoint (ARCHITECTURE.md, "Object storage"; decision 82):
+# every Bucket at https://<bucket>.s3.CUSTOMER_DOMAIN, one wildcard
+# certificate through DNS-01 (decision 69). Path-style requests to
+# s3.CUSTOMER_DOMAIN itself are not routed, so every request names its
+# Bucket in the hostname. CUSTOMER_DOMAIN, CUSTOMER_DOMAIN_REGEX (the same
+# with its dots escaped) and CLUSTER_ISSUER are filled in when applied
+# (infra/dev-cluster/garage.sh).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: s3
+  namespace: garage
+spec:
+  secretName: s3-tls
+  issuerRef: {kind: ClusterIssuer, name: CLUSTER_ISSUER}
+  dnsNames: ['*.s3.CUSTOMER_DOMAIN']
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
+---
+# See infra/ingress/platform-routes.yaml: give up on a node of a dark Site
+# after 1 s. Only reads are retried on another node; a write fails fast and
+# the S3 client retries it, as S3 clients do.
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: fail-fast
+  namespace: garage
+spec:
+  forwardingTimeouts:
+    dialTimeout: 1s
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: retry-other-node
+  namespace: garage
+spec:
+  retry:
+    attempts: 3
+    initialInterval: 50ms
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: s3
+  namespace: garage
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: HostRegexp(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\.s3\.CUSTOMER_DOMAIN_REGEX$`) && (Method(`GET`) || Method(`HEAD`))
+      kind: Rule
+      middlewares: [{name: retry-other-node}]
+      services: [{name: garage, port: 3900, serversTransport: fail-fast}]
+    - match: HostRegexp(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\.s3\.CUSTOMER_DOMAIN_REGEX$`)
+      kind: Rule
+      services: [{name: garage, port: 3900, serversTransport: fail-fast}]
+  tls: {secretName: s3-tls}

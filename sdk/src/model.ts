@@ -114,12 +114,43 @@ export interface DatabaseDetails extends Database {
     connection: DatabaseConnection;
 }
 
+/**
+ * A Bucket's name: a hostname label of 3 to 63 lowercase letters, digits
+ * and hyphens, neither starting nor ending with a hyphen.
+ */
+export const BUCKET_NAME = /^[a-z0-9]([a-z0-9-]{1,61}[a-z0-9])$/;
+
 export interface Bucket {
     id: Id;
     projectId: Id;
     /** Globally unique: it is the hostname `<name>.s3.<customer domain>`. */
     name: string;
     createdAt: Timestamp;
+}
+
+/** Creates a Bucket; the name must not be taken in any Project. */
+export interface BucketInput {
+    name: string;
+}
+
+/**
+ * How to reach a Bucket with any S3 client: virtual-hosted style only, at
+ * `endpoint` (the Bucket's own hostname), with the Bucket's key. The key
+ * reads and writes this Bucket and no other.
+ */
+export interface BucketAccess {
+    /** `https://<name>.s3.<customer domain>`. */
+    endpoint: string;
+    /** What S3 clients sign requests with; Garage accepts only this one. */
+    region: string;
+    accessKeyId: string;
+    /** Left out for an API key with only `openupstream:read`: the key itself may write. */
+    secretAccessKey?: string;
+}
+
+/** A Bucket as the API returns it. The list leaves out `access`. */
+export interface BucketDetails extends Bucket {
+    access: BucketAccess;
 }
 
 export interface Service {

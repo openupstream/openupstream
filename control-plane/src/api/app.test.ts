@@ -1,12 +1,13 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { type CryptoKey, SignJWT, createLocalJWKSet, createRemoteJWKSet, exportJWK, generateKeyPair } from 'jose';
-import { API_KEY_SCOPES, type Account, type DatabaseDetails, type Project } from '@openupstream/sdk';
+import { API_KEY_SCOPES, type Account, type Bucket, type BucketDetails, type DatabaseDetails, type Project } from '@openupstream/sdk';
 import { getAccountRecord, liftHold, placeHold } from '../accounts/store.js';
 import { listDatabaseRows } from '../databases/rows.js';
 import { type ClusterStatus, type ControlPlaneKube } from '../kube.js';
 import { err, ok } from '../result.js';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
+import { fakeStorage } from '../testing/storage.js';
 import { createApi } from './app.js';
 import { type Authenticate, SESSION_TOKEN_TYPE, madauthAuthenticator, sessionVerifier } from './auth.js';
 
@@ -23,6 +24,7 @@ const apiKeys: Authenticate = async (key) => {
 };
 
 let db: TestDatabase;
+const storage = fakeStorage();
 let privateKey: CryptoKey;
 let otherKey: CryptoKey;
 let api: ReturnType<typeof createApi>;
@@ -61,6 +63,8 @@ before(async () => {
     api = createApi({
         pool: db.pool,
         kube,
+        storage,
+        customerDomain: 'openupstream.test',
         authenticate: madauthAuthenticator(sessionVerifier({ issuer: ISSUER, keys: jwks }), apiKeys),
     });
     const accounts = await db.pool.query<{ id: string }>(`insert into accounts (name) values ('A'), ('B') returning id`);
@@ -112,6 +116,8 @@ describe('authentication', () => {
         const down = createApi({
             pool: db.pool,
             kube,
+            storage,
+            customerDomain: 'openupstream.test',
             authenticate: sessionVerifier({ issuer: ISSUER, keys: createRemoteJWKSet(new URL('http://127.0.0.1:9/jwks')) }),
         });
         const response = await down.request('/v1/projects', { headers: { authorization: `Bearer ${await token('alice')}` } });
@@ -325,6 +331,95 @@ describe('Databases', () => {
     });
 });
 
+describe('Buckets', () => {
+    let projectId: string;
+    let bucket: BucketDetails;
+    const path = (suffix = '') => `/v1/projects/${projectId}/buckets${suffix}`;
+
+    before(async () => {
+        const response = await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'bucket-tests' });
+        projectId = ((await response.json()) as Project).id;
+    });
+
+    test('created in a Project with its own key, usable at once at its own hostname', async () => {
+        const response = await call('POST', path(), 'alice', { name: 'shop-assets' });
+        assert.equal(response.status, 201);
+        bucket = (await response.json()) as BucketDetails;
+        const garage = storage.buckets.get('shop-assets');
+        assert.ok(garage !== undefined);
+        assert.deepEqual(bucket.access, {
+            endpoint: 'https://shop-assets.s3.openupstream.test',
+            region: 'garage',
+            accessKeyId: garage.accessKeyId,
+            secretAccessKey: `secret-of-${garage.accessKeyId}`,
+        });
+        assert.equal(response.headers.get('location'), path(`/${bucket.id}`));
+        assert.deepEqual(await (await call('GET', path(`/${bucket.id}`), 'alice')).json(), bucket);
+    });
+
+    test('the list leaves out keys and Garage ids', async () => {
+        const listed = (await (await call('GET', path(), 'alice')).json()) as Bucket[];
+        assert.deepEqual(listed, [{ id: bucket.id, projectId, name: 'shop-assets', createdAt: bucket.createdAt }]);
+    });
+
+    test('names are hostname labels and unique across all Projects', async () => {
+        const post = (name: string, subject = 'alice') => call('POST', path(), subject, { name });
+        for (const name of ['ab', 'Shop', '-shop', 'shop-', 'shop.assets', 'a'.repeat(64)]) {
+            assert.equal((await post(name)).status, 400, name);
+        }
+        assert.equal((await post('shop-assets')).status, 409);
+        const theirs = (await (await call('POST', '/v1/projects', 'bob', { accountId: accountB, name: 'theirs' })).json()) as Project;
+        const taken = await call('POST', `/v1/projects/${theirs.id}/buckets`, 'bob', { name: 'shop-assets' });
+        assert.equal(taken.status, 409);
+        assert.deepEqual(await taken.json(), { error: 'the Bucket name shop-assets is taken' });
+    });
+
+    test('Garage down: 503 when creating or showing the key, and no row', async () => {
+        storage.down = true;
+        assert.equal((await call('POST', path(), 'alice', { name: 'offline' })).status, 503);
+        assert.equal((await call('GET', path(`/${bucket.id}`), 'alice')).status, 503);
+        storage.down = false;
+        assert.equal((await db.pool.query(`select 1 from buckets where name = 'offline'`)).rowCount, 0);
+    });
+
+    test("another Account's Member finds nothing", async () => {
+        assert.equal((await call('GET', path(), 'bob')).status, 404);
+        assert.equal((await call('GET', path(`/${bucket.id}`), 'bob')).status, 404);
+        assert.equal((await call('DELETE', path(`/${bucket.id}`), 'bob')).status, 404);
+    });
+
+    test('an API key with only openupstream:read sees the key id, not its secret', async () => {
+        const read = await api.request(path(`/${bucket.id}`), { headers: { authorization: 'Bearer madauth_alice_read' } });
+        assert.equal(read.status, 200);
+        assert.deepEqual(((await read.json()) as BucketDetails).access, {
+            endpoint: bucket.access.endpoint,
+            region: 'garage',
+            accessKeyId: bucket.access.accessKeyId,
+        });
+    });
+
+    test('deleted: gone from the API at once, its key revoked; the name stays taken until the cleanup removed it', async () => {
+        assert.equal((await call('DELETE', path(`/${bucket.id}`), 'alice')).status, 202);
+        assert.ok(storage.deletedKeys.includes(bucket.access.accessKeyId));
+        assert.equal((await call('GET', path(`/${bucket.id}`), 'alice')).status, 404);
+        assert.equal((await call('DELETE', path(`/${bucket.id}`), 'alice')).status, 404);
+        assert.deepEqual(await (await call('GET', path(), 'alice')).json(), []);
+        assert.equal((await call('POST', path(), 'alice', { name: 'shop-assets' })).status, 409);
+    });
+
+    test('deleting the Project deletes its Buckets with it', async () => {
+        assert.equal((await call('POST', path(), 'alice', { name: 'shop-media' })).status, 201);
+        assert.equal((await call('DELETE', `/v1/projects/${projectId}`, 'alice')).status, 202);
+        const live = await db.pool.query('select 1 from buckets where project_id = $1 and deleted_at is null', [projectId]);
+        assert.equal(live.rowCount, 0);
+        assert.equal((await call('POST', path(), 'alice', { name: 'shop-late' })).status, 404);
+        await assert.rejects(
+            db.pool.query(`insert into buckets (project_id, name, garage_bucket_id, access_key_id) values ($1, 'sneaky', 'b', 'GK')`, [projectId]),
+            /is deleted/,
+        );
+    });
+});
+
 describe('Holds', () => {
     /** The API as the platform runs it with a billing service: new Accounts wait for a payment method. */
     let gated: ReturnType<typeof createApi>;
@@ -335,6 +430,8 @@ describe('Holds', () => {
         gated = createApi({
             pool: db.pool,
             kube,
+            storage,
+            customerDomain: 'openupstream.test',
             newAccountHolds: ['payment-method'],
             authenticate: madauthAuthenticator(sessionVerifier({ issuer: ISSUER, keys: createLocalJWKSet({ keys: [] }) }), apiKeys),
         });
@@ -381,7 +478,14 @@ describe('Holds', () => {
         assert.equal(await placeHold(db.pool, accountId, 'unpaid'), true, 'placing it twice is the same');
         assert.equal((await createDb('invoices')).status, 402);
         // The schema refuses every kind of Resource, whichever route inserts it.
-        await assert.rejects(db.pool.query(`insert into buckets (project_id, name) values ($1, 'erin-assets')`, [projectId]), /has a Hold/);
+        await assert.rejects(
+            db.pool.query(`insert into buckets (project_id, name, garage_bucket_id, access_key_id) values ($1, 'erin-assets', 'b', 'GK')`, [
+                projectId,
+            ]),
+            /has a Hold/,
+        );
+        assert.equal((await gatedCall('POST', `/v1/projects/${projectId}/buckets`, { name: 'erin-assets' })).status, 402);
+        assert.ok(!storage.calls.includes('create erin-assets'), 'a held Account makes no Garage calls');
         await assert.rejects(
             db.pool.query(
                 `insert into services (project_id, name, image, memory_mb, cpu_millicores, port) values ($1, 'web', 'nginx', 128, 100, 80)`,

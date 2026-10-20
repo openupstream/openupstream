@@ -12,7 +12,7 @@ export const SDK_VERSION = '0.1.1';
 
 export * from './model.js';
 export * from './internal.js';
-import type { Account, AccountInput, DatabaseDetails, DatabaseInput, Id, Project, ProjectInput } from './model.js';
+import type { Account, AccountInput, Bucket, BucketDetails, BucketInput, DatabaseDetails, DatabaseInput, Id, Project, ProjectInput } from './model.js';
 
 export interface ClientOptions {
     baseUrl?: string;
@@ -84,6 +84,24 @@ export class OpenUpstreamClient {
     /** Deletes the Database at once; its backups are kept for the retention window. */
     deleteDatabase(projectId: Id, databaseId: Id): Promise<ApiResult<void>> {
         return this.#call('DELETE', `/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}`);
+    }
+
+    listBuckets(projectId: Id): Promise<ApiResult<Bucket[]>> {
+        return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/buckets`);
+    }
+
+    /** A new Bucket with its own key; usable as soon as this returns. */
+    createBucket(projectId: Id, input: BucketInput): Promise<ApiResult<BucketDetails>> {
+        return this.#call('POST', `/v1/projects/${encodeURIComponent(projectId)}/buckets`, input);
+    }
+
+    getBucket(projectId: Id, bucketId: Id): Promise<ApiResult<BucketDetails>> {
+        return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/buckets/${encodeURIComponent(bucketId)}`);
+    }
+
+    /** Deletes the Bucket and every object in it; there is no retention window. */
+    deleteBucket(projectId: Id, bucketId: Id): Promise<ApiResult<void>> {
+        return this.#call('DELETE', `/v1/projects/${encodeURIComponent(projectId)}/buckets/${encodeURIComponent(bucketId)}`);
     }
 
     async #call<T>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {

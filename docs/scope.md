@@ -19,7 +19,10 @@ deletes it all.
    connection), always on with a 256 MB floor, backups and point-in-time
    recovery, pgvector enabled.
 2. **Object storage**: S3-compatible Buckets (Garage), every object stored in
-   three Sites. Reads and writes keep working when one Site is down.
+   three Sites. Reads and writes keep working when one Site is down. Each
+   Bucket has an access key of its own and is reached at its own hostname,
+   `<bucket>.s3.openupstream.app`. Deleting a Bucket deletes its objects;
+   nothing is kept.
 3. **Static sites**: a public Bucket served at a Domain through the routing
    table, SPA fallback, cache headers set by `oup site deploy`, compression.
    A feature of object storage, not a separate product.

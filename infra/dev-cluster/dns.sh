@@ -8,13 +8,17 @@
 #
 # Needs: the bunny.net API key in ~/.config/openupstream/bunny-api-key,
 # hcloud, curl, jq. The zone is DEV_ZONE (default dev.openupstream.com),
-# delegated to bunny.net (docs/self-hosting.md, section 5).
+# delegated to bunny.net (docs/self-hosting.md, section 5); the names in it
+# are DNS_NAMES, `@` for the zone apex (default `@ api`: madAuth, and later
+# the dashboard, at the apex; the API at api). garage.sh points `*.s3` in
+# the customer zone at the nodes the same way.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 PREFIX=${PREFIX:-oup-dev}
 DEV_ZONE=${DEV_ZONE:-dev.openupstream.com}
-NAMES=("" "api")   # the zone apex: madAuth (and later the dashboard); api: the API
+read -r -a NAMES <<<"${DNS_NAMES:-@ api}"
+NAMES=("${NAMES[@]/#@/}")
 KEY=$(tr -d ' \n\r' <"${BUNNY_API_KEY_FILE:-$HOME/.config/openupstream/bunny-api-key}")
 api() { curl -fsS -H "AccessKey: $KEY" -H 'content-type: application/json' "$@"; }
 

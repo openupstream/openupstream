@@ -18,9 +18,9 @@ local-path provisioner, not TopoLVM.
 Needs `hcloud` with a context for the dev Cloud project, `kubectl`, `helm`,
 `jq`, Node, the AWS CLI profiles `openupstream-backup` (backups) and
 `openupstream-ses` (madAuth's e-mails), the bunny.net API key in
-`~/.config/openupstream/bunny-api-key` and the `dev.openupstream.com` zone
-delegated to bunny.net; [docs/self-hosting.md](../../docs/self-hosting.md)
-says how to set them up.
+`~/.config/openupstream/bunny-api-key` and the zones `dev.openupstream.com`
+and `dev.openupstream.app` delegated to bunny.net;
+[docs/self-hosting.md](../../docs/self-hosting.md) says how to set them up.
 
 ```bash
 ./up.sh
@@ -51,6 +51,17 @@ It installs cert-manager's DNS-01 webhook for bunny.net, the Let's Encrypt
 issuers and Traefik on both compute nodes, and points `dev.openupstream.com`
 and `api.dev.openupstream.com` at both nodes as health-checked bunny.net
 records (`dns.sh`). Then:
+
+```bash
+./garage.sh
+```
+
+It runs Garage with one node per Site (`infra/garage`), generates its RPC
+secret and admin token once (the token also goes to the platform Project's
+namespace for the control plane), assigns the layout (a node's zone is its
+Site, `GARAGE_CAPACITY` each, 20 GB by default) and serves the S3 API at
+`https://<bucket>.s3.dev.openupstream.app`, with a wildcard certificate and
+`*.s3` pointed at both compute nodes. Then:
 
 ```bash
 ./platform.sh
@@ -104,5 +115,6 @@ When done:
 ./down.sh
 ```
 
-It deletes the DNS records, the VMs, the firewall, the SSH key and
-`.state/`. Backups the session wrote stay in the bucket.
+It deletes the DNS records in both zones, the VMs, the firewall, the SSH
+key and `.state/`. Backups the session wrote stay in the bucket; Buckets
+lived on the VMs and are gone with them.

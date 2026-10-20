@@ -63,10 +63,10 @@ export async function createProject(
     return inserted.ok ? ok(toProject(inserted.value.rows[0] as ProjectRow)) : inserted;
 }
 
-/** Marks the Project and its live Databases deleted; false when there was no such live Project. */
+/** Marks the Project and its live Databases and Buckets deleted; false when there was no such live Project. */
 export async function deleteProject(pool: pg.Pool, accountIds: readonly string[], id: string): Promise<boolean> {
     // A data-modifying CTE runs to completion whether or not the outer
-    // query reads it, so the Databases are marked in the same statement.
+    // query reads it, so the Resources are marked in the same statement.
     const { rowCount } = await pool.query(
         `with project as (
              update projects set deleted_at = now()
@@ -75,6 +75,9 @@ export async function deleteProject(pool: pg.Pool, accountIds: readonly string[]
          ), databases as (
              update databases d set deleted_at = project.deleted_at
              from project where d.project_id = project.id and d.deleted_at is null
+         ), buckets as (
+             update buckets b set deleted_at = project.deleted_at
+             from project where b.project_id = project.id and b.deleted_at is null
          )
          select id from project`,
         [id, accountIds],

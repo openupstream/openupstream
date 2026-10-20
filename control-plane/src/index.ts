@@ -23,6 +23,7 @@ import { s3BackupStore } from './backups.js';
 import { type CleanupDeps, cleanupPass } from './cleanup.js';
 import { configFrom } from './config.js';
 import { listDatabaseRows } from './databases/rows.js';
+import { garageStorage } from './garage.js';
 import { migrate } from './db/migrate.js';
 import { tokenReviewAuthenticator } from './internal/auth.js';
 import { createInternalServer } from './internal/server.js';
@@ -90,6 +91,7 @@ async function main(): Promise<void> {
     const kubeConfig = new KubeConfig();
     kubeConfig.loadFromDefault();
     const kube = controlPlaneKube(kubeConfig);
+    const storage = garageStorage(config.value.garage);
 
     const internal = createInternalServer({
         authenticate: tokenReviewAuthenticator(kubeConfig, INTERNAL_API_AUDIENCE),
@@ -106,6 +108,8 @@ async function main(): Promise<void> {
     const api = createApi({
         pool,
         kube,
+        storage,
+        customerDomain: config.value.customerDomain,
         newAccountHolds: config.value.newAccountHolds,
         authenticate: madauthAuthenticator(
             sessionVerifier({
@@ -137,6 +141,7 @@ async function main(): Promise<void> {
             pool,
             kube,
             backups: s3BackupStore(backup),
+            storage,
             retention: backup.retention,
             log,
         },
