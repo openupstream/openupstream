@@ -706,10 +706,10 @@ Decisions table once it is settled.
    public HTTPS hostnames, SES; Holds with their internal API routes, the
    open half of the gate (2026-10-20, #78); the private billing service
    with the Mollie mandate, the other half (2026-10-20, #75–77): a card
-   first payment in Mollie's test mode,
-   its webhook, the mandate lifting the Hold `payment-method` and the
-   €0.01 refunded. Left: Garage and Buckets, the routing table with
-   default hostnames (#71) and custom domains, the production DNS zones.
+   first payment in Mollie's test mode, its webhook, the mandate lifting
+   the Hold `payment-method` and the €0.01 refunded. Left: Garage and
+   Buckets, the routing table with default hostnames (#71) and custom
+   domains, the production DNS zones.
 3. Containers, Service mode.
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
