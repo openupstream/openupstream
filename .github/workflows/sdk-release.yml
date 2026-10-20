@@ -27,5 +27,7 @@ jobs:
       - name: The tag names the package's version
         run: test "sdk-v$(node -p "require('./sdk/package.json').version")" = "$GITHUB_REF_NAME"
       - run: npm run build -w sdk
+      - name: SDK_VERSION names the same version
+        run: node --input-type=module -e "import { SDK_VERSION } from './sdk/dist/index.js'; if ('sdk-v' + SDK_VERSION !== process.env.GITHUB_REF_NAME) { console.error('SDK_VERSION is ' + SDK_VERSION); process.exit(1); }"
       - run: npm test -w sdk
       - run: npm publish -w sdk
