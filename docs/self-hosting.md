@@ -284,8 +284,8 @@ Only needed by whoever publishes it; using the SDK needs nothing.
   lift Holds through the internal API (`BILLING_CALLERS`).
 - **Mollie** and **lexoffice**, for the hosted service only: its private
   billing service (#77) takes the payment method an Account needs and the
-  payments (#65, #74), and issues the invoices. This setup moves to that
-  repository once it exists.
+  payments (#65, #74), and issues the invoices. Its repository describes
+  how it is deployed; the account setup below has not moved there yet.
   In the Mollie profile, switch on the methods that create a mandate
   (#75): cards (with Apple Pay and Google Pay), PayPal and Pay by Bank,
   plus SEPA Direct Debit, without which Pay by Bank yields no mandate.
