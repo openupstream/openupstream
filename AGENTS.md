@@ -135,6 +135,8 @@ destroy it without asking per command.
 - Prefer a result type with a success and an error case over exceptions.
 - Avoid try-catch blocks for branching. Prefer to check whether something
   exists over handling exceptions.
+- GitHub Actions: pin every action to a full commit SHA, with its version
+  in a comment (`uses: actions/checkout@<sha> # v4.4.0`).
 
 ## Testing
 

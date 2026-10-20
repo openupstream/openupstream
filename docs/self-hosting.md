@@ -260,12 +260,21 @@ Only needed by whoever publishes it; using the SDK needs nothing.
    npm ci && npm run build -w sdk && npm publish -w sdk
    ```
 
-3. **Trusted publishing**: on the package's page on npmjs.com, **Settings →
-   Trusted publishing → GitHub Actions**: organization `openupstream`,
-   repository `openupstream`, workflow `sdk-release.yml`, no environment.
-   Then, under **Publishing access**, require two-factor authentication
-   and disallow tokens, so only the workflow can publish.
-4. Later versions: a `sdk-v<version>` tag (sdk/README.md, "Releasing").
+3. **On GitHub**, in the repository's settings:
+   - an **Environment** `npm-release` with the maintainers as required
+     reviewers and, under deployment branches and tags, only the tag
+     pattern `sdk-v*`;
+   - a **tag ruleset** "sdk release tags" for `refs/tags/sdk-v*` that
+     restricts creation, update and deletion, bypassed only by repository
+     and organization admins.
+4. **Trusted publishing**: on the package's page on npmjs.com, **Settings →
+   Trusted publisher → GitHub Actions**: organization `openupstream`,
+   repository `openupstream`, workflow `sdk-release.yml`, environment
+   `npm-release`, allowed action **npm publish**. Then, under
+   **Publishing access**, require two-factor authentication and disallow
+   tokens, so only the workflow can publish.
+5. Later versions: a `sdk-v<version>` tag, then an approval on GitHub
+   (sdk/README.md, "Releasing").
 
 ## Coming with build step 2
 
