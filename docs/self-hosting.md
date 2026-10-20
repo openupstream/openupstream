@@ -240,6 +240,33 @@ the domain's DNS is (ours: domaindiscount24).
    aws sesv2 send-email --profile openupstream-ses --region eu-central-1 --from-email-address no-reply@openupstream.com --destination ToAddresses=<you> --content 'Simple={Subject={Data="SES test"},Body={Text={Data="Sent with the send-only key."}}}'
    ```
 
+## 7. npm: the SDK
+
+`@openupstream/sdk` is published from GitHub Actions without a token (#80).
+Only needed by whoever publishes it; using the SDK needs nothing.
+
+1. **An npm account** with two-factor authentication, and an
+   **organization** `openupstream` (free plan, public packages) at
+   <https://www.npmjs.com/org/create>.
+2. **The first version by hand**, since trusted publishing can only be set
+   up for a package that exists. From a clean checkout of the release
+   commit:
+
+   ```bash
+   npm login
+   ```
+
+   ```bash
+   npm ci && npm run build -w sdk && npm publish -w sdk
+   ```
+
+3. **Trusted publishing**: on the package's page on npmjs.com, **Settings →
+   Trusted publishing → GitHub Actions**: organization `openupstream`,
+   repository `openupstream`, workflow `sdk-release.yml`, no environment.
+   Then, under **Publishing access**, require two-factor authentication
+   and disallow tokens, so only the workflow can publish.
+4. Later versions: a `sdk-v<version>` tag (sdk/README.md, "Releasing").
+
 ## Coming with build step 2
 
 - **No payment method needed** when you run openupstream yourself: leave

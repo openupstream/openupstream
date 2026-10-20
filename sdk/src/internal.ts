@@ -88,7 +88,23 @@ export const PLATFORM = {
         storageGb: 2,
         createdAt: '2026-10-17T00:00:00Z',
     },
-} as const satisfies { account: Omit<Account, 'holds'>; project: Project; database: Database; authDatabase: Database };
+    /** The billing service's state; seeded only where a billing service runs (BILLING_CALLERS). */
+    billingDatabase: {
+        id: '00000000-0000-4000-8000-000000000005',
+        projectId: '00000000-0000-4000-8000-000000000002',
+        name: 'billing',
+        homeSite: 'hetzner-fsn1',
+        memoryMb: 512,
+        storageGb: 2,
+        createdAt: '2026-10-20T00:00:00Z',
+    },
+} as const satisfies {
+    account: Omit<Account, 'holds'>;
+    project: Project;
+    database: Database;
+    authDatabase: Database;
+    billingDatabase: Database;
+};
 
 /** The platform's Database rows, as the operator gets them. */
 export const PLATFORM_ROWS: readonly DatabaseRow[] = [

@@ -25,6 +25,6 @@
   },
   "dependencies": {
     "@kubernetes/client-node": "^2.0.0",
-    "@openupstream/sdk": "^0.0.0"
+    "@openupstream/sdk": "^0.1.0"
   }
 }

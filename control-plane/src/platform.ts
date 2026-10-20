@@ -1,15 +1,18 @@
 /**
  * The platform's own Account, Project and Database rows (`PLATFORM` in the
- * sdk): the control plane's Database and madAuth's. The bootstrap creates
- * them from the same ids; seeding the rows hands them over to the operator,
- * which from then on reconciles them like any customer's.
+ * sdk): the control plane's Database and madAuth's, and the billing
+ * service's where one runs. The bootstrap creates the first two from the
+ * same ids; seeding the rows hands them over to the operator, which from
+ * then on reconciles them like any customer's. The billing Database has no
+ * bootstrap: the operator creates it from the seeded row.
  */
 import { PLATFORM } from '@openupstream/sdk';
 import type pg from 'pg';
 
-/** Inserts the rows that are missing, in one statement; never changes existing ones. */
-export async function seedPlatform(pool: pg.Pool): Promise<void> {
-    const { account, project, database, authDatabase } = PLATFORM;
+/** Inserts the rows that are missing, in one statement; never changes or removes existing ones. */
+export async function seedPlatform(pool: pg.Pool, options: { readonly billing: boolean }): Promise<void> {
+    const { account, project, database, authDatabase, billingDatabase } = PLATFORM;
+    const databases = options.billing ? [database, authDatabase, billingDatabase] : [database, authDatabase];
     await pool.query(
         `with account as (
              insert into accounts (id, name, created_at) values ($1, $2, $3) on conflict (id) do nothing
@@ -28,7 +31,7 @@ export async function seedPlatform(pool: pg.Pool): Promise<void> {
             project.name,
             project.createdAt,
             JSON.stringify(
-                [database, authDatabase].map((d) => ({
+                databases.map((d) => ({
                     id: d.id,
                     project_id: project.id,
                     name: d.name,
