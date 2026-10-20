@@ -144,7 +144,8 @@ export interface BucketAccess {
     /** What S3 clients sign requests with; Garage accepts only this one. */
     region: string;
     accessKeyId: string;
-    secretAccessKey: string;
+    /** Left out for an API key with only `openupstream:read`: the key itself may write. */
+    secretAccessKey?: string;
 }
 
 /** A Bucket as the API returns it. The list leaves out `access`. */

@@ -388,8 +388,19 @@ describe('Buckets', () => {
         assert.equal((await call('DELETE', path(`/${bucket.id}`), 'bob')).status, 404);
     });
 
-    test('deleted: gone from the API at once; the name stays taken until the cleanup removed it', async () => {
+    test('an API key with only openupstream:read sees the key id, not its secret', async () => {
+        const read = await api.request(path(`/${bucket.id}`), { headers: { authorization: 'Bearer madauth_alice_read' } });
+        assert.equal(read.status, 200);
+        assert.deepEqual(((await read.json()) as BucketDetails).access, {
+            endpoint: bucket.access.endpoint,
+            region: 'garage',
+            accessKeyId: bucket.access.accessKeyId,
+        });
+    });
+
+    test('deleted: gone from the API at once, its key revoked; the name stays taken until the cleanup removed it', async () => {
         assert.equal((await call('DELETE', path(`/${bucket.id}`), 'alice')).status, 202);
+        assert.ok(storage.deletedKeys.includes(bucket.access.accessKeyId));
         assert.equal((await call('GET', path(`/${bucket.id}`), 'alice')).status, 404);
         assert.equal((await call('DELETE', path(`/${bucket.id}`), 'alice')).status, 404);
         assert.deepEqual(await (await call('GET', path(), 'alice')).json(), []);

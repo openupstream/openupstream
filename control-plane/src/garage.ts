@@ -9,9 +9,10 @@
  * it needs it; the Bucket's own key is deleted first, so the customer can no
  * longer write while it is emptied.
  */
-import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
+import { S3Client } from '@aws-sdk/client-s3';
 import { z } from 'zod';
 import { type Result, err, ok } from './result.js';
+import { deleteAllObjects } from './s3.js';
 
 /** The region S3 clients sign with; Garage's `s3_region` (infra/garage). */
 export const GARAGE_REGION = 'garage';
@@ -40,6 +41,8 @@ export interface ObjectStorage {
     createBucket(name: string): Promise<Result<GarageBucket, CreateBucketError>>;
     /** The key's secret; Garage keeps it, so it can be shown again. */
     secretOf(accessKeyId: string): Promise<Result<string, string>>;
+    /** Deletes the key, so it can no longer read or write; a key that is already gone counts as deleted. */
+    deleteKey(accessKeyId: string): Promise<Result<void, string>>;
     /**
      * Deletes the key, every object and unfinished upload, then the bucket;
      * returns how many objects it deleted. What is already gone counts as
@@ -61,9 +64,6 @@ interface Refusal {
     readonly code: string;
     readonly message: string;
 }
-
-/** DeleteObjects takes at most this many keys. */
-const BATCH = 1000;
 
 /** JSON.parse only throws; this answers. */
 const parseJson = (text: string): unknown => {
@@ -118,6 +118,11 @@ export function garageStorage(config: GarageConfig, options: { fetch?: Fetch } =
     const isGone = (error: Refusal | string): boolean => typeof error !== 'string' && error.status === 404;
     const anything = z.unknown();
 
+    const deleteKey = async (accessKeyId: string): Promise<Result<void, string>> => {
+        const deleted = await call('POST', `/v2/DeleteKey?id=${encodeURIComponent(accessKeyId)}`, anything);
+        return deleted.ok || isGone(deleted.error) ? ok(undefined) : err(describe(deleted.error));
+    };
+
     /** The control plane's own key with its secret, created on first use. */
     const controlPlaneKey = async (): Promise<Result<{ accessKeyId: string; secretAccessKey: string }, string>> => {
         const keys = await call('GET', '/v2/ListKeys', keyListSchema);
@@ -160,34 +165,9 @@ export function garageStorage(config: GarageConfig, options: { fetch?: Fetch } =
             requestChecksumCalculation: 'WHEN_REQUIRED',
         });
         // Garage addresses a bucket by its id too, so a renamed or unaliased one is still found.
-        const deleteBatch = async (): Promise<number> => {
-            const listed = await client.send(new ListObjectsV2Command({ Bucket: bucketId, MaxKeys: BATCH }));
-            const keys = (listed.Contents ?? []).flatMap((object) => (object.Key === undefined ? [] : [{ Key: object.Key }]));
-            if (keys.length === 0) {
-                return 0;
-            }
-            const deleted = await client.send(new DeleteObjectsCommand({ Bucket: bucketId, Delete: { Objects: keys, Quiet: true } }));
-            if ((deleted.Errors ?? []).length > 0) {
-                throw new Error(`could not delete ${deleted.Errors?.length} objects, e.g. ${deleted.Errors?.[0]?.Key}: ${deleted.Errors?.[0]?.Message}`);
-            }
-            return keys.length;
-        };
-        let total = 0;
-        for (;;) {
-            const batch = await deleteBatch().then(
-                (count) => ok(count),
-                (error: unknown) => err(error instanceof Error ? error.message : String(error)),
-            );
-            if (!batch.ok) {
-                client.destroy();
-                return batch;
-            }
-            if (batch.value === 0) {
-                client.destroy();
-                return ok(total);
-            }
-            total += batch.value;
-        }
+        const emptied = await deleteAllObjects(client, bucketId);
+        client.destroy();
+        return emptied;
     };
 
     return {
@@ -229,10 +209,11 @@ export function garageStorage(config: GarageConfig, options: { fetch?: Fetch } =
             const secret = key.value.secretAccessKey;
             return secret === undefined || secret === null ? err(`Garage did not show the secret of ${accessKeyId}`) : ok(secret);
         },
+        deleteKey: (accessKeyId) => deleteKey(accessKeyId),
         deleteBucket: async ({ bucketId, accessKeyId }) => {
-            const keyDeleted = await call('POST', `/v2/DeleteKey?id=${encodeURIComponent(accessKeyId)}`, anything);
-            if (!keyDeleted.ok && !isGone(keyDeleted.error)) {
-                return err(describe(keyDeleted.error));
+            const keyDeleted = await deleteKey(accessKeyId);
+            if (!keyDeleted.ok) {
+                return keyDeleted;
             }
             const info = await call('GET', `/v2/GetBucketInfo?id=${encodeURIComponent(bucketId)}`, bucketSchema);
             if (!info.ok) {

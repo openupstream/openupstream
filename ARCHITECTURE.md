@@ -340,9 +340,16 @@ digest (#55).
   request waits, and the row is recorded only once Garage has both: a 201
   means the Bucket is usable, a Garage outage is a 503 (#82).
 - Deleting a Bucket deletes every object in it; nothing is kept, unlike a
-  Database's backups. The cleanup deletes its key first, so the customer can
-  no longer write, then empties the bucket with the control plane's own key
+  Database's backups. The DELETE deletes its key at once, so nothing written
+  afterwards is lost unnoticed; the cleanup deletes the key too if Garage
+  was unreachable then, empties the bucket with the control plane's own key
   and deletes it. The name stays taken until then (#82).
+- An API key with only `openupstream:read` sees a Bucket's key id but not
+  its secret, since the Bucket's key may write (#81).
+- Traefik's entry point cuts a request after 60 s (its default
+  `readTimeout`), so a single PUT has to finish within a minute; S3 clients
+  upload large files in parts anyway. Raising it for the S3 routes only
+  needs an entry point of their own.
 - The S3 API is served through Traefik, virtual-hosted style only
   (`<bucket>.s3.<customer domain>`), so every request is attributable to one
   Bucket for metering. Bucket names are hostnames, so they are unique across

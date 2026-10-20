@@ -233,20 +233,21 @@ export function createApi(deps: ApiDeps): Hono<Env> {
 
     /** The Bucket without its Garage ids, which are ours. */
     const publicBucket = ({ id, projectId, name, createdAt }: BucketRecord): Bucket => ({ id, projectId, name, createdAt });
-    /** The Bucket with its key; Garage keeps the secret, so it is asked each time. */
-    const detailsOf = async (bucket: BucketRecord): Promise<Result<BucketDetails, string>> => {
+    /**
+     * The Bucket with its key. The secret only for a caller that may write,
+     * since the key may write too; Garage keeps it, so it is asked each time.
+     */
+    const detailsOf = async (bucket: BucketRecord, identity: Identity): Promise<Result<BucketDetails, string>> => {
+        const access = {
+            endpoint: `https://${bucket.name}.s3.${deps.customerDomain}`,
+            region: GARAGE_REGION,
+            accessKeyId: bucket.accessKeyId,
+        };
+        if (!scopeAllows(identity.scopes, 'POST')) {
+            return ok({ ...publicBucket(bucket), access });
+        }
         const secret = await storage.secretOf(bucket.accessKeyId);
-        return secret.ok
-            ? ok({
-                  ...publicBucket(bucket),
-                  access: {
-                      endpoint: `https://${bucket.name}.s3.${deps.customerDomain}`,
-                      region: GARAGE_REGION,
-                      accessKeyId: bucket.accessKeyId,
-                      secretAccessKey: secret.value,
-                  },
-              })
-            : secret;
+        return secret.ok ? ok({ ...publicBucket(bucket), access: { ...access, secretAccessKey: secret.value } }) : secret;
     };
     const unavailable = (c: Context<Env>, reason: string) => {
         deps.log?.({ msg: 'object storage unavailable', error: reason });
@@ -288,7 +289,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
                     return unavailable(c, created.error.reason);
             }
         }
-        const details = await detailsOf(created.value);
+        const details = await detailsOf(created.value, c.get('identity'));
         if (!details.ok) {
             return unavailable(c, details.error);
         }
@@ -306,14 +307,22 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (bucket === undefined) {
             return c.json(notFound, 404);
         }
-        const details = await detailsOf(bucket);
+        const details = await detailsOf(bucket, c.get('identity'));
         return details.ok ? c.json(details.value) : unavailable(c, details.error);
     });
 
     app.delete('/v1/projects/:projectId/buckets/:bucketId', async (c) => {
         const bucket = await bucketOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('bucketId'));
         const deleted = bucket !== undefined && (await deleteBucket(pool, bucket.projectId, bucket.id));
-        return deleted ? c.body(null, 202) : c.json(notFound, 404);
+        if (!deleted) {
+            return c.json(notFound, 404);
+        }
+        // Its objects go with the next cleanup pass; nothing written from now on would survive it.
+        const revoked = await storage.deleteKey(bucket.accessKeyId);
+        if (!revoked.ok) {
+            deps.log?.({ msg: 'cannot delete a deleted Bucket\'s key now; the cleanup will', bucket: bucket.id, error: revoked.error });
+        }
+        return c.body(null, 202);
     });
 
     app.notFound((c) => c.json(notFound, 404));

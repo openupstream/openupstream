@@ -78,8 +78,8 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `DELETE /v1/projects/{id}/databases/{id}` | 202 |
 | `GET /v1/projects/{id}/buckets` | the Buckets, without their keys |
 | `POST /v1/projects/{id}/buckets` | `{name}` → 201 with `access`: the Bucket's `endpoint`, `region` and its own key; 409 if the name is taken in any Project, also by a Bucket still being deleted; 402 if the Account has a Hold; 503 if Garage cannot be reached |
-| `GET /v1/projects/{id}/buckets/{id}` | with `access`, the secret read from Garage |
-| `DELETE /v1/projects/{id}/buckets/{id}` | 202: deleted with every object, see Cleanup |
+| `GET /v1/projects/{id}/buckets/{id}` | with `access`, the secret read from Garage; an API key with only `openupstream:read` gets no secret, since the Bucket's key may write |
+| `DELETE /v1/projects/{id}/buckets/{id}` | 202: its key is deleted at once, the Bucket with every object by the next cleanup pass |
 
 A Bucket name is a hostname label of 3 to 63 characters. Creating one
 creates its Garage bucket (the name as its global alias) and a key that may
@@ -114,8 +114,9 @@ deletes the Database's backup folder from the bucket, its ObjectStore and its
 row. Until the retention has passed a deleted Database can be restored
 into a new one (`docs/runbooks/restore-from-backup.md`).
 
-A deleted Bucket keeps nothing: the next pass deletes its key (so the
-customer can no longer write), deletes every object and unfinished upload
+A deleted Bucket keeps nothing: the next pass deletes its key, if the
+DELETE could not already (so nothing written meanwhile is lost unnoticed),
+deletes every object and unfinished upload
 with the control plane's own Garage key (`openupstream-control-plane`,
 created on first use), then the Garage bucket and the row. Until then its
 name stays taken.
