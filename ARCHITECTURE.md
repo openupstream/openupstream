@@ -808,9 +808,13 @@ Decisions table once it is settled.
    deleting the Domain removed its Certificate and Secret in the next pass.
    Closed sign-up and the waitlist on `openupstream.com` until the gate
    before the first invoice is passed (#86): the control plane's page and
-   the sidecar's switch, run against a local Postgres. Left:
-   `oup site deploy` with its cache headers, the production DNS zones, the
-   waitlist on the dev cluster.
+   the sidecar's switch. On the dev cluster (2026-10-31): other addresses
+   refused with the waitlist message, an allowed `@domain` signed up, the
+   page behind madAuth's routes, its e-mail sent through SES, confirm and
+   remove through the public route, form posts limited to 5 a minute per
+   IP; `SIGNUP=open` and a restart removed the page and opened sign-up.
+   Left: `oup site deploy` with its cache headers, the production DNS
+   zones.
 3. Containers, Service mode.
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`

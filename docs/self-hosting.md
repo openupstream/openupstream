@@ -290,8 +290,7 @@ a user, and with no billing service every Account may create Resources.
 To keep it that way, set nothing: `platform.sh` runs with `SIGNUP=open`,
 and the sidecar lets every new user in (ARCHITECTURE.md, decision 86).
 
-To close it, as the hosted service does until it can invoice
-(not deployed on a cluster yet):
+To close it, as the hosted service does until it can invoice:
 
 1. **Write the Impressum** into a text file outside this repository (who
    runs the service, a postal address, an e-mail address; § 5 DDG), e.g.
