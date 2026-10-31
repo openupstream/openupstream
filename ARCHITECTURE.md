@@ -914,13 +914,25 @@ Decisions table once it is settled.
    index last and deleted the old bundle, and the served headers matched.
    Left: the approval page
    for `oup login` at madAuth's `loginUrl`, the production DNS zones.
-3. Containers, Service mode. Done so far: the NetworkPolicy
-   `project-isolation` in every Project namespace (#89); gVisor on the
-   compute nodes and the RuntimeClass `gvisor` (#90); Secrets through the
-   API, written into each Project's namespace by the control plane (#91);
-   Services through the API, each pinned to the digest its tag resolved to
-   (#92), run by the Services operator and served through Routes (#93); not
-   yet tested on the dev cluster.
+3. Containers, Service mode. Done on the dev cluster (2026-10-31): the
+   NetworkPolicy `project-isolation` in every Project namespace (#89),
+   gVisor on the compute nodes and the RuntimeClass `gvisor` (#90),
+   Secrets through the API, written into each Project's namespace by the
+   control plane (#91), Services through the API pinned to the digest of
+   their tag (#92), run by the Services operator and served through Routes
+   (#93). Tested: `traefik/whoami:v1.10` from Docker Hub created through the
+   API, pinned to `sha256:1699d99c…`, running under `runsc` and answering
+   at the Project's default hostname through Traefik in the other Site,
+   with its name from a Secret; a new Secret value rolled it, two replicas
+   ran one per Site, a redeploy kept the digest, deleting it while routed
+   was refused and afterwards both operators removed its objects. A pod in
+   another namespace reached none of the Project's pods, madAuth or the
+   internal API; a Service's pod reached its own namespace, DNS and the
+   internet, not the control plane, Garage's admin API or the metadata
+   endpoint. The test found that the operators' Kubernetes client had
+   dropped every NetworkPolicy's peers (fixed, see "Operators"). Left: a
+   CLI for Services and Secrets, the log stream, private registries tried
+   against a real one (the Docker Hub credential key form included).
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
    staying writable while a whole Site is switched off.
