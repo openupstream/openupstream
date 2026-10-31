@@ -64,6 +64,16 @@ describe('API calls', () => {
         assert.deepEqual([seen.at(-1)?.method, seen.at(-1)?.url, seen.at(-1)?.body], ['POST', '/v1/projects/p/buckets', '{"name":"shop-assets"}']);
     });
 
+    test('Routes live under their Domain', async () => {
+        await client.createRoute('p', 'd', { pathPrefix: '/docs', bucketId: 'b', spaFallback: true });
+        assert.deepEqual(
+            [seen.at(-1)?.method, seen.at(-1)?.url, seen.at(-1)?.body],
+            ['POST', '/v1/projects/p/domains/d/routes', '{"pathPrefix":"/docs","bucketId":"b","spaFallback":true}'],
+        );
+        assert.deepEqual(await client.deleteRoute('p', 'd', 'r'), { ok: true, value: undefined });
+        assert.equal(seen.at(-1)?.url, '/v1/projects/p/domains/d/routes/r');
+    });
+
     test("refusals carry the API's message; other failures the status text", async () => {
         assert.deepEqual(await client.createProject({ accountId: 'a', name: 'shop' }), {
             ok: false,

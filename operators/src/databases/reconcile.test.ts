@@ -103,6 +103,8 @@ const fakeKube = (secret: Record<string, string> | undefined, failKinds: readonl
             return failKinds.includes(object.kind) ? err({ status: 422, message: 'invalid' }) : ok(undefined);
         },
         readSecret: async () => ok(secret),
+        list: async () => ok([]),
+        remove: async () => ok(undefined),
     };
     return { kube, applied };
 };

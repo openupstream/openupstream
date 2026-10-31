@@ -4,7 +4,7 @@
  * public API: it is served on its own port, never routed by ingress, and
  * callers authenticate with their Kubernetes ServiceAccount token.
  */
-import type { Account, Database, Id, Member, Project } from './model.js';
+import type { Account, Database, Id, Member, Project, Route } from './model.js';
 
 /**
  * Kubernetes names, by id (ARCHITECTURE.md, decision 42): the operators
@@ -41,6 +41,25 @@ export const INTERNAL_DATABASES_PATH = '/internal/v1/databases';
  * DNS label.
  */
 export const INTERNAL_ACCOUNTS_PATH = '/internal/v1/accounts';
+
+/** `GET` lists every Domain that has Routes, with its Routes, for the Routes operator. */
+export const INTERNAL_ROUTES_PATH = '/internal/v1/routes';
+
+/** The Traefik IngressRoute that serves one Domain, in its Project's namespace. */
+export const ingressRouteName = (domainId: Id): string => `domain-${domainId}`;
+
+/**
+ * One Domain as the Routes operator needs it: where it lives, its hostname,
+ * and its Routes with the name of the Bucket each one serves.
+ */
+export interface DomainRouting {
+    readonly projectId: Id;
+    /** For the namespace's labels, which the Databases operator sets too. */
+    readonly projectName: string;
+    readonly domainId: Id;
+    readonly hostname: string;
+    readonly routes: readonly (Pick<Route, 'id' | 'pathPrefix'> & { readonly bucketName: string; readonly spaFallback: boolean })[];
+}
 
 export interface AccountRecord extends Account {
     readonly members: readonly Pick<Member, 'authSubject' | 'email'>[];

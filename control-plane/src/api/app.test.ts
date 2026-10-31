@@ -1,9 +1,20 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { type CryptoKey, SignJWT, createLocalJWKSet, createRemoteJWKSet, exportJWK, generateKeyPair } from 'jose';
-import { API_KEY_SCOPES, type Account, type Bucket, type BucketDetails, type DatabaseDetails, type Project } from '@openupstream/sdk';
+import {
+    API_KEY_SCOPES,
+    type Account,
+    type Bucket,
+    type BucketDetails,
+    type DatabaseDetails,
+    type Domain,
+    type Project,
+    type Route,
+} from '@openupstream/sdk';
 import { getAccountRecord, liftHold, placeHold } from '../accounts/store.js';
 import { listDatabaseRows } from '../databases/rows.js';
+import { ensureDefaultDomains } from '../domains/store.js';
+import { listDomainRoutings } from '../routes/store.js';
 import { type ClusterStatus, type ControlPlaneKube } from '../kube.js';
 import { err, ok } from '../result.js';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
@@ -417,6 +428,110 @@ describe('Buckets', () => {
             db.pool.query(`insert into buckets (project_id, name, garage_bucket_id, access_key_id) values ($1, 'sneaky', 'b', 'GK')`, [projectId]),
             /is deleted/,
         );
+    });
+});
+
+describe('Routing', () => {
+    let projectId: string;
+    let domain: Domain;
+    let site: BucketDetails;
+    let docs: BucketDetails;
+    const routes = (suffix = '') => `/v1/projects/${projectId}/domains/${domain.id}/routes${suffix}`;
+    const newBucket = async (name: string) =>
+        (await (await call('POST', `/v1/projects/${projectId}/buckets`, 'alice', { name })).json()) as BucketDetails;
+    const garageId = (bucket: BucketDetails) => storage.buckets.get(bucket.name)?.bucketId ?? '';
+
+    before(async () => {
+        const response = await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'site' });
+        projectId = ((await response.json()) as Project).id;
+        site = await newBucket('alice-site');
+        docs = await newBucket('alice-docs');
+    });
+
+    test('a new Project has its default Domain, <name>-<random> under the customer domain', async () => {
+        const domains = (await (await call('GET', `/v1/projects/${projectId}/domains`, 'alice')).json()) as Domain[];
+        assert.equal(domains.length, 1);
+        domain = domains[0] as Domain;
+        assert.equal(domain.kind, 'default');
+        assert.match(domain.hostname, /^site-[a-z0-9]{8}\.openupstream\.test$/);
+        assert.equal((await call('GET', `/v1/projects/${projectId}/domains`, 'bob')).status, 404);
+    });
+
+    test('a Route serves a Bucket at a path prefix; Garage serves it as a website, with SPA fallback if asked', async () => {
+        const response = await call('POST', routes(), 'alice', { pathPrefix: '/', bucketId: site.id, spaFallback: true });
+        assert.equal(response.status, 201);
+        const route = (await response.json()) as Route;
+        assert.deepEqual(route.target, { kind: 'bucket', bucketId: site.id, spaFallback: true });
+        assert.equal(storage.websites.get(garageId(site)), true);
+        assert.equal((await call('POST', routes(), 'alice', { pathPrefix: '/docs', bucketId: docs.id })).status, 201);
+        assert.equal(storage.websites.get(garageId(docs)), false);
+        const listed = (await (await call('GET', routes(), 'alice')).json()) as Route[];
+        assert.deepEqual(listed.map((r) => r.pathPrefix), ['/docs', '/']);
+    });
+
+    test('the Routes operator sees the Domain with its Routes, longest prefix first', async () => {
+        const routing = (await listDomainRoutings(db.pool)).find((d) => d.domainId === domain.id);
+        assert.deepEqual(routing, {
+            projectId,
+            projectName: 'site',
+            domainId: domain.id,
+            hostname: domain.hostname,
+            routes: [
+                { id: routing?.routes[0]?.id, pathPrefix: '/docs', bucketName: 'alice-docs', spaFallback: false },
+                { id: routing?.routes[1]?.id, pathPrefix: '/', bucketName: 'alice-site', spaFallback: true },
+            ],
+        });
+    });
+
+    test('input is checked: prefixes, duplicates, the Bucket, SPA fallback per Bucket', async () => {
+        const post = (body: unknown) => call('POST', routes(), 'alice', body);
+        for (const pathPrefix of ['', 'docs', '/docs/', '/a b', '//x']) {
+            assert.equal((await post({ pathPrefix, bucketId: site.id })).status, 400, pathPrefix);
+        }
+        assert.equal((await post({ pathPrefix: '/docs', bucketId: site.id, spaFallback: true })).status, 409);
+        const conflict = await post({ pathPrefix: '/app', bucketId: site.id, spaFallback: false });
+        assert.equal(conflict.status, 409);
+        assert.match(((await conflict.json()) as { error: string }).error, /spaFallback true/);
+        const theirs = (await (await call('POST', '/v1/projects', 'bob', { accountId: accountB, name: 'bobs' })).json()) as Project;
+        const theirBucket = (await (await call('POST', `/v1/projects/${theirs.id}/buckets`, 'bob', { name: 'bob-site' })).json()) as BucketDetails;
+        assert.equal((await post({ pathPrefix: '/bob', bucketId: theirBucket.id })).status, 400);
+        assert.equal((await call('POST', routes(), 'bob', { pathPrefix: '/x', bucketId: site.id })).status, 404);
+    });
+
+    test('Garage down: 503 and no Route', async () => {
+        storage.down = true;
+        assert.equal((await call('POST', routes(), 'alice', { pathPrefix: '/later', bucketId: docs.id })).status, 503);
+        storage.down = false;
+        const listed = (await (await call('GET', routes(), 'alice')).json()) as Route[];
+        assert.ok(!listed.some((r) => r.pathPrefix === '/later'));
+    });
+
+    test('a routed Bucket cannot be deleted; deleting its last Route stops Garage serving it', async () => {
+        assert.equal((await call('DELETE', `/v1/projects/${projectId}/buckets/${docs.id}`, 'alice')).status, 409);
+        const docsRoute = ((await (await call('GET', routes(), 'alice')).json()) as Route[]).find((r) => r.pathPrefix === '/docs');
+        assert.equal((await call('DELETE', routes(`/${docsRoute?.id}`), 'bob')).status, 404);
+        assert.equal((await call('DELETE', routes(`/${docsRoute?.id}`), 'alice')).status, 204);
+        assert.equal((await call('DELETE', routes(`/${docsRoute?.id}`), 'alice')).status, 404);
+        assert.equal(storage.websites.has(garageId(docs)), false);
+        assert.equal(storage.websites.get(garageId(site)), true);
+        assert.equal((await call('DELETE', `/v1/projects/${projectId}/buckets/${docs.id}`, 'alice')).status, 202);
+    });
+
+    test('deleting the Project removes its Domains and Routes at once', async () => {
+        assert.equal((await call('DELETE', `/v1/projects/${projectId}`, 'alice')).status, 202);
+        assert.ok(!(await listDomainRoutings(db.pool)).some((d) => d.domainId === domain.id));
+        assert.equal((await db.pool.query('select 1 from domains where project_id = $1', [projectId])).rowCount, 0);
+    });
+
+    test('Projects from before default Domains get one at startup', async () => {
+        const { rows } = await db.pool.query<{ id: string }>(
+            `insert into projects (account_id, name) values ($1, 'older') returning id`,
+            [accountA],
+        );
+        assert.ok((await ensureDefaultDomains(db.pool, 'openupstream.test')) >= 1);
+        assert.equal(await ensureDefaultDomains(db.pool, 'openupstream.test'), 0);
+        const domains = (await (await call('GET', `/v1/projects/${rows[0]?.id}/domains`, 'alice')).json()) as Domain[];
+        assert.match(domains[0]?.hostname ?? '', /^older-[a-z0-9]{8}\.openupstream\.test$/);
     });
 });
 

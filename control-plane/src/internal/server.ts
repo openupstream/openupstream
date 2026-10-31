@@ -10,8 +10,10 @@ import {
     type AccountRecord,
     DNS_LABEL,
     type DatabaseRow,
+    type DomainRouting,
     INTERNAL_ACCOUNTS_PATH,
     INTERNAL_DATABASES_PATH,
+    INTERNAL_ROUTES_PATH,
     UUID,
 } from '@openupstream/sdk';
 import type { Authenticate } from './auth.js';
@@ -22,7 +24,10 @@ export interface InternalApi {
     readonly allowedCallers: ReadonlySet<string>;
     /** Usernames allowed to read Accounts and place or lift their Holds: the billing service. */
     readonly billingCallers: ReadonlySet<string>;
+    /** Usernames allowed to list the routing table: the Routes operator. */
+    readonly routesCallers: ReadonlySet<string>;
     readonly listDatabaseRows: () => Promise<readonly DatabaseRow[]>;
+    readonly listDomainRoutings: () => Promise<readonly DomainRouting[]>;
     readonly getAccount: (id: string) => Promise<AccountRecord | undefined>;
     /** False if there is no such Account. */
     readonly placeHold: (accountId: string, reason: string) => Promise<boolean>;
@@ -67,6 +72,13 @@ function routeFor(api: InternalApi, path: string): Route | undefined {
             methods: ['GET'],
             callers: api.allowedCallers,
             handle: async () => ({ status: 200, body: await api.listDatabaseRows() }),
+        };
+    }
+    if (path === INTERNAL_ROUTES_PATH) {
+        return {
+            methods: ['GET'],
+            callers: api.routesCallers,
+            handle: async () => ({ status: 200, body: await api.listDomainRoutings() }),
         };
     }
     const account = accountPath.exec(path);

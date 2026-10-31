@@ -17,6 +17,9 @@ import { deleteAllObjects } from './s3.js';
 /** The region S3 clients sign with; Garage's `s3_region` (infra/garage). */
 export const GARAGE_REGION = 'garage';
 
+/** What a Static site serves for a directory, and for any path with SPA fallback. */
+export const INDEX_DOCUMENT = 'index.html';
+
 /** The control plane's own key in Garage, found by this name. */
 export const CONTROL_PLANE_KEY_NAME = 'openupstream-control-plane';
 
@@ -41,6 +44,12 @@ export interface ObjectStorage {
     createBucket(name: string): Promise<Result<GarageBucket, CreateBucketError>>;
     /** The key's secret; Garage keeps it, so it can be shown again. */
     secretOf(accessKeyId: string): Promise<Result<string, string>>;
+    /**
+     * Serves the bucket on Garage's website endpoint, with `index.html` for a
+     * directory and, with `spaFallback`, `index.html` with status 200 for any
+     * path without an object; `undefined` stops serving it (decision 84).
+     */
+    setWebsite(bucketId: string, website: { readonly spaFallback: boolean } | undefined): Promise<Result<void, string>>;
     /** Deletes the key, so it can no longer read or write; a key that is already gone counts as deleted. */
     deleteKey(accessKeyId: string): Promise<Result<void, string>>;
     /**
@@ -208,6 +217,25 @@ export function garageStorage(config: GarageConfig, options: { fetch?: Fetch } =
             }
             const secret = key.value.secretAccessKey;
             return secret === undefined || secret === null ? err(`Garage did not show the secret of ${accessKeyId}`) : ok(secret);
+        },
+        setWebsite: async (bucketId, website) => {
+            const websiteAccess =
+                website === undefined
+                    ? { enabled: false }
+                    : {
+                          enabled: true,
+                          indexDocument: INDEX_DOCUMENT,
+                          routingRules: website.spaFallback
+                              ? [
+                                    {
+                                        Condition: { HttpErrorCodeReturnedEquals: 404 },
+                                        Redirect: { ReplaceKeyWith: INDEX_DOCUMENT, HttpRedirectCode: 200 },
+                                    },
+                                ]
+                              : [],
+                      };
+            const updated = await call('POST', `/v2/UpdateBucket?id=${encodeURIComponent(bucketId)}`, anything, { websiteAccess });
+            return updated.ok ? ok(undefined) : err(describe(updated.error));
         },
         deleteKey: (accessKeyId) => deleteKey(accessKeyId),
         deleteBucket: async ({ bucketId, accessKeyId }) => {

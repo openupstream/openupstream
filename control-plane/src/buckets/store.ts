@@ -95,11 +95,25 @@ export async function createBucket(
     return ok(toBucket(inserted.value.rows[0] as BucketRow));
 }
 
-/** Marks the Bucket deleted; false when there was no such live Bucket. */
-export async function deleteBucket(pool: pg.Pool, projectId: string, id: string): Promise<boolean> {
-    const { rowCount } = await pool.query(
-        'update buckets set deleted_at = now() where id = $1 and project_id = $2 and deleted_at is null',
+/**
+ * Marks the Bucket deleted, unless a Route still serves it (ARCHITECTURE.md,
+ * "Routing and domains"). Creating a Route locks the Bucket's row, so the
+ * two cannot pass each other.
+ */
+export async function deleteBucket(pool: pg.Pool, projectId: string, id: string): Promise<'deleted' | 'not-found' | 'routed'> {
+    const { rows } = await pool.query<{ routed: boolean; deleted: boolean }>(
+        `with bucket as (
+             select id from buckets where id = $1 and project_id = $2 and deleted_at is null for update
+         ), marked as (
+             update buckets b set deleted_at = now() from bucket
+             where b.id = bucket.id and not exists (select 1 from routes r where r.bucket_id = bucket.id)
+             returning b.id
+         )
+         select exists (select 1 from routes r join bucket on r.bucket_id = bucket.id) as routed,
+                exists (select 1 from marked) as deleted
+         from bucket`,
         [id, projectId],
     );
-    return rowCount === 1;
+    const found = rows[0];
+    return found === undefined ? 'not-found' : found.deleted ? 'deleted' : 'routed';
 }

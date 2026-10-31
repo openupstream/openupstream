@@ -12,7 +12,21 @@ export const SDK_VERSION = '0.1.1';
 
 export * from './model.js';
 export * from './internal.js';
-import type { Account, AccountInput, Bucket, BucketDetails, BucketInput, DatabaseDetails, DatabaseInput, Id, Project, ProjectInput } from './model.js';
+import type {
+    Account,
+    AccountInput,
+    Bucket,
+    BucketDetails,
+    BucketInput,
+    DatabaseDetails,
+    DatabaseInput,
+    Domain,
+    Id,
+    Project,
+    ProjectInput,
+    Route,
+    RouteInput,
+} from './model.js';
 
 export interface ClientOptions {
     baseUrl?: string;
@@ -102,6 +116,27 @@ export class OpenUpstreamClient {
     /** Deletes the Bucket and every object in it; there is no retention window. */
     deleteBucket(projectId: Id, bucketId: Id): Promise<ApiResult<void>> {
         return this.#call('DELETE', `/v1/projects/${encodeURIComponent(projectId)}/buckets/${encodeURIComponent(bucketId)}`);
+    }
+
+    /** The Project's Domains; every Project has its default Domain. */
+    listDomains(projectId: Id): Promise<ApiResult<Domain[]>> {
+        return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/domains`);
+    }
+
+    listRoutes(projectId: Id, domainId: Id): Promise<ApiResult<Route[]>> {
+        return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/domains/${encodeURIComponent(domainId)}/routes`);
+    }
+
+    /** Serves a Bucket below a path prefix of the Domain, within one operator pass. */
+    createRoute(projectId: Id, domainId: Id, input: RouteInput): Promise<ApiResult<Route>> {
+        return this.#call('POST', `/v1/projects/${encodeURIComponent(projectId)}/domains/${encodeURIComponent(domainId)}/routes`, input);
+    }
+
+    deleteRoute(projectId: Id, domainId: Id, routeId: Id): Promise<ApiResult<void>> {
+        return this.#call(
+            'DELETE',
+            `/v1/projects/${encodeURIComponent(projectId)}/domains/${encodeURIComponent(domainId)}/routes/${encodeURIComponent(routeId)}`,
+        );
     }
 
     async #call<T>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {

@@ -9,7 +9,11 @@
 # 3. the layout: each node's zone is its Site, with GARAGE_CAPACITY each,
 #    applied once;
 # 4. the public S3 endpoint https://<bucket>.s3.$CUSTOMER_DOMAIN: the
-#    wildcard certificate, the route, and `*.s3` in bunny.net DNS (dns.sh).
+#    wildcard certificate and the route;
+# 5. the customer domain's default certificate, the wildcard for every
+#    Project's default hostname (infra/ingress/customer-domain.yaml), which
+#    the Routes operator's IngressRoutes use;
+# 6. `*` and `*.s3` in bunny.net DNS (dns.sh).
 #
 # Needs: KUBECONFIG, kubectl, openssl, the bunny.net API key, and
 # CUSTOMER_DOMAIN's zone delegated to bunny.net (docs/self-hosting.md,
@@ -73,5 +77,8 @@ garage status
 escaped=${CUSTOMER_DOMAIN//./\\\\.}
 sed -e "s#CUSTOMER_DOMAIN_REGEX#$escaped#g" -e "s#CUSTOMER_DOMAIN#$CUSTOMER_DOMAIN#g" -e "s#CLUSTER_ISSUER#$CLUSTER_ISSUER#g" \
   "$ROOT/infra/garage/s3-route.yaml" | kubectl apply -f - >/dev/null
-DEV_ZONE=$CUSTOMER_DOMAIN DNS_NAMES='*.s3' ./dns.sh
+sed -e "s#CUSTOMER_DOMAIN#$CUSTOMER_DOMAIN#g" -e "s#CLUSTER_ISSUER#$CLUSTER_ISSUER#g" \
+  "$ROOT/infra/ingress/customer-domain.yaml" | kubectl apply -f - >/dev/null
+DEV_ZONE=$CUSTOMER_DOMAIN DNS_NAMES='* *.s3' ./dns.sh
 kubectl -n garage wait certificate/s3 --for=condition=Ready --timeout=10m
+kubectl -n traefik wait certificate/customer-domain --for=condition=Ready --timeout=10m

@@ -2,7 +2,7 @@
  * What every operator shares about the cluster: how Sites and Projects appear
  * in Kubernetes, and the shape of a manifest.
  */
-import { COMPUTE_SITES, type Id } from '@openupstream/sdk';
+import { COMPUTE_SITES, type Id, type Project, projectNamespace as namespaceOf } from '@openupstream/sdk';
 
 /** Each Site is one zone; every node carries its Site's name in this label. */
 export const ZONE_LABEL = 'topology.kubernetes.io/zone';
@@ -25,6 +25,24 @@ export const LABELS = {
 } as const;
 
 export const MANAGED_BY = 'openupstream-operators';
+
+/**
+ * A Project's namespace. Every operator that needs it applies exactly this
+ * object: they share one field manager, so a label one of them left out
+ * would be removed by its apply.
+ */
+export const namespaceFor = (project: Pick<Project, 'id' | 'name'>) => ({
+    apiVersion: 'v1',
+    kind: 'Namespace',
+    metadata: {
+        name: namespaceOf(project.id),
+        labels: {
+            [LABELS.projectId]: project.id,
+            [LABELS.projectName]: project.name,
+            [LABELS.managedBy]: MANAGED_BY,
+        },
+    },
+});
 
 /** The fields of Kubernetes object metadata the operators set. */
 export interface ObjectMeta {

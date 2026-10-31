@@ -2,13 +2,31 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import { type AccountRecord, type DatabaseRow, INTERNAL_ACCOUNTS_PATH, INTERNAL_DATABASES_PATH, PLATFORM } from '@openupstream/sdk';
+import {
+    type AccountRecord,
+    type DatabaseRow,
+    type DomainRouting,
+    INTERNAL_ACCOUNTS_PATH,
+    INTERNAL_DATABASES_PATH,
+    INTERNAL_ROUTES_PATH,
+    PLATFORM,
+} from '@openupstream/sdk';
 import { err, ok } from '../result.js';
 import type { Authenticate } from './auth.js';
 import { createInternalServer } from './server.js';
 
 const operator = 'system:serviceaccount:openupstream-system:databases-operator';
 const billing = 'system:serviceaccount:project-00000000-0000-4000-8000-000000000002:billing';
+const routesOperator = 'system:serviceaccount:openupstream-system:routes-operator';
+const routings: DomainRouting[] = [
+    {
+        projectId: PLATFORM.project.id,
+        projectName: PLATFORM.project.name,
+        domainId: '0b7c3f1e-2d4a-4c8b-9e6f-111111111111',
+        hostname: 'shop-a1b2c3d4.openupstream.app',
+        routes: [{ id: '0b7c3f1e-2d4a-4c8b-9e6f-222222222222', pathPrefix: '/', bucketName: 'shop-site', spaFallback: true }],
+    },
+];
 const rows: DatabaseRow[] = [{ project: PLATFORM.project, database: PLATFORM.database }];
 const accountId = '0b7c3f1e-2d4a-4c8b-9e6f-1a2b3c4d5e6f';
 const unknownId = '0b7c3f1e-2d4a-4c8b-9e6f-000000000000';
@@ -40,6 +58,8 @@ before(async () => {
         authenticate,
         allowedCallers: new Set([operator]),
         billingCallers: new Set([billing]),
+        routesCallers: new Set([routesOperator]),
+        listDomainRoutings: async () => routings,
         listDatabaseRows: async () => {
             if (listFails) {
                 throw new Error('database down');
@@ -124,7 +144,15 @@ test('the billing service places and lifts Holds; both are idempotent', async ()
     assert.equal(post.headers.get('allow'), 'PUT, DELETE');
 });
 
+test('the Routes operator gets the routing table', async () => {
+    const response = await get(routesOperator, INTERNAL_ROUTES_PATH);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), routings);
+});
+
 test('each caller only gets its own routes', async () => {
+    assert.equal((await get(operator, INTERNAL_ROUTES_PATH)).status, 403);
+    assert.equal((await get(routesOperator)).status, 403);
     assert.equal((await get(operator, `${INTERNAL_ACCOUNTS_PATH}/${accountId}`)).status, 403);
     assert.equal((await get(operator, `${INTERNAL_ACCOUNTS_PATH}/${accountId}/holds/unpaid`, 'DELETE')).status, 403);
     assert.equal((await get(billing)).status, 403);

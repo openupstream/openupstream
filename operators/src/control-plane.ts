@@ -1,8 +1,9 @@
 /**
  * The operators' side of the control plane's internal API: the Database
- * rows, fetched with the operator's ServiceAccount token.
+ * rows and the routing table, fetched with the operator's ServiceAccount
+ * token.
  */
-import { type DatabaseRow, INTERNAL_DATABASES_PATH } from '@openupstream/sdk';
+import { type DatabaseRow, type DomainRouting, INTERNAL_DATABASES_PATH, INTERNAL_ROUTES_PATH } from '@openupstream/sdk';
 import { type Result, err, ok } from './result.js';
 
 export type FetchRowsError =
@@ -38,15 +39,52 @@ export const parseRows = (body: unknown): Result<DatabaseRow[], FetchRowsError> 
 
 export type FetchRows = () => Promise<Result<DatabaseRow[], FetchRowsError>>;
 
+/** Only the shape the Routes operator relies on; the control plane checked the values when it stored them. */
+const isRouting = (value: unknown): value is DomainRouting =>
+    isObject(value) &&
+    typeof value['projectId'] === 'string' &&
+    typeof value['projectName'] === 'string' &&
+    typeof value['domainId'] === 'string' &&
+    typeof value['hostname'] === 'string' &&
+    Array.isArray(value['routes']) &&
+    value['routes'].every(
+        (route: unknown) =>
+            isObject(route) &&
+            typeof route['id'] === 'string' &&
+            typeof route['pathPrefix'] === 'string' &&
+            typeof route['bucketName'] === 'string' &&
+            typeof route['spaFallback'] === 'boolean',
+    );
+
+export const parseRoutings = (body: unknown): Result<DomainRouting[], FetchRowsError> =>
+    Array.isArray(body) && body.every(isRouting)
+        ? ok(body)
+        : err({ kind: 'malformed', message: 'expected an array of { projectId, projectName, domainId, hostname, routes }' });
+
+export type FetchRoutings = () => Promise<Result<DomainRouting[], FetchRowsError>>;
+
 /**
  * `token` is read on every call: projected ServiceAccount tokens are
  * rotated by the kubelet.
  */
 export function controlPlaneRows(baseUrl: string, token: () => Promise<string>): FetchRows {
+    return fetchInternal(baseUrl, INTERNAL_DATABASES_PATH, token, parseRows);
+}
+
+export function controlPlaneRoutings(baseUrl: string, token: () => Promise<string>): FetchRoutings {
+    return fetchInternal(baseUrl, INTERNAL_ROUTES_PATH, token, parseRoutings);
+}
+
+function fetchInternal<T>(
+    baseUrl: string,
+    path: string,
+    token: () => Promise<string>,
+    parse: (body: unknown) => Result<T, FetchRowsError>,
+): () => Promise<Result<T, FetchRowsError>> {
     return async () => {
         const response = await token()
             .then((bearer) =>
-                fetch(new URL(INTERNAL_DATABASES_PATH, baseUrl), {
+                fetch(new URL(path, baseUrl), {
                     headers: { authorization: `Bearer ${bearer.trim()}` },
                     signal: AbortSignal.timeout(10_000),
                 }),
@@ -69,6 +107,6 @@ export function controlPlaneRows(baseUrl: string, token: () => Promise<string>):
             (value: unknown) => value,
             () => undefined,
         );
-        return parseRows(body);
+        return parse(body);
     };
 }

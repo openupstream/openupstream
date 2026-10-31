@@ -1,22 +1,26 @@
 /**
- * Entry point of the operators' container (operators/deploy). Runs the
- * Databases operator; the others join here as they are built.
+ * Entry point of the operators' container (operators/deploy). OPERATOR picks
+ * which one this process runs, each as its own Deployment with its own
+ * ServiceAccount, so each has only the rights it needs.
  *
  * Environment:
+ * - OPERATOR: `databases` (default) or `routes`
  * - CONTROL_PLANE_URL: the control plane's internal API, e.g.
  *   http://control-plane.project-<id>.svc:8081
  * - TOKEN_PATH: the projected ServiceAccount token for the control plane's
  *   audience
- * - DATABASE_CONFIG_PATH: a DatabaseConfig as JSON (a ConfigMap)
- * - BACKUP_CREDENTIALS: `<namespace>/<name>` of the backup credentials Secret
  * - INTERVAL_SECONDS: time between passes, default 30
+ * - for `databases`: DATABASE_CONFIG_PATH, a DatabaseConfig as JSON (a
+ *   ConfigMap), and BACKUP_CREDENTIALS, `<namespace>/<name>` of the backup
+ *   credentials Secret
  */
 import { readFile } from 'node:fs/promises';
 import { KubeConfig } from '@kubernetes/client-node';
-import { controlPlaneRows } from './control-plane.js';
-import { databasesPass, runDatabasesOperator } from './databases/loop.js';
+import { controlPlaneRoutings, controlPlaneRows } from './control-plane.js';
+import { type PassLog, databasesPass, runPasses } from './databases/loop.js';
 import type { DatabaseConfig } from './databases/manifests.js';
 import { kubeFrom } from './kube.js';
+import { routesPass } from './routes/loop.js';
 
 const log = (entry: Record<string, unknown>): void =>
     console.log(JSON.stringify({ time: new Date().toISOString(), ...entry }));
@@ -30,14 +34,13 @@ const required = (name: string): string => {
     return value;
 };
 
-const controlPlaneUrl = required('CONTROL_PLANE_URL');
-const tokenPath = required('TOKEN_PATH');
-const [credentialsNamespace, credentialsName] = required('BACKUP_CREDENTIALS').split('/');
-if (credentialsNamespace === undefined || credentialsName === undefined) {
-    log({ msg: 'BACKUP_CREDENTIALS must be <namespace>/<name>' });
+const operator = process.env['OPERATOR'] ?? 'databases';
+if (operator !== 'databases' && operator !== 'routes') {
+    log({ msg: 'OPERATOR must be databases or routes', operator });
     process.exit(1);
 }
-const config: DatabaseConfig = JSON.parse(await readFile(required('DATABASE_CONFIG_PATH'), 'utf8'));
+const controlPlaneUrl = required('CONTROL_PLANE_URL');
+const tokenPath = required('TOKEN_PATH');
 const intervalSeconds = Number(process.env['INTERVAL_SECONDS'] ?? 30);
 if (!Number.isFinite(intervalSeconds) || intervalSeconds < 1) {
     log({ msg: 'INTERVAL_SECONDS must be a number of seconds, at least 1' });
@@ -48,17 +51,28 @@ const intervalMs = intervalSeconds * 1000;
 const kubeConfig = new KubeConfig();
 kubeConfig.loadFromDefault();
 const kube = kubeFrom(kubeConfig);
-const fetchRows = controlPlaneRows(controlPlaneUrl, () => readFile(tokenPath, 'utf8'));
+const token = () => readFile(tokenPath, 'utf8');
 
-const stop = new AbortController();
-process.once('SIGTERM', () => stop.abort());
-log({ msg: 'databases operator started', controlPlaneUrl, intervalMs });
-await runDatabasesOperator(
-    () =>
+const databases = async (): Promise<() => Promise<PassLog>> => {
+    const [credentialsNamespace, credentialsName] = required('BACKUP_CREDENTIALS').split('/');
+    if (credentialsNamespace === undefined || credentialsName === undefined) {
+        log({ msg: 'BACKUP_CREDENTIALS must be <namespace>/<name>' });
+        process.exit(1);
+    }
+    const config: DatabaseConfig = JSON.parse(await readFile(required('DATABASE_CONFIG_PATH'), 'utf8'));
+    const fetchRows = controlPlaneRows(controlPlaneUrl, token);
+    return () =>
         databasesPass(fetchRows, kube, config, {
             backupCredentials: { namespace: credentialsNamespace, name: credentialsName },
-        }),
-    intervalMs,
-    log,
-    stop.signal,
-);
+        });
+};
+const routes = (): (() => Promise<PassLog>) => {
+    const fetchRoutings = controlPlaneRoutings(controlPlaneUrl, token);
+    return () => routesPass(fetchRoutings, kube);
+};
+
+const pass = operator === 'databases' ? await databases() : routes();
+const stop = new AbortController();
+process.once('SIGTERM', () => stop.abort());
+log({ msg: `${operator} operator started`, controlPlaneUrl, intervalMs });
+await runPasses(pass, intervalMs, log, stop.signal);

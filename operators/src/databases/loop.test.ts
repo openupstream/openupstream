@@ -4,7 +4,7 @@ import { PLATFORM } from '@openupstream/sdk';
 import type { FetchRows } from '../control-plane.js';
 import type { Kube } from '../kube.js';
 import { err, ok } from '../result.js';
-import { type PassLog, databasesPass, runDatabasesOperator } from './loop.js';
+import { type PassLog, databasesPass, runPasses } from './loop.js';
 import type { DatabaseConfig } from './manifests.js';
 
 const config: DatabaseConfig = {
@@ -21,6 +21,8 @@ const kube = (applied: string[] = []): Kube => ({
         return ok(undefined);
     },
     readSecret: async () => ok(credentials),
+    list: async () => ok([]),
+    remove: async () => ok(undefined),
 });
 
 const platformRows: FetchRows = async () => ok([{ project: PLATFORM.project, database: PLATFORM.database }]);
@@ -60,7 +62,7 @@ test('the loop runs passes until it is stopped', async () => {
     const stop = new AbortController();
     const logs: PassLog[] = [];
     let passes = 0;
-    await runDatabasesOperator(
+    await runPasses(
         async () => {
             passes += 1;
             if (passes === 3) {

@@ -5,6 +5,8 @@ import { err, ok } from '../result.js';
 export interface FakeStorage extends ObjectStorage {
     /** Live buckets: alias → ids and object count. */
     readonly buckets: Map<string, GarageBucket & { objects: number }>;
+    /** Buckets served as websites: Garage bucket id → SPA fallback. */
+    readonly websites: Map<string, boolean>;
     /** Keys deleted. */
     readonly deletedKeys: string[];
     /** Every call, e.g. `create shop-assets`. */
@@ -18,6 +20,7 @@ export function fakeStorage(): FakeStorage {
     const findById = (bucketId: string) => [...fake.buckets].find(([, bucket]) => bucket.bucketId === bucketId);
     const fake: FakeStorage = {
         buckets: new Map(),
+        websites: new Map(),
         deletedKeys: [],
         calls: [],
         down: false,
@@ -33,6 +36,12 @@ export function fakeStorage(): FakeStorage {
         secretOf: async (accessKeyId) => {
             if (fake.down) return err('Garage unreachable');
             return ok(`secret-of-${accessKeyId}`);
+        },
+        setWebsite: async (bucketId, website) => {
+            if (fake.down) return err('Garage unreachable');
+            if (website === undefined) fake.websites.delete(bucketId);
+            else fake.websites.set(bucketId, website.spaFallback);
+            return ok(undefined);
         },
         deleteKey: async (accessKeyId) => {
             if (fake.down) return err('Garage unreachable');
