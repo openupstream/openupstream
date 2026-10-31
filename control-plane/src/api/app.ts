@@ -498,14 +498,20 @@ export function createApi(deps: ApiDeps): Hono<Env> {
 
     /**
      * Writes the Project's Kubernetes Secret now, so a change reaches its
-     * Services at once. A failure is only logged: the secrets pass writes it
-     * again within one interval, and the change itself is stored.
+     * Services at once, without making the caller wait for Kubernetes: the
+     * change is stored, and the secrets pass writes it again within one
+     * interval if this fails.
      */
-    const syncSecrets = async (projectId: string) => {
-        const synced = await syncProjectSecrets({ pool, kube, kek: deps.kek }, projectId);
-        if (!synced.ok) {
-            deps.log?.({ msg: 'cannot write the Secrets of a Project', projectId, error: synced.error });
-        }
+    const syncSecrets = (projectId: string): void => {
+        void syncProjectSecrets({ pool, kube, kek: deps.kek }, projectId).then(
+            (synced) => {
+                if (!synced.ok) {
+                    deps.log?.({ msg: 'cannot write the Secrets of a Project', projectId, error: synced.error });
+                }
+            },
+            (error: unknown) =>
+                deps.log?.({ msg: 'cannot write the Secrets of a Project', projectId, error: error instanceof Error ? error.message : String(error) }),
+        );
     };
 
     app.get('/v1/projects/:projectId/secrets', async (c) => {
@@ -538,7 +544,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
                     throw new Error(`cannot store the Secret: ${stored.error.kind}`);
             }
         }
-        await syncSecrets(project.id);
+        syncSecrets(project.id);
         const created = stored.value.createdAt === stored.value.updatedAt;
         if (created) {
             c.header('location', `/v1/projects/${project.id}/secrets/${name}`);
@@ -551,7 +557,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (project === undefined || !(await deleteSecret(pool, project.id, c.req.param('name')))) {
             return c.json(notFound, 404);
         }
-        await syncSecrets(project.id);
+        syncSecrets(project.id);
         return c.body(null, 204);
     });
 

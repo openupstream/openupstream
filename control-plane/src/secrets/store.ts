@@ -109,6 +109,7 @@ export async function putSecret(
         return dataKey;
     }
     // The Project's other values plus this one; checked against their plaintext sizes, which the store does not keep.
+    // A soft limit: concurrent PUTs to one Project can pass it together; Kubernetes' 1 MiB per Secret stays far off.
     const others = await db.query<{ bytes: string }>(
         `select coalesce(sum(octet_length(ciphertext) - $3), 0) as bytes from secrets where project_id = $1 and name <> $2`,
         [projectId, input.name, CIPHERTEXT_OVERHEAD_BYTES],

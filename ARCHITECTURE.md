@@ -504,12 +504,18 @@ digest (#55).
   records the id of its key-encryption key, so the key-encryption key can be
   rotated by rewrapping the data keys without touching the values.
 - The key-encryption key is a Kubernetes Secret in the control plane's
-  namespace; k3s secrets encryption at rest is on.
+  namespace (`secrets-kek`); k3s secrets encryption at rest is on. On the
+  production cluster a copy is kept outside it, with the maintainer's
+  credentials: without the key, neither the cluster nor a restore of the
+  control plane's Database can read any Secret. The dev cluster's is
+  generated per session and thrown away with it.
 - The control plane renders all of a Project's Secrets into one Kubernetes
   `Secret`, `project-secrets`, in the Project's namespace (#91): right after
   every change through the API, and again every 30 s on one replica (an
   advisory lock, like the cleanup), so a write that failed, or that came
-  before an operator created the namespace, arrives within one pass. It
+  before an operator created the namespace, arrives within one pass (the
+  API does not wait for its write; two quick changes can land out of order,
+  which the pass also repairs). It
   alone holds the key-encryption key, so no decrypted value crosses the
   internal API. Services and jobs read the Secret via `envFrom`. Changing a
   Secret rolls the Services that use it.

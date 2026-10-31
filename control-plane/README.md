@@ -95,7 +95,7 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `POST /v1/projects/{id}/domains/{id}/routes` | `{pathPrefix, bucketId, spaFallback?}` → 201: the Bucket is served below the prefix (stripped) within one Routes operator pass; 400 for a Bucket not in the Project; 409 if the prefix is taken, or if the Bucket's other Routes have another `spaFallback`; 503 if Garage cannot be reached |
 | `DELETE /v1/projects/{id}/domains/{id}/routes/{id}` | 204; the Bucket's last Route also stops Garage serving it |
 | `GET /v1/projects/{id}/secrets` | the Project's Secrets, names and times only |
-| `PUT /v1/projects/{id}/secrets/{name}` | `{value}` → 201 for a new Secret, 200 for a new value; written into the Project's Kubernetes Secret at once (or by the next secrets pass, before the Project has a namespace). The name is an environment variable name; 400 for a value over 64 KiB, or if the Project's values together would pass 512 KiB |
+| `PUT /v1/projects/{id}/secrets/{name}` | `{value}` → 201 for a new Secret, 200 for a new value; written into the Project's Kubernetes Secret right after the answer (or by the next secrets pass, before the Project has a namespace). The name is an environment variable name; 400 for a value over 64 KiB, or if the Project's values together would pass 512 KiB |
 | `DELETE /v1/projects/{id}/secrets/{name}` | 204 |
 
 A Bucket name is a hostname label of 3 to 63 characters. Creating one

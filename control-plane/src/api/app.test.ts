@@ -680,6 +680,27 @@ describe('Secrets', () => {
     let projectId: string;
     const path = (name = '') => `/v1/projects/${projectId}/secrets${name === '' ? '' : `/${name}`}`;
     const latest = () => appliedSecrets.at(-1);
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    /** The API writes the Kubernetes Secret in the background: retries `check` for up to a second. */
+    const eventually = async (check: () => void) => {
+        for (let attempt = 0; ; attempt++) {
+            const failed = (() => {
+                try {
+                    check();
+                    return undefined;
+                } catch (error) {
+                    return error;
+                }
+            })();
+            if (failed === undefined) {
+                return;
+            }
+            if (attempt >= 50) {
+                throw failed;
+            }
+            await pause(20);
+        }
+    };
     const decoded = (secret: SecretManifest | undefined) =>
         Object.fromEntries(Object.entries(secret?.data ?? {}).map(([name, value]) => [name, Buffer.from(value, 'base64').toString('utf8')]));
 
@@ -694,15 +715,15 @@ describe('Secrets', () => {
         const secret = (await created.json()) as Secret;
         assert.equal(secret.name, 'API_TOKEN');
         assert.ok(!('value' in secret));
+        await eventually(() => assert.deepEqual(decoded(latest()), { API_TOKEN: 's3cr3t ✓' }));
         assert.equal(latest()?.metadata.name, 'project-secrets');
         assert.equal(latest()?.metadata.namespace, `project-${projectId}`);
-        assert.deepEqual(decoded(latest()), { API_TOKEN: 's3cr3t ✓' });
     });
 
     test('a second PUT replaces the value: 200; the list has names only', async () => {
         assert.equal((await call('PUT', path('API_TOKEN'), 'alice', { value: 'rotated' })).status, 200);
         assert.equal((await call('PUT', path('DATABASE_URL'), 'alice', { value: 'postgres://x' })).status, 201);
-        assert.deepEqual(decoded(latest()), { API_TOKEN: 'rotated', DATABASE_URL: 'postgres://x' });
+        await eventually(() => assert.deepEqual(decoded(latest()), { API_TOKEN: 'rotated', DATABASE_URL: 'postgres://x' }));
         const listed = (await (await call('GET', path(), 'alice')).json()) as Secret[];
         assert.deepEqual(listed.map((s) => s.name), ['API_TOKEN', 'DATABASE_URL']);
         assert.ok(listed.every((s) => !('value' in s)));
@@ -730,14 +751,16 @@ describe('Secrets', () => {
 
     test('DELETE removes the value from the Kubernetes Secret; an unknown name: 404', async () => {
         assert.equal((await call('DELETE', path('DATABASE_URL'), 'alice')).status, 204);
-        assert.deepEqual(decoded(latest()), { API_TOKEN: 'rotated' });
+        await eventually(() => assert.deepEqual(decoded(latest()), { API_TOKEN: 'rotated' }));
         assert.equal((await call('DELETE', path('DATABASE_URL'), 'alice')).status, 404);
     });
 
     test('before the Project has a namespace the value is stored all the same', async () => {
+        await pause(200); // the earlier tests' writes
         missingNamespaces.add(`project-${projectId}`);
         const before = appliedSecrets.length;
         assert.equal((await call('PUT', path('LATER'), 'alice', { value: 'v' })).status, 201);
+        await pause(200);
         assert.equal(appliedSecrets.length, before);
         missingNamespaces.delete(`project-${projectId}`);
     });
