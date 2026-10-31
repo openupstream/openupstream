@@ -541,7 +541,9 @@ digest (#55).
   `Secret`, `project-secrets`, in the Project's namespace (#91): right after
   every change through the API, and again every 30 s on one replica (an
   advisory lock, like the cleanup), so a write that failed, or that came
-  before an operator created the namespace, arrives within one pass (the
+  before an operator created the namespace, arrives within one pass; a
+  Project with Services but no Secrets gets an empty one, since a Service's
+  pods wait for it rather than start without their values (the
   API does not wait for its write; two quick changes can land out of order,
   which the pass also repairs). It
   alone holds the key-encryption key, so no decrypted value crosses the

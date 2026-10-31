@@ -81,6 +81,15 @@ test('a pass writes every live Project that had Secrets, an emptied one too, and
     assert.deepEqual(applied.get(`project-${emptied}/project-secrets`)?.data, {});
     assert.ok(!applied.has(`project-${deleted}/project-secrets`));
     assert.ok(!applied.has(`project-${without}/project-secrets`));
+    // A Service alone is enough: its pods wait for the Secret, so the Project gets an empty one.
+    await db.pool.query(
+        `insert into services (project_id, name, image, image_digest, memory_mb, cpu_millicores, port)
+         values ($1, 'web', 'nginx', $2, 128, 100, 80)`,
+        [without, `sha256:${'0'.repeat(64)}`],
+    );
+    const again = fakeKube();
+    await secretsPass({ pool: db.pool, kube: again.kube, kek, log: () => undefined });
+    assert.deepEqual(again.applied.get(`project-${without}/project-secrets`)?.data, {});
     assert.deepEqual(logs.find((entry) => entry['msg'] === 'cannot write the Secrets of a Project'), {
         msg: 'cannot write the Secrets of a Project',
         projectId: failing,

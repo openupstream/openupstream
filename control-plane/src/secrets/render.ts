@@ -111,12 +111,18 @@ export async function syncProjectSecrets(
 
 /**
  * One pass over every live Project that has ever had a Secret or registry
- * credentials (it has a data key). A Project whose write fails is logged; the others go on.
+ * credentials (it has a data key), or has a Service: its pods wait for
+ * `project-secrets` to exist, so they never start without the values they
+ * are meant to have, and a Project without Secrets gets an empty one. A
+ * Project whose write fails is logged; the others go on.
  */
 export async function secretsPass(deps: SecretsDeps): Promise<void> {
     const projects = await deps.pool.query<{ id: string }>(
-        `select p.id from projects p join project_data_keys k on k.project_id = p.id
-         where p.deleted_at is null order by p.id`,
+        `select p.id from projects p
+         where p.deleted_at is null
+           and (exists (select 1 from project_data_keys k where k.project_id = p.id)
+                or exists (select 1 from services s where s.project_id = p.id))
+         order by p.id`,
     );
     const outcomes = await Promise.all(
         projects.rows.map(async ({ id }) => ({ projectId: id, result: await syncProjectSecrets(deps, id) })),
