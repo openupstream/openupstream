@@ -120,7 +120,9 @@ The development cluster gets its own subdomains, delegated to bunny.net, so
 each session can point records at its VMs while the parent domains stay
 where they are (#70): one for our own hostnames, ours
 `dev.openupstream.com`, and one under the customer domain for the Buckets,
-ours `dev.openupstream.app`. Both parent domains are registered and served
+ours `dev.openupstream.app`. A third, ours `test.openupstream.com`, stands
+in for a customer's own zone when trying custom domains, since hostnames in
+the other two cannot be claimed (#85). Both parent domains are registered and served
 by domaindiscount24. Do steps 2 to 4 once per subdomain.
 
 1. Create an account at [bunny.net](https://bunny.net).

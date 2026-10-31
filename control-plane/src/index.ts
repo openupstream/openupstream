@@ -23,6 +23,7 @@ import { s3BackupStore } from './backups.js';
 import { type CleanupDeps, cleanupPass } from './cleanup.js';
 import { configFrom } from './config.js';
 import { listDatabaseRows } from './databases/rows.js';
+import { txtLookup } from './domains/dns.js';
 import { ensureDefaultDomains } from './domains/store.js';
 import { garageStorage } from './garage.js';
 import { migrate } from './db/migrate.js';
@@ -118,6 +119,8 @@ async function main(): Promise<void> {
         kube,
         storage,
         customerDomain: config.value.customerDomain,
+        platformDomain: config.value.platformDomain,
+        lookupTxt: txtLookup(),
         newAccountHolds: config.value.newAccountHolds,
         authenticate: madauthAuthenticator(
             sessionVerifier({

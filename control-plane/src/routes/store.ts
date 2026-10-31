@@ -47,6 +47,7 @@ export async function listRoutes(pool: pg.Pool, domainId: string): Promise<Route
 }
 
 export type CreateRouteError =
+    | { readonly kind: 'domain-not-found' }
     | { readonly kind: 'bucket-not-found' }
     | { readonly kind: 'prefix-taken'; readonly pathPrefix: string }
     | { readonly kind: 'spa-conflict'; readonly spaFallback: boolean }
@@ -56,6 +57,8 @@ export type CreateRouteError =
  * Inserts the Route and sets the Bucket's website settings in Garage in one
  * transaction: if Garage cannot be reached, there is no Route. The Bucket's
  * row stays locked meanwhile, so it cannot be deleted under the new Route.
+ * The Domain is locked first, as deleteDomain does, so the two never wait
+ * for each other's locks; a Domain deleted meanwhile is `domain-not-found`.
  * `projectId` and `domainId` are the caller's, already checked; `input` is
  * validated by the API, and the schema checks the prefix again.
  */
@@ -68,6 +71,10 @@ export async function createRoute(
 ): Promise<Result<Route, CreateRouteError>> {
     const spaFallback = input.spaFallback ?? false;
     return inTransaction(pool, async (client): Promise<Result<Route, CreateRouteError>> => {
+        const domain = await client.query('select 1 from domains where id = $1 for key share', [domainId]);
+        if (domain.rowCount !== 1) {
+            return err({ kind: 'domain-not-found' });
+        }
         const bucket = await client.query<{ garage_bucket_id: string; spa_fallback: boolean | null }>(
             `select b.garage_bucket_id, (select r.spa_fallback from routes r where r.bucket_id = b.id limit 1) as spa_fallback
              from buckets b where b.id = $1 and b.project_id = $2 and b.deleted_at is null for share of b`,
@@ -111,10 +118,7 @@ export type DeleteRouteOutcome =
 
 /**
  * Deletes the Route. When it was the Bucket's last one, the Bucket stops
- * being served by Garage's website endpoint too, while the Bucket's row is
- * locked, so a Route created for it meanwhile waits and sets the website
- * again afterwards. If Garage cannot be reached for that, the Route is gone
- * all the same, since nothing routes to the website endpoint without one.
+ * being served by Garage's website endpoint too (unserveIfUnrouted).
  */
 export async function deleteRoute(
     pool: pg.Pool,
@@ -136,21 +140,31 @@ export async function deleteRoute(
             if (bucketId === null || bucketId === undefined) {
                 return { kind: 'deleted' };
             }
-            // A separate statement after the lock, so it sees Routes committed while it waited.
-            const bucket = await client.query<{ garage_bucket_id: string }>(
-                'select garage_bucket_id from buckets where id = $1 for update',
-                [bucketId],
-            );
-            const routed = await client.query('select 1 from routes where bucket_id = $1 limit 1', [bucketId]);
-            const garageBucketId = bucket.rows[0]?.garage_bucket_id;
-            if (garageBucketId === undefined || routed.rowCount !== 0) {
-                return { kind: 'deleted' };
-            }
-            const website = await storage.setWebsite(garageBucketId, undefined);
-            return website.ok ? { kind: 'deleted' } : { kind: 'deleted', websiteError: website.error };
+            const websiteError = await unserveIfUnrouted(client, storage, bucketId);
+            return websiteError === undefined ? { kind: 'deleted' } : { kind: 'deleted', websiteError };
         },
         (outcome) => outcome.kind === 'deleted',
     );
+}
+
+/**
+ * Turns the Bucket's website off in Garage if no Route serves it any more,
+ * inside the caller's transaction that deleted Routes to it. The Bucket's
+ * row stays locked until that commits, so a Route created for it meanwhile
+ * waits and sets the website again afterwards. Answers Garage's error, if
+ * any: the Routes are gone all the same, since nothing routes to the
+ * website endpoint without one.
+ */
+export async function unserveIfUnrouted(client: pg.PoolClient, storage: ObjectStorage, bucketId: string): Promise<string | undefined> {
+    // A separate statement after the lock, so it sees Routes committed while it waited.
+    const bucket = await client.query<{ garage_bucket_id: string }>('select garage_bucket_id from buckets where id = $1 for update', [bucketId]);
+    const routed = await client.query('select 1 from routes where bucket_id = $1 limit 1', [bucketId]);
+    const garageBucketId = bucket.rows[0]?.garage_bucket_id;
+    if (garageBucketId === undefined || routed.rowCount !== 0) {
+        return undefined;
+    }
+    const website = await storage.setWebsite(garageBucketId, undefined);
+    return website.ok ? undefined : website.error;
 }
 
 /** Every Domain that has Routes to live Buckets, for the Routes operator; a stable order. */
@@ -160,12 +174,13 @@ export async function listDomainRoutings(pool: pg.Pool): Promise<DomainRouting[]
         project_name: string;
         domain_id: string;
         hostname: string;
+        kind: 'default' | 'custom';
         route_id: string;
         path_prefix: string;
         bucket_name: string;
         spa_fallback: boolean;
     }>(`
-        select d.project_id, p.name as project_name, d.id as domain_id, d.hostname, r.id as route_id, r.path_prefix, b.name as bucket_name, r.spa_fallback
+        select d.project_id, p.name as project_name, d.id as domain_id, d.hostname, d.kind, r.id as route_id, r.path_prefix, b.name as bucket_name, r.spa_fallback
         from routes r
         join domains d on d.id = r.domain_id
         join buckets b on b.id = r.bucket_id and b.deleted_at is null
@@ -179,7 +194,7 @@ export async function listDomainRoutings(pool: pg.Pool): Promise<DomainRouting[]
         byDomain.set(
             row.domain_id,
             domain === undefined
-                ? { projectId: row.project_id, projectName: row.project_name, domainId: row.domain_id, hostname: row.hostname, routes: [route] }
+                ? { projectId: row.project_id, projectName: row.project_name, domainId: row.domain_id, hostname: row.hostname, kind: row.kind, routes: [route] }
                 : { ...domain, routes: [...domain.routes, route] },
         );
     }

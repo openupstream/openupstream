@@ -1,6 +1,12 @@
 # Let's Encrypt, with DNS-01 on bunny.net through the webhook (decision 69):
 # it covers wildcards and needs no route to the cluster. Staging for dev
 # clusters (decision 70), production for the real one.
+#
+# Custom domains are in zones we do not control, so their Certificates,
+# which the Routes operator labels openupstream.io/component=routes, use
+# HTTP-01 instead (decision 85): cert-manager puts an Ingress for the
+# challenge path in the Certificate's namespace, which Traefik serves on
+# port 80 ahead of its HTTPS redirect (infra/ingress/traefik-values.yaml).
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -15,6 +21,15 @@ spec:
             groupName: acme.openupstream.com
             solverName: bunny
             config: {secretRef: bunny-api, secretNamespace: cert-manager}
+      - selector:
+          matchLabels: {openupstream.io/component: routes}
+        http01:
+          ingress:
+            ingressClassName: traefik
+            ingressTemplate:
+              metadata:
+                annotations:
+                  traefik.ingress.kubernetes.io/router.entrypoints: web
 ---
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -30,3 +45,12 @@ spec:
             groupName: acme.openupstream.com
             solverName: bunny
             config: {secretRef: bunny-api, secretNamespace: cert-manager}
+      - selector:
+          matchLabels: {openupstream.io/component: routes}
+        http01:
+          ingress:
+            ingressClassName: traefik
+            ingressTemplate:
+              metadata:
+                annotations:
+                  traefik.ingress.kubernetes.io/router.entrypoints: web

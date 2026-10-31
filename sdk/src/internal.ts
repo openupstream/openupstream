@@ -4,7 +4,7 @@
  * public API: it is served on its own port, never routed by ingress, and
  * callers authenticate with their Kubernetes ServiceAccount token.
  */
-import type { Account, Database, Id, Member, Project, Route } from './model.js';
+import type { Account, Database, Domain, Id, Member, Project, Route } from './model.js';
 
 /**
  * Kubernetes names, by id (ARCHITECTURE.md, decision 42): the operators
@@ -58,6 +58,8 @@ export interface DomainRouting {
     readonly projectName: string;
     readonly domainId: Id;
     readonly hostname: string;
+    /** A default Domain uses the customer domain's wildcard certificate; a custom one gets its own. */
+    readonly kind: Domain['kind'];
     readonly routes: readonly (Pick<Route, 'id' | 'pathPrefix'> & { readonly bucketName: string; readonly spaFallback: boolean })[];
 }
 

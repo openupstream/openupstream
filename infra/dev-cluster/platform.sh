@@ -113,7 +113,8 @@ kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client
   --from-literal=BILLING_CALLERS="$BILLING_CALLERS" \
   --from-literal=GARAGE_ADMIN_URL=http://garage.garage.svc:3903 \
   --from-literal=GARAGE_S3_URL=http://garage.garage.svc:3900 \
-  --from-literal=CUSTOMER_DOMAIN="$CUSTOMER_DOMAIN" | kubectl apply -f - >/dev/null
+  --from-literal=CUSTOMER_DOMAIN="$CUSTOMER_DOMAIN" \
+  --from-literal=PLATFORM_DOMAIN="$PLATFORM_DOMAIN" | kubectl apply -f - >/dev/null
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/control-plane/deploy/control-plane.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n "$PLATFORM_NS" rollout status deployment/control-plane --timeout=5m
@@ -131,6 +132,7 @@ kubectl -n openupstream-system rollout status deployment/databases-operator --ti
 kubectl -n openupstream-system logs deployment/databases-operator --tail=3
 
 kubectl apply -f "$ROOT/operators/deploy/routes-rbac.yaml" >/dev/null
-sed "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" "$ROOT/operators/deploy/routes-operator.yaml" |
+sed -e "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" -e "s#value: CLUSTER_ISSUER#value: $CLUSTER_ISSUER#" \
+  "$ROOT/operators/deploy/routes-operator.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n openupstream-system rollout status deployment/routes-operator --timeout=5m

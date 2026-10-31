@@ -10,9 +10,10 @@
  * serve (the Host header is the Bucket's name), and one that strips the
  * path prefix.
  *
- * The certificate is the default TLS store's wildcard for the customer
- * domain (infra/ingress); custom domains will bring certificates of their
- * own.
+ * A default Domain uses the default TLS store's wildcard for the customer
+ * domain (infra/ingress). A custom domain gets a Certificate of its own,
+ * which cert-manager solves with HTTP-01: the ClusterIssuer picks that
+ * solver for Certificates carrying COMPONENT_LABEL (decision 85).
  */
 import { type DomainRouting, ingressRouteName } from '@openupstream/sdk';
 import type { KubeObject } from '../kube.js';
@@ -26,13 +27,24 @@ export const ROUTES_COMPONENT = 'routes';
 export const GARAGE_WEB = { host: 'garage.garage.svc.cluster.local', port: 3902 } as const;
 
 export const TRAEFIK = 'traefik.io/v1alpha1';
+export const CERT_MANAGER = 'cert-manager.io/v1';
 
-/** The kinds this operator prunes; Namespaces it never deletes. */
+/**
+ * The kinds this operator prunes; Namespaces it never deletes. A pruned
+ * Certificate's Secret goes with it (cert-manager sets the Certificate as
+ * its owner, infra/dev-cluster/operators.sh).
+ */
 export const PRUNED_KINDS = [
     { apiVersion: TRAEFIK, kind: 'IngressRoute' },
     { apiVersion: TRAEFIK, kind: 'Middleware' },
     { apiVersion: 'v1', kind: 'Service' },
+    { apiVersion: CERT_MANAGER, kind: 'Certificate' },
 ] as const;
+
+export interface RoutesSettings {
+    /** The ClusterIssuer for custom domains' certificates: `letsencrypt`, or `letsencrypt-staging` on a dev cluster. */
+    readonly clusterIssuer: string;
+}
 
 type Routed = DomainRouting['routes'][number];
 
@@ -80,6 +92,21 @@ const routeObjects = (routing: DomainRouting, route: Routed): KubeObject[] => [
         : [middleware(routing.projectId, stripMiddlewareName(route), { stripPrefix: { prefixes: [route.pathPrefix] } })]),
 ];
 
+const certificateName = (routing: DomainRouting) => `domain-${routing.domainId}`;
+const tlsSecretName = (routing: DomainRouting) => `${certificateName(routing)}-tls`;
+
+const certificate = (routing: DomainRouting, settings: RoutesSettings): KubeObject => ({
+    apiVersion: CERT_MANAGER,
+    kind: 'Certificate',
+    metadata: { name: certificateName(routing), namespace: projectNamespace(routing.projectId), labels: labels(routing.projectId) },
+    spec: {
+        secretName: tlsSecretName(routing),
+        issuerRef: { kind: 'ClusterIssuer', name: settings.clusterIssuer },
+        dnsNames: [routing.hostname],
+        privateKey: { algorithm: 'ECDSA', size: 256, rotationPolicy: 'Always' },
+    },
+});
+
 const ingressRoute = (routing: DomainRouting): KubeObject => ({
     apiVersion: TRAEFIK,
     kind: 'IngressRoute',
@@ -101,16 +128,23 @@ const ingressRoute = (routing: DomainRouting): KubeObject => ({
             ],
             services: [{ name: 'garage-web', port: GARAGE_WEB.port }],
         })),
-        // The default TLS store's certificate: the customer domain's wildcard.
-        tls: {},
+        // A default Domain: the default TLS store's certificate, the customer domain's wildcard.
+        tls: routing.kind === 'custom' ? { secretName: tlsSecretName(routing) } : {},
     },
 });
 
-/** Applied in this order: a Project's objects first, then each Domain's Middlewares, then its IngressRoute. */
-export function planRoutes(routings: readonly DomainRouting[]): KubeObject[] {
+/**
+ * Applied in this order: a Project's objects first, then each Domain's
+ * Middlewares and Certificate, then its IngressRoute.
+ */
+export function planRoutes(routings: readonly DomainRouting[], settings: RoutesSettings): KubeObject[] {
     const projects = [...new Map(routings.map((routing) => [routing.projectId, routing])).values()];
     return [
         ...projects.flatMap(projectObjects),
-        ...routings.flatMap((routing) => [...routing.routes.flatMap((route) => routeObjects(routing, route)), ingressRoute(routing)]),
+        ...routings.flatMap((routing) => [
+            ...routing.routes.flatMap((route) => routeObjects(routing, route)),
+            ...(routing.kind === 'custom' ? [certificate(routing, settings)] : []),
+            ingressRoute(routing),
+        ]),
     ];
 }

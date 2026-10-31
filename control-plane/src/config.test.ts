@@ -14,6 +14,7 @@ const env = {
     GARAGE_ADMIN_TOKEN: 'admin-token',
     GARAGE_S3_URL: 'http://garage.garage.svc.cluster.local:3900',
     CUSTOMER_DOMAIN: 'openupstream.app',
+    PLATFORM_DOMAIN: 'openupstream.com',
 };
 
 test('a complete environment, with defaults for the rest', () => {
@@ -29,7 +30,7 @@ test('a complete environment, with defaults for the rest', () => {
     assert.deepEqual(config.value.newAccountHolds, []);
 });
 
-test('Garage inside the cluster, and the customer domain', () => {
+test('Garage inside the cluster, the customer domain and the platform domain', () => {
     const config = configFrom(env);
     assert.ok(config.ok);
     assert.deepEqual(config.value.garage, {
@@ -38,10 +39,12 @@ test('Garage inside the cluster, and the customer domain', () => {
         s3Url: env.GARAGE_S3_URL,
     });
     assert.equal(config.value.customerDomain, 'openupstream.app');
-    const bad = configFrom({ ...env, GARAGE_S3_URL: 'not a url', CUSTOMER_DOMAIN: 'https://openupstream.app' });
+    assert.equal(config.value.platformDomain, 'openupstream.com');
+    const bad = configFrom({ ...env, GARAGE_S3_URL: 'not a url', CUSTOMER_DOMAIN: 'https://openupstream.app', PLATFORM_DOMAIN: 'Openupstream' });
     assert.deepEqual(bad.ok ? [] : bad.error, [
         'GARAGE_ADMIN_URL and GARAGE_S3_URL must be URLs',
         'CUSTOMER_DOMAIN must be a domain name, e.g. openupstream.app',
+        'PLATFORM_DOMAIN must be a domain name, e.g. openupstream.com',
     ]);
 });
 
@@ -73,6 +76,7 @@ test('every problem is reported at once', () => {
         'GARAGE_S3_URL is not set',
         'GARAGE_ADMIN_TOKEN is not set',
         'CUSTOMER_DOMAIN is not set',
+        'PLATFORM_DOMAIN is not set',
         'PORT and INTERNAL_PORT must be port numbers',
     ]);
 });

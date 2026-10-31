@@ -11,7 +11,7 @@
 import type { DomainRouting } from '@openupstream/sdk';
 import { type Kube, type KubeError, type KubeObject, type ObjectRef, refOf } from '../kube.js';
 import type { Result } from '../result.js';
-import { COMPONENT_LABEL, PRUNED_KINDS, ROUTES_COMPONENT, planRoutes } from './manifests.js';
+import { COMPONENT_LABEL, PRUNED_KINDS, ROUTES_COMPONENT, type RoutesSettings, planRoutes } from './manifests.js';
 
 export interface RoutesReport {
     readonly applied: readonly ObjectRef[];
@@ -21,8 +21,8 @@ export interface RoutesReport {
 
 const keyOf = (ref: ObjectRef): string => `${ref.apiVersion}/${ref.kind}/${ref.namespace ?? ''}/${ref.name}`;
 
-export async function reconcileRoutes(kube: Kube, routings: readonly DomainRouting[]): Promise<RoutesReport> {
-    const wanted = planRoutes(routings);
+export async function reconcileRoutes(kube: Kube, routings: readonly DomainRouting[], settings: RoutesSettings): Promise<RoutesReport> {
+    const wanted = planRoutes(routings, settings);
     // Per Project in order (its namespace before what goes into it, a
     // Middleware before the IngressRoute that names it), Projects side by side.
     const namespaceOf = (object: KubeObject) => object.metadata.namespace ?? object.metadata.name;
@@ -48,7 +48,7 @@ export async function reconcileRoutes(kube: Kube, routings: readonly DomainRouti
             failed.push({ ref: { apiVersion, kind, name: '*' }, error: listed.error });
             continue;
         }
-        // IngressRoutes come first in PRUNED_KINDS, so a Middleware is only deleted after what names it.
+        // IngressRoutes come first in PRUNED_KINDS, so a Middleware or Certificate is only deleted after what names it.
         for (const ref of listed.value.filter((existing) => !wantedKeys.has(keyOf(existing)))) {
             const result = await kube.remove(ref);
             if (result.ok) {

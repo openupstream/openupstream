@@ -46,6 +46,7 @@ const isRouting = (value: unknown): value is DomainRouting =>
     typeof value['projectName'] === 'string' &&
     typeof value['domainId'] === 'string' &&
     typeof value['hostname'] === 'string' &&
+    (value['kind'] === 'default' || value['kind'] === 'custom') &&
     Array.isArray(value['routes']) &&
     value['routes'].every(
         (route: unknown) =>
@@ -59,7 +60,7 @@ const isRouting = (value: unknown): value is DomainRouting =>
 export const parseRoutings = (body: unknown): Result<DomainRouting[], FetchRowsError> =>
     Array.isArray(body) && body.every(isRouting)
         ? ok(body)
-        : err({ kind: 'malformed', message: 'expected an array of { projectId, projectName, domainId, hostname, routes }' });
+        : err({ kind: 'malformed', message: 'expected an array of { projectId, projectName, domainId, hostname, kind, routes }' });
 
 export type FetchRoutings = () => Promise<Result<DomainRouting[], FetchRowsError>>;
 

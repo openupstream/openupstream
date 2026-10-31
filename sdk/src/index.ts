@@ -18,6 +18,7 @@ import type {
     Bucket,
     BucketDetails,
     BucketInput,
+    CustomDomainInput,
     DatabaseDetails,
     DatabaseInput,
     Domain,
@@ -121,6 +122,21 @@ export class OpenUpstreamClient {
     /** The Project's Domains; every Project has its default Domain. */
     listDomains(projectId: Id): Promise<ApiResult<Domain[]>> {
         return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/domains`);
+    }
+
+    /** Claims a custom domain; publish its TXT record, then call verifyDomain. */
+    createDomain(projectId: Id, input: CustomDomainInput): Promise<ApiResult<Domain>> {
+        return this.#call('POST', `/v1/projects/${encodeURIComponent(projectId)}/domains`, input);
+    }
+
+    /** Looks up the custom domain's TXT record now; once found, the Domain is verified and its Routes are served. */
+    verifyDomain(projectId: Id, domainId: Id): Promise<ApiResult<Domain>> {
+        return this.#call('POST', `/v1/projects/${encodeURIComponent(projectId)}/domains/${encodeURIComponent(domainId)}/verify`);
+    }
+
+    /** Deletes a custom domain and its Routes; the default Domain cannot be deleted. */
+    deleteDomain(projectId: Id, domainId: Id): Promise<ApiResult<void>> {
+        return this.#call('DELETE', `/v1/projects/${encodeURIComponent(projectId)}/domains/${encodeURIComponent(domainId)}`);
     }
 
     listRoutes(projectId: Id, domainId: Id): Promise<ApiResult<Route[]>> {

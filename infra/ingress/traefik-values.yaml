@@ -37,13 +37,16 @@ ports:
   web:
     hostPort: 80
     # Everything on 80 goes to HTTPS; bunny.net's health check (any non-5xx
-    # on port 80) counts the redirect as healthy.
+    # on port 80) counts the redirect as healthy. At the lowest priority, so
+    # the one kind of router on port 80, cert-manager's HTTP-01 challenge
+    # for a custom domain, answers before it (decision 85).
     http:
       redirections:
         entryPoint:
           to: websecure
           scheme: https
           permanent: true
+          priority: 1
   websecure:
     hostPort: 443
 
@@ -58,8 +61,20 @@ providers:
     # Routes operator creates Services there; customers create no
     # Kubernetes objects.
     allowExternalNameServices: true
+  # Only for cert-manager's HTTP-01 solvers (decision 85): the Ingresses
+  # it creates for a custom domain's challenge, on port 80 alone
+  # (infra/ingress/cluster-issuers.yaml). Everything else is an
+  # IngressRoute.
   kubernetesIngress:
-    enabled: false
+    enabled: true
+    labelSelector: acme.cert-manager.io/http01-solver=true
+    # No Service to copy an address from (service.enabled is false).
+    publishedService:
+      enabled: false
+
+ingressClass:
+  enabled: true
+  isDefaultClass: false
 
 log:
   format: json
