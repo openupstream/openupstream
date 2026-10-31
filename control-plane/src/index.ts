@@ -17,7 +17,7 @@ import { KubeConfig } from '@kubernetes/client-node';
 import { INTERNAL_API_AUDIENCE } from '@openupstream/sdk';
 import pg from 'pg';
 import { createApi } from './api/app.js';
-import { apiKeyVerifier, keysFrom, madauthAuthenticator, sessionVerifier } from './api/auth.js';
+import { accessTokenVerifier, apiKeyVerifier, keysFrom, madauthAuthenticator, sessionVerifier } from './api/auth.js';
 import { getAccountRecord, liftHold, placeHold } from './accounts/store.js';
 import { s3BackupStore } from './backups.js';
 import { type CleanupDeps, cleanupPass } from './cleanup.js';
@@ -114,6 +114,7 @@ async function main(): Promise<void> {
     });
     internal.listen(config.value.internalPort);
 
+    const madauthKeys = keysFrom(auth.jwks === undefined ? { jwksUrl: new URL('/.well-known/jwks.json', auth.madauthUrl).href } : { jwks: auth.jwks });
     const api = createApi({
         pool,
         kube,
@@ -122,12 +123,11 @@ async function main(): Promise<void> {
         platformDomain: config.value.platformDomain,
         lookupTxt: txtLookup(),
         newAccountHolds: config.value.newAccountHolds,
+        ...(auth.cliClientId === undefined ? {} : { cliLogin: { issuer: auth.issuer, clientId: auth.cliClientId } }),
         authenticate: madauthAuthenticator(
-            sessionVerifier({
-                issuer: auth.issuer,
-                keys: keysFrom(auth.jwks === undefined ? { jwksUrl: new URL('/.well-known/jwks.json', auth.madauthUrl).href } : { jwks: auth.jwks }),
-            }),
+            sessionVerifier({ issuer: auth.issuer, keys: madauthKeys }),
             apiKeyVerifier(auth.madauthUrl),
+            accessTokenVerifier({ issuer: auth.issuer, keys: madauthKeys, clientIds: auth.cliClientId === undefined ? [] : [auth.cliClientId] }),
         ),
         log,
     });

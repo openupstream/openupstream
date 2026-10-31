@@ -109,6 +109,14 @@ Then `POST https://api.dev.openupstream.com/v1/accounts` with that token
 creates your Account; API keys come from `POST /auth/api-keys/create` with
 the same cookie (scopes `openupstream:read` or `openupstream:write`).
 
+For `oup login`, run `platform.sh` with `INITIAL_ADMIN_EMAIL` set, sign up
+with that address as above, register the CLI with
+`CURL_OPTIONS=-k ../madauth/register-cli.sh https://dev.openupstream.com`,
+and run `platform.sh` again with the printed `CLI_CLIENT_ID`. Until the
+approval page exists, approve a code with the session cookie:
+`POST /auth/device/lookup` and then `POST /auth/device/approve`, each with
+`{"code": "<code>"}`.
+
 Without the control plane, one pass from this machine, from `operators/`:
 
 ```bash

@@ -50,6 +50,8 @@ export interface ApiDeps {
     readonly platformDomain: string;
     /** Where custom domains' TXT ownership proofs are looked up. */
     readonly lookupTxt: TxtLookup;
+    /** Where `oup login` signs in (decision 87); without it, `GET /v1/login` answers 404. */
+    readonly cliLogin?: { readonly issuer: string; readonly clientId: string };
     /** The Holds every new Account starts with (ARCHITECTURE.md, decision 78). */
     readonly newAccountHolds?: readonly string[];
     readonly log?: (entry: Record<string, unknown>) => void;
@@ -125,6 +127,9 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     });
 
     app.get('/v1/health', (c) => c.json({ ok: true }));
+
+    // Before the authentication below: the CLI asks this before it has a token.
+    app.get('/v1/login', (c) => (deps.cliLogin === undefined ? c.json(notFound, 404) : c.json(deps.cliLogin)));
 
     app.use('/v1/*', async (c, next) => {
         const token = /^Bearer (\S+)$/.exec(c.req.header('authorization') ?? '')?.[1];

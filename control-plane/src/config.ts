@@ -26,6 +26,12 @@ export interface Config {
         readonly madauthUrl: string;
         /** A JWKS document instead of madAuth's (tests). */
         readonly jwks?: string;
+        /**
+         * `oup`'s client ID in madAuth, registered with the device grant
+         * (decision 87): its access tokens are accepted, and `GET /v1/login`
+         * tells the CLI. Unset: the CLI cannot sign in, API keys still work.
+         */
+        readonly cliClientId?: string;
     };
     readonly backup: {
         readonly endpoint: string;
@@ -88,6 +94,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
     if (madauthUrl !== '' && !URL.canParse(madauthUrl)) {
         problems.push('MADAUTH_URL must be a URL');
     }
+    const cliClientId = env['CLI_CLIENT_ID'] ?? '';
     const jwks = env['AUTH_JWKS'] ?? '';
     if (jwks !== '' && !isJwks(jwks)) {
         problems.push('AUTH_JWKS must be a JWKS document: {"keys": [...]}');
@@ -138,7 +145,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
         billingCallers: new Set(list(env['BILLING_CALLERS'])),
         routesCallers: new Set(list(env['ROUTES_CALLERS'] ?? DEFAULT_ROUTES_CALLERS.join(','))),
         newAccountHolds,
-        auth: { issuer, madauthUrl, ...(jwks === '' ? {} : { jwks }) },
+        auth: { issuer, madauthUrl, ...(jwks === '' ? {} : { jwks }), ...(cliClientId === '' ? {} : { cliClientId }) },
         backup: {
             endpoint: env['BACKUP_ENDPOINT'] ?? BACKUP_ENDPOINT,
             region: env['BACKUP_REGION'] ?? 'nbg1',

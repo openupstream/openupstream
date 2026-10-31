@@ -188,6 +188,15 @@ export interface SecretInput {
     value: string;
 }
 
+/**
+ * Where `oup login` signs in (`GET /v1/login`, no token needed): madAuth's
+ * issuer and the CLI's client ID there, for the device authorization grant.
+ */
+export interface CliLogin {
+    issuer: string;
+    clientId: string;
+}
+
 /** The TXT record that proves an Account owns a custom domain. */
 export interface TxtRecord {
     name: string;

@@ -115,6 +115,21 @@ describe('authentication', () => {
         assert.equal((await api.request('/v1/health')).status, 200);
     });
 
+    test("the CLI asks where to sign in without a token; 404 when no CLI client is registered", async () => {
+        assert.equal((await api.request('/v1/login')).status, 404);
+        const withCli = createApi({
+            pool: db.pool,
+            kube,
+            storage,
+            ...domainDeps,
+            cliLogin: { issuer: ISSUER, clientId: 'mc_cli' },
+            authenticate: async () => err({ kind: 'invalid', reason: 'none' }),
+        });
+        const response = await withCli.request('/v1/login');
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { issuer: ISSUER, clientId: 'mc_cli' });
+    });
+
     test('no token, a forged token, another issuer, another token type or an expired token: 401', async () => {
         assert.equal((await call('GET', '/v1/projects')).status, 401);
         const bad = [

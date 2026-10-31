@@ -39,7 +39,8 @@ npm run migrate:create -w control-plane add-something
 with the environment `src/config.ts` lists (`DATABASE_URL`, the `AUTH_*`
 and `BACKUP_*` settings and the backup credentials; Garage's admin API and
 S3 API inside the cluster, `GARAGE_ADMIN_URL` and `GARAGE_S3_URL`, with
-`GARAGE_ADMIN_TOKEN`; `CUSTOMER_DOMAIN`, under which Buckets are reached
+`GARAGE_ADMIN_TOKEN`; optionally `CLI_CLIENT_ID`, the client ID of `oup`
+in madAuth (`infra/madauth/register-cli.sh`); `CUSTOMER_DOMAIN`, under which Buckets are reached
 at `<bucket>.s3.<CUSTOMER_DOMAIN>`; `PLATFORM_DOMAIN`, our own hostnames,
 which like `CUSTOMER_DOMAIN` cannot be claimed as custom domains; optionally
 `NEW_ACCOUNT_HOLDS`, the Holds every new Account starts with, e.g.
@@ -56,10 +57,12 @@ Database. `infra/dev-cluster/platform.sh` bootstraps both.
 
 ## Public API
 
-`src/api/` (Hono, zod validation). Every route but `GET /v1/health` needs a
-madAuth credential as `Authorization: Bearer …` (`src/api/auth.ts`): a
-session token, verified against madAuth's JWKS (`MADAUTH_URL`, madAuth
-inside the cluster) for the issuer `AUTH_ISSUER`, or an API key
+`src/api/` (Hono, zod validation). Every route but `GET /v1/health` and
+`GET /v1/login` needs a madAuth credential as `Authorization: Bearer …`
+(`src/api/auth.ts`): a session token, verified against madAuth's JWKS
+(`MADAUTH_URL`, madAuth inside the cluster) for the issuer `AUTH_ISSUER`;
+an access token `oup login` got (`typ: at+jwt`, verified the same way, with
+`aud` = `CLI_CLIENT_ID`), which may do what a session may; or an API key
 (`madauth_…`), which madAuth checks for us; a key needs `openupstream:read`
 for GET and `openupstream:write` for anything else. The caller acts for
 every Account its madAuth user is a Member of. A Project of another
@@ -68,6 +71,7 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 
 | Route | |
 | --- | --- |
+| `GET /v1/login` | no token needed: `{issuer, clientId}`, where `oup login` signs in with the device grant; 404 without `CLI_CLIENT_ID` |
 | `GET /v1/accounts` | the caller's Accounts, each with its `holds` |
 | `POST /v1/accounts` | `{name}` → 201: a new Account, the caller its first Member |
 | `GET /v1/projects` | the Projects of the caller's Accounts |

@@ -196,7 +196,7 @@ front of each. madAuth needs its Database for every sign-in: while that
 Database fails over, sign-in is unavailable (53 s measured on the dev
 cluster).
 
-The API accepts two kinds of madAuth credentials (#64):
+The API accepts three kinds of madAuth credentials (#64, #87):
 
 - a session token: a JWT (ES256, `typ: madauth-session+jwt`, issuer
   checked, no audience) verified against madAuth's JWKS, fetched from madAuth
@@ -207,6 +207,21 @@ The API accepts two kinds of madAuth credentials (#64):
   reuses the answer for a minute, so a revoked key works for at most a
   minute more. `openupstream:read` allows every GET, `openupstream:write`
   everything.
+- an access token of `oup` (`typ: at+jwt`, ES256, issuer checked, `aud` the
+  CLI's client ID, valid 15 minutes), verified against the same JWKS. `oup
+  login` gets it with madAuth's device authorization grant (RFC 8628, madAuth
+  0.7): it shows a code and opens the approval page, where the user signs
+  in with any method they have and approves; over SSH it prints the URL and
+  the code instead. It asks for `offline_access`, keeps the refresh token
+  (30 days from its last use, rotated on every use) in
+  `~/.config/openupstream/credentials.json` (mode 600) and stores each new
+  one before it uses the new access token. Like a session, it may do
+  everything its user may. It carries no e-mail address, so creating an
+  Account still needs a session or an API key. The CLI learns madAuth's
+  issuer and its client ID from `GET /v1/login`; `OUP_API_KEY` replaces the
+  sign-in in CI. An admin registers the CLI once
+  (`infra/madauth/register-cli.sh`); the approval page at madAuth's
+  `loginUrl` comes with the dashboard's first page.
 
 The subject is a madAuth user, which can be a Member of several Accounts.
 A signed-in user creates an Account with `POST /v1/accounts` and becomes its
@@ -378,6 +393,13 @@ digest (#55).
   `max-age=31536000, immutable`, `index.html` gets `no-cache`, everything else
   `max-age=300`. Files uploaded with another S3 client keep whatever headers
   that client set; ingress does not rewrite them.
+- `oup site deploy <dir> --bucket <name>` makes the Bucket mirror the
+  directory (#88): it uploads only files whose MD5 differs from the
+  object's ETag, every `index.html` after the other files, so a client that
+  loads the new one finds the assets it names, then deletes the objects the
+  directory no longer has; `--keep` leaves them. Dotfiles stay out, except
+  `.well-known`. It uses the Bucket's own key, which the API hands to a
+  caller who may write.
 - Compression (gzip, brotli, zstd) at Traefik. No CDN; customers who want one
   put Cloudflare in front.
 
@@ -661,6 +683,8 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 83 | Garage runs from our own manifests: a StatefulSet with one node per Site, Kubernetes discovery with its CustomResourceDefinition installed by us, the layout assigned once by the setup script | Garage's Helm chart (not published to a chart repository, only in Garage's git repository); letting Garage create its CustomResourceDefinition; connecting nodes by hand | a hundred lines of YAML we can read in one go, like the rest of `infra/`; Garage only needs rights on its own GarageNode objects, not to create any CustomResourceDefinition; nodes find each other again after restarts without a script |
 | 84 | Static sites: Garage's website endpoint behind Traefik. The control plane sets a Bucket's website settings (index, SPA fallback) in Garage when a Route is created; a Routes operator applies an IngressRoute per Domain with per-Route Middlewares (Host header = Bucket name, prefix stripped) and an ExternalName Service to Garage, and deletes its objects the routing table no longer has; default Domains share one wildcard certificate in Traefik's default TLS store; SPA fallback is per Bucket, so Routes to one Bucket must agree | the control plane writing the Traefik objects itself; keeping the prefix in object keys; SPA fallback in Traefik's errors middleware; a certificate per default Domain | the operator pattern of the Databases, with Garage's admin token staying in the control plane only; one site mounts at any prefix; Garage already has the routing rule; a wildcard needs no issuance per Project. Contradicts the earlier plan of an operator writing Garage's website settings. Traefik must allow ExternalName Services, which only the Routes operator creates |
 | 85 | Custom domains: a claim gets a random token, published by the Account as TXT at `_openupstream.<domain>` and looked up when it calls verify, once, through the cluster's resolver; hostnames under the customer and platform domains, or verified by another Project, cannot be claimed; the Routes operator gives a verified custom domain with Routes a cert-manager Certificate (HTTP-01, selected by label on the existing ClusterIssuers) and deletes it with the Domain, its Secret garbage-collected through cert-manager's owner references | the control plane polling pending claims; re-checking the TXT record periodically; a separate HTTP-01 ClusterIssuer; DNS-01 by CNAME-delegating `_acme-challenge` to us | verification while the request waits, like Buckets, gives the Account its answer at once; a removed record does not take a site down, the claim is what was proven; one issuer per environment keeps the platform's and customers' certificates on the same account; HTTP-01 needs nothing from the customer beyond the CNAME the traffic needs anyway. Traefik's Ingress provider is enabled, limited to cert-manager's solver Ingresses, and its port-80 redirect drops to the lowest priority |
+| 87 | `oup login` uses madAuth's device authorization grant (RFC 8628, madAuth 0.7) as the public client `oup CLI`, asking for `openid email offline_access`; the control plane accepts madAuth access tokens (`at+jwt`, `aud` = `CLI_CLIENT_ID`) with a session's rights and tells the CLI the issuer and client ID at `GET /v1/login`; the refresh token is kept in `~/.config/openupstream/credentials.json` (mode 600) and each new one stored before use; `OUP_API_KEY` for CI | authorization code with PKCE and a loopback redirect; both flows; e-mail and password in the terminal turned into an API key; pasting an API key | the flow RFC 8628 wrote for command-line tools, as `gh auth login` and `az login` use: it works over SSH, in containers and on headless machines, with every sign-in method, passkeys included; `verification_uri_complete` makes it one click when a browser is at hand, so a loopback flow would add code for no gain; a password in the terminal would leave out passkey users. madAuth refuses clients without `deviceFlow`, and only an admin with a fresh sign-in registers one |
+| 88 | `oup site deploy` makes the Bucket mirror the directory: changed files only (MD5 against the ETag), `index.html` files after the rest, then stale objects deleted (`--keep` to leave them); cache headers and content types from the file name | upload only, never delete | a deploy should leave exactly the build behind, or deleted pages stay reachable; uploading the index last keeps a client from loading an index whose assets are not there yet; hashed assets of the previous build go with it, so a page open from before the deploy may miss a lazily loaded chunk; `--keep` is for sites that need that |
 
 ## Open questions
 
@@ -757,7 +781,8 @@ Decisions table once it is settled.
    images; creating and deleting Projects and Databases through the
    public API, with the cleanup; madAuth with sign-up, API keys and
    Accounts created through the API (2026-10-17). Left: TopoLVM, restore
-   through the API, `oup login` and `oup pg` commands. Public hostnames for
+   through the API, the `oup pg` commands. Done since: `oup login`
+   (#87). Public hostnames for
    madAuth and the API come with step 2, together with SES and the
    payment-method gate that open sign-up needs.
 2. Object storage and static sites: Garage, routing table, Traefik,
@@ -780,8 +805,8 @@ Decisions table once it is settled.
    #85): claim, TXT proof, a certificate of their own through HTTP-01,
    issued within 30 s of the first Route and served in both compute Sites;
    deleting the Domain removed its Certificate and Secret in the next pass.
-   Left:
-   `oup site deploy` with its cache headers, the production DNS zones.
+   `oup site deploy` with its cache headers (#88). Left: the approval page
+   for `oup login` at madAuth's `loginUrl`, the production DNS zones.
 3. Containers, Service mode.
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`

@@ -281,6 +281,27 @@ Only needed by whoever publishes it; using the SDK needs nothing.
 5. Later versions: a `sdk-v<version>` tag, then an approval on GitHub
    (sdk/README.md, "Releasing").
 
+## 8. The CLI's sign-in
+
+`oup login` signs in with madAuth's device authorization grant (ARCHITECTURE.md,
+decision 87), as a client an admin registers once per madAuth:
+
+1. Make yourself madAuth's first admin: set `INITIAL_ADMIN_EMAIL` to your
+   address (`infra/dev-cluster/platform.sh` passes it to madAuth), sign up
+   or sign in with it and confirm the address.
+2. Register the client; it asks for your e-mail and password, so neither
+   ends up in the shell history:
+
+   ```bash
+   infra/madauth/register-cli.sh https://openupstream.com
+   ```
+
+   It prints `CLI_CLIENT_ID=mc_…`. An admin with a second factor adds the
+   client in the browser instead, as the script's header shows.
+3. Set `CLI_CLIENT_ID` for the control plane (`platform.sh` takes it from
+   the environment) and roll it out. `GET /v1/login` then answers, and
+   `oup login --api https://api.openupstream.com` works.
+
 ## Coming with build step 2
 
 - **No payment method needed** when you run openupstream yourself: leave
