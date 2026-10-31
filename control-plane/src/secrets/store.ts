@@ -171,3 +171,38 @@ export async function readSecretValues(
     }
     return ok(values);
 }
+
+/**
+ * Seals a value of the Project that is not a Secret, such as a Service's
+ * registry credentials, with the Project's data key. `name` binds it like a
+ * Secret's name; it contains a `/`, so it never equals one.
+ */
+export async function sealProjectValue(
+    db: Db,
+    kek: KeyEncryptionKey,
+    projectId: string,
+    name: string,
+    value: string,
+): Promise<Result<Buffer, SecretStoreError>> {
+    const dataKey = await dataKeyFor(db, kek, projectId);
+    return dataKey.ok ? ok(encryptSecretValue(dataKey.value, { projectId, name }, value)) : dataKey;
+}
+
+/** Opens what sealProjectValue sealed under the same Project and name. */
+export async function openProjectValue(
+    db: Db,
+    kek: KeyEncryptionKey,
+    projectId: string,
+    name: string,
+    sealed: Buffer,
+): Promise<Result<string, SecretStoreError>> {
+    const dataKey = await readDataKey(db, kek, projectId);
+    if (!dataKey.ok) {
+        return dataKey;
+    }
+    if (!dataKey.value) {
+        return err({ kind: 'project-not-found', projectId });
+    }
+    const value = decryptSecretValue(dataKey.value, { projectId, name }, sealed);
+    return value.ok ? value : err({ kind: 'envelope', projectId, error: value.error });
+}

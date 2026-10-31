@@ -239,8 +239,8 @@ a billing service nothing is held, which is what someone who runs
 openupstream themselves gets by default (Open question 16).
 
 The public API (Hono, zod validation, `control-plane/src/api`) serves
-Projects and their Databases, Buckets, Domains, Routes and Secrets in the
-caller's Accounts; another Account's
+Projects and their Databases, Buckets, Services, Domains, Routes and
+Secrets in the caller's Accounts; another Account's
 Project answers 404 (#61). A Database's state (`provisioning`, `ready`,
 `degraded`, `unknown`) is read live from its Cluster. Its connection details
 (the Pooler's in-cluster address, database and user `app`) are returned,
@@ -418,6 +418,32 @@ digest (#55).
   acceptable on shared nodes.
 - Services with two or more replicas are spread across both compute Sites;
   single-replica Services run in the Home site of the Project's Databases.
+- A Service is a row in the control plane (#92): `POST …/services` with its
+  image, port, replicas, memory and CPU, `PATCH` to change it, `POST
+  …/services/{id}/deploy` to resolve the same tag again, `DELETE` (409
+  while a Route serves it). Its state (`deploying`, `running`, `degraded`)
+  is read live from its Deployment. The control plane resolves the tag to
+  a digest while the request waits, with the registry's token flow: an image
+  the registry does not have, or will not serve with the given credentials,
+  is a 400, a registry that cannot be reached a 503, and nothing is written.
+  Only a new image, new credentials or a deploy resolve again, so scaling
+  never moves the image.
+- The registry is the customer's choice, so the control plane reaches it
+  over https only and refuses one whose name resolves to a loopback,
+  private, link-local or shared address: a Service cannot make the control
+  plane call into the cluster or a private network. The check is made when
+  the name is looked up; a registry that changes its DNS answer before the
+  request is not caught.
+- Pull credentials (`registryAuth`, a username and password) are sealed with
+  the Project's data key like a Secret's value and never returned. The
+  control plane renders all of a Project's into one
+  `kubernetes.io/dockerconfigjson` Secret, `project-registry-auth`, an entry
+  per Service under its image's repository (`ghcr.io/acme/api`), which
+  kubelet matches as a prefix of the image it pulls; every Service names
+  it in `imagePullSecrets`. Two Services of one Project that pull the same
+  repository with different credentials share one entry.
+- Without a `homeSite` of its own, a single replica runs in the Home site of
+  the Project's oldest live Database, else in `hetzner-fsn1`.
 
 ## Routing and domains
 
@@ -703,6 +729,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 85 | Custom domains: a claim gets a random token, published by the Account as TXT at `_openupstream.<domain>` and looked up when it calls verify, once, through the cluster's resolver; hostnames under the customer and platform domains, or verified by another Project, cannot be claimed; the Routes operator gives a verified custom domain with Routes a cert-manager Certificate (HTTP-01, selected by label on the existing ClusterIssuers) and deletes it with the Domain, its Secret garbage-collected through cert-manager's owner references | the control plane polling pending claims; re-checking the TXT record periodically; a separate HTTP-01 ClusterIssuer; DNS-01 by CNAME-delegating `_acme-challenge` to us | verification while the request waits, like Buckets, gives the Account its answer at once; a removed record does not take a site down, the claim is what was proven; one issuer per environment keeps the platform's and customers' certificates on the same account; HTTP-01 needs nothing from the customer beyond the CNAME the traffic needs anyway. Traefik's Ingress provider is enabled, limited to cert-manager's solver Ingresses, and its port-80 redirect drops to the lowest priority |
 | 87 | `oup login` uses madAuth's device authorization grant (RFC 8628, madAuth 0.7) as the public client `oup CLI`, asking for `openid email offline_access`; the control plane accepts madAuth access tokens (`at+jwt`, `aud` = `CLI_CLIENT_ID`) with a session's rights and tells the CLI the issuer and client ID at `GET /v1/login`; the refresh token is kept in `~/.config/openupstream/credentials.json` (mode 600) and each new one stored before use; `OUP_API_KEY` for CI | authorization code with PKCE and a loopback redirect; both flows; e-mail and password in the terminal turned into an API key; pasting an API key | the flow RFC 8628 wrote for command-line tools, as `gh auth login` and `az login` use: it works over SSH, in containers and on headless machines, with every sign-in method, passkeys included; `verification_uri_complete` makes it one click when a browser is at hand, so a loopback flow would add code for no gain; a password in the terminal would leave out passkey users. madAuth refuses clients without `deviceFlow`, and only an admin with a fresh sign-in registers one |
 | 88 | `oup site deploy` makes the Bucket mirror the directory: changed files only (MD5 against the ETag), `index.html` files after the rest, then stale objects deleted (`--keep` to leave them); cache headers and content types from the file name | upload only, never delete | a deploy should leave exactly the build behind, or deleted pages stay reachable; uploading the index last keeps a client from loading an index whose assets are not there yet; hashed assets of the previous build go with it, so a page open from before the deploy may miss a lazily loaded chunk; `--keep` is for sites that need that |
+| 92 | Services API: a Service is a row, created, changed (`PATCH`) and redeployed (`POST …/deploy`) through the API, its state read from its Deployment. The control plane resolves the tag to a digest at the registry while the request waits, over https and never at a private address; pull credentials are per Service, sealed with the Project's data key, and rendered into one dockerconfigjson Secret per Project keyed by repository | Deployments as immutable records with history and rollback; the operator resolving tags on its pass; named registry credentials shared by Services; a pull Secret per Service | the pattern of Buckets: a 201 means the image exists and can be pulled, and a bad tag or credentials is an answer, not a state to poll; the operator never needs credentials or the internet. One Secret per Project lives and dies with the namespace and needs no pruning by the control plane; kubelet's prefix match keeps credentials per repository. Rollback is a `PATCH` back to a digest (`image@sha256:…`) |
 | 91 | The control plane writes the Kubernetes Secret `project-secrets` per Project itself, after each change and in a 30 s pass; no Secrets operator. The public API: `GET …/secrets` (names), `PUT …/secrets/{name}` `{value}`, `DELETE …/secrets/{name}`; every Service of the Project gets all of them | a Secrets operator fed decrypted values by an internal API route (the earlier plan of decision 20); per-Service selection of Secrets | the control plane alone holds the key-encryption key, so plaintext never travels between processes and no operator can read every Project's Secrets; it needs `create` and `patch` on Secrets cluster-wide, which a Secrets operator would have needed as well. Project-wide Secrets match how they are described to customers; selecting per Service can come later without changing the API |
 
 ## Open questions
@@ -833,8 +860,9 @@ Decisions table once it is settled.
    Left: the approval page
    for `oup login` at madAuth's `loginUrl`, the production DNS zones.
 3. Containers, Service mode. Done so far: Secrets through the API, written
-   into each Project's namespace by the control plane (#91), not yet tested
-   on the dev cluster.
+   into each Project's namespace by the control plane (#91); Services
+   through the API, each pinned to the digest its tag resolved to (#92); not
+   yet tested on the dev cluster.
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
    staying writable while a whole Site is switched off.

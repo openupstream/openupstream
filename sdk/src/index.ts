@@ -30,6 +30,9 @@ import type {
     RouteInput,
     Secret,
     SecretInput,
+    ServiceDetails,
+    ServiceInput,
+    ServicePatch,
 } from './model.js';
 
 export const DEFAULT_API_URL = 'https://api.openupstream.com';
@@ -167,6 +170,34 @@ export class OpenUpstreamClient {
             'DELETE',
             `/v1/projects/${encodeURIComponent(projectId)}/domains/${encodeURIComponent(domainId)}/routes/${encodeURIComponent(routeId)}`,
         );
+    }
+
+    listServices(projectId: Id): Promise<ApiResult<ServiceDetails[]>> {
+        return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/services`);
+    }
+
+    /** Resolves the image's tag to a digest now and deploys it pinned; running within one operator pass. */
+    createService(projectId: Id, input: ServiceInput): Promise<ApiResult<ServiceDetails>> {
+        return this.#call('POST', `/v1/projects/${encodeURIComponent(projectId)}/services`, input);
+    }
+
+    getService(projectId: Id, serviceId: Id): Promise<ApiResult<ServiceDetails>> {
+        return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}`);
+    }
+
+    /** Changes the Service; a new image or new registry credentials resolve the tag again. */
+    updateService(projectId: Id, serviceId: Id, patch: ServicePatch): Promise<ApiResult<ServiceDetails>> {
+        return this.#call('PATCH', `/v1/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}`, patch);
+    }
+
+    /** Resolves the Service's tag again and deploys what it points at now. */
+    deployService(projectId: Id, serviceId: Id): Promise<ApiResult<ServiceDetails>> {
+        return this.#call('POST', `/v1/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}/deploy`);
+    }
+
+    /** Deletes the Service; refused while a Route serves it. */
+    deleteService(projectId: Id, serviceId: Id): Promise<ApiResult<void>> {
+        return this.#call('DELETE', `/v1/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}`);
     }
 
     /** The Project's Secrets, names only: a value is never returned. */

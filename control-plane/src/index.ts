@@ -32,8 +32,10 @@ import { tokenReviewAuthenticator } from './internal/auth.js';
 import { createInternalServer } from './internal/server.js';
 import { controlPlaneKube } from './kube.js';
 import { seedPlatform } from './platform.js';
+import { registryDeps } from './registry.js';
 import { listDomainRoutings } from './routes/store.js';
 import { secretsPass } from './secrets/render.js';
+import { listServiceRows } from './services/store.js';
 
 const log = (entry: Record<string, unknown>): void =>
     console.log(JSON.stringify({ time: new Date().toISOString(), ...entry }));
@@ -117,8 +119,10 @@ async function main(): Promise<void> {
         allowedCallers: config.value.allowedCallers,
         billingCallers: config.value.billingCallers,
         routesCallers: config.value.routesCallers,
+        servicesCallers: config.value.servicesCallers,
         listDatabaseRows: () => listDatabaseRows(pool),
         listDomainRoutings: () => listDomainRoutings(pool),
+        listServiceRows: () => listServiceRows(pool),
         getAccount: (id) => getAccountRecord(pool, id),
         placeHold: (accountId, reason) => placeHold(pool, accountId, reason),
         liftHold: (accountId, reason) => liftHold(pool, accountId, reason),
@@ -132,6 +136,7 @@ async function main(): Promise<void> {
         kube,
         storage,
         kek: config.value.kek,
+        registry: registryDeps(),
         customerDomain: config.value.customerDomain,
         platformDomain: config.value.platformDomain,
         lookupTxt: txtLookup(),

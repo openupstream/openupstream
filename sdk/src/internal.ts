@@ -4,7 +4,7 @@
  * public API: it is served on its own port, never routed by ingress, and
  * callers authenticate with their Kubernetes ServiceAccount token.
  */
-import type { Account, Database, Domain, Id, Member, Project, Route } from './model.js';
+import type { Account, Database, Domain, Id, Member, Project, Route, Service, Site } from './model.js';
 
 /**
  * Kubernetes names, by id (ARCHITECTURE.md, decision 42): the operators
@@ -23,6 +23,17 @@ export const poolerName = (database: Pick<Database, 'id'>): string => `${cluster
  * values; the control plane writes it, Services read it with `envFrom`.
  */
 export const PROJECT_SECRETS = 'project-secrets';
+
+/**
+ * The `kubernetes.io/dockerconfigjson` Secret in a Project's namespace with
+ * the registry credentials of all its Services, each under its image's
+ * repository; the control plane writes it, every Service names it in
+ * `imagePullSecrets`.
+ */
+export const PROJECT_REGISTRY_AUTH = 'project-registry-auth';
+
+/** The Service's Deployment and Kubernetes Service, in its Project's namespace. */
+export const serviceObjectName = (service: Pick<Service, 'id'>): string => `svc-${service.id}`;
 
 /** The folder under the backup bucket that holds one Database's base backups and WAL. */
 export const backupPrefix = (projectId: Id, databaseId: Id): string =>
@@ -51,6 +62,9 @@ export const INTERNAL_ACCOUNTS_PATH = '/internal/v1/accounts';
 /** `GET` lists every Domain that has Routes, with its Routes, for the Routes operator. */
 export const INTERNAL_ROUTES_PATH = '/internal/v1/routes';
 
+/** `GET` lists every Service with its Project, for the Services operator. */
+export const INTERNAL_SERVICES_PATH = '/internal/v1/services';
+
 /** The Traefik IngressRoute that serves one Domain, in its Project's namespace. */
 export const ingressRouteName = (domainId: Id): string => `domain-${domainId}`;
 
@@ -71,6 +85,22 @@ export interface DomainRouting {
 
 export interface AccountRecord extends Account {
     readonly members: readonly Pick<Member, 'authSubject' | 'email'>[];
+}
+
+/** One Service as the Services operator needs it. */
+export interface ServiceRow {
+    readonly project: Project;
+    readonly service: Pick<Service, 'id' | 'name' | 'image' | 'imageDigest' | 'replicas' | 'memoryMb' | 'cpuMillicores' | 'port'>;
+    /** What the Deployment runs: `<registry>/<repository>@<digest>`. */
+    readonly pinnedImage: string;
+    /** Where a single replica runs: the Service's homeSite, else the Project's oldest Database's, else `hetzner-fsn1`. */
+    readonly site: Site;
+    /**
+     * Changes whenever the Project's Secrets do (names and update times, no
+     * values): the operator puts it on the pod template, so a change rolls
+     * the Service and its pods read the new values.
+     */
+    readonly secretsVersion: string;
 }
 
 export interface DatabaseRow {
