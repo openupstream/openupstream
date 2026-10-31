@@ -18,6 +18,8 @@ export interface Config {
     readonly billingCallers: ReadonlySet<string>;
     /** ServiceAccounts that may list the routing table: the Routes operator. */
     readonly routesCallers: ReadonlySet<string>;
+    /** ServiceAccounts that may list Services: the Services operator. */
+    readonly servicesCallers: ReadonlySet<string>;
     /** The Holds every new Account starts with, e.g. `payment-method`. None by default: no gate. */
     readonly newAccountHolds: readonly string[];
     readonly auth: {
@@ -56,6 +58,7 @@ export interface Config {
 /** The ServiceAccounts the internal API answers by default. */
 export const DEFAULT_ALLOWED_CALLERS = ['system:serviceaccount:openupstream-system:databases-operator'];
 export const DEFAULT_ROUTES_CALLERS = ['system:serviceaccount:openupstream-system:routes-operator'];
+export const DEFAULT_SERVICES_CALLERS = ['system:serviceaccount:openupstream-system:services-operator'];
 
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -160,6 +163,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
         allowedCallers: new Set(list(env['ALLOWED_CALLERS'] ?? DEFAULT_ALLOWED_CALLERS.join(','))),
         billingCallers: new Set(list(env['BILLING_CALLERS'])),
         routesCallers: new Set(list(env['ROUTES_CALLERS'] ?? DEFAULT_ROUTES_CALLERS.join(','))),
+        servicesCallers: new Set(list(env['SERVICES_CALLERS'] ?? DEFAULT_SERVICES_CALLERS.join(','))),
         newAccountHolds,
         auth: { issuer, madauthUrl, ...(jwks === '' ? {} : { jwks }), ...(cliClientId === '' ? {} : { cliClientId }) },
         backup: {

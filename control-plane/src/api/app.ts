@@ -1,6 +1,6 @@
 /**
  * The public API (ARCHITECTURE.md, "Control plane"): the caller's Accounts,
- * and the Projects, Databases, Buckets, Domains, routing table and Secrets in them. Every route under /v1 except the
+ * and the Projects, Databases, Buckets, Services, Domains, routing table and Secrets in them. Every route under /v1 except the
  * health check needs a madAuth session token or API key (./auth.ts); an
  * API key needs `openupstream:read` for GET and `openupstream:write` for
  * anything else. Another Account's Project answers 404, like one that does
@@ -17,16 +17,23 @@ import {
     SECRET_NAME,
     SECRET_VALUE_MAX_BYTES,
     SECRETS_MAX_TOTAL_BYTES,
+    SERVICE_LIMITS,
     UUID,
     type Bucket,
     type BucketDetails,
     type Database,
     type DatabaseDetails,
     type DatabaseState,
+    type RegistryAuth,
+    type Service,
+    type ServiceDetails,
+    type ServiceState,
     clusterName,
+    serviceObjectName,
     poolerName,
     projectNamespace,
 } from '@openupstream/sdk';
+import { randomUUID } from 'node:crypto';
 import { type Context, Hono } from 'hono';
 import type pg from 'pg';
 import { z } from 'zod';
@@ -36,13 +43,24 @@ import { createDatabase, deleteDatabase, getDatabase, listDatabases } from '../d
 import type { TxtLookup } from '../domains/dns.js';
 import { createCustomDomain, deleteDomain, getDomain, isReserved, listDomains, verifyDomain } from '../domains/store.js';
 import { GARAGE_REGION, type ObjectStorage } from '../garage.js';
-import { type ControlPlaneKube, stateOf } from '../kube.js';
+import { type ControlPlaneKube, serviceStateOf, stateOf } from '../kube.js';
+import { type RegistryDeps, type ResolveError, parseImageReference, resolveDigest } from '../registry.js';
 import { createProject, deleteProject, getProject, listProjects } from '../projects/store.js';
 import { type Result, ok } from '../result.js';
 import { createRoute, deleteRoute, listRoutes } from '../routes/store.js';
 import type { KeyEncryptionKey } from '../secrets/envelope.js';
 import { syncProjectSecrets } from '../secrets/render.js';
-import { deleteSecret, listSecrets, putSecret } from '../secrets/store.js';
+import { deleteSecret, listSecrets, openProjectValue, putSecret, sealProjectValue } from '../secrets/store.js';
+import {
+    type ServiceChanges,
+    createService,
+    deleteService,
+    getService,
+    listServices,
+    registryAuthName,
+    sealedRegistryAuth,
+    updateService,
+} from '../services/store.js';
 import { type Authenticate, type Identity, accountsOf } from './auth.js';
 
 export interface ApiDeps {
@@ -52,6 +70,8 @@ export interface ApiDeps {
     readonly storage: ObjectStorage;
     /** Wraps the Projects' data keys; Secrets are encrypted with those. */
     readonly kek: KeyEncryptionKey;
+    /** Where Services' images are resolved to digests (decision 92). */
+    readonly registry: RegistryDeps;
     /** Where Buckets are reached: `<bucket>.s3.<customerDomain>` (decision 68). */
     readonly customerDomain: string;
     /** Our own hostnames (decision 67); neither it nor the customer domain can be claimed as a custom domain. */
@@ -103,6 +123,37 @@ const secretValueInput = z.strictObject({
     value: z
         .string()
         .refine((value) => Buffer.byteLength(value, 'utf8') <= SECRET_VALUE_MAX_BYTES, `at most ${SECRET_VALUE_MAX_BYTES} bytes`),
+});
+
+const registryAuthInput = z.strictObject({
+    username: z.string().min(1).max(256),
+    password: z.string().min(1).max(4096),
+});
+
+const serviceFields = {
+    image: z.string().min(1).max(512),
+    port: z.int().min(1).max(65535),
+    replicas: z.int().min(1).max(SERVICE_LIMITS.maxReplicas),
+    memoryMb: z.int().min(SERVICE_LIMITS.minMemoryMb).max(SERVICE_LIMITS.maxMemoryMb),
+    cpuMillicores: z.int().min(SERVICE_LIMITS.minCpuMillicores).max(SERVICE_LIMITS.maxCpuMillicores),
+};
+
+const serviceInput = z.strictObject({
+    name: z.string().regex(DNS_LABEL, 'a DNS label: lowercase letters, digits and hyphens'),
+    ...serviceFields,
+    replicas: serviceFields.replicas.optional(),
+    homeSite: z.enum(COMPUTE_SITES).optional(),
+    registryAuth: registryAuthInput.optional(),
+});
+
+const servicePatch = z.strictObject({
+    image: serviceFields.image.optional(),
+    port: serviceFields.port.optional(),
+    replicas: serviceFields.replicas.optional(),
+    memoryMb: serviceFields.memoryMb.optional(),
+    cpuMillicores: serviceFields.cpuMillicores.optional(),
+    homeSite: z.enum(COMPUTE_SITES).nullable().optional(),
+    registryAuth: registryAuthInput.nullable().optional(),
 });
 
 const routeInput = z.strictObject({
@@ -559,6 +610,197 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         syncSecrets(project.id);
         return c.body(null, 204);
+    });
+
+    /** The state from the Deployment; `unknown` when Kubernetes cannot be asked, rather than failing the request. */
+    const serviceStateFor = async (service: Service): Promise<ServiceState> => {
+        const deployment = await kube.readDeployment(projectNamespace(service.projectId), serviceObjectName(service));
+        if (!deployment.ok) {
+            deps.log?.({ msg: 'cannot read Deployment', service: service.id, error: deployment.error });
+            return 'unknown';
+        }
+        return serviceStateOf(deployment.value);
+    };
+    const serviceDetails = async (service: Service): Promise<ServiceDetails> => ({ ...service, state: await serviceStateFor(service) });
+
+    /** The digest the image points at now, as the registry answers it with the Service's credentials. */
+    const resolve = async (image: string, auth: RegistryAuth | undefined): Promise<Result<string, ResolveError>> => {
+        const reference = parseImageReference(image);
+        return reference.ok ? resolveDigest(deps.registry, reference.value, auth) : { ok: false, error: { kind: 'invalid', reason: reference.error } };
+    };
+    const unresolved = (c: Context<Env>, image: string, error: ResolveError) => {
+        switch (error.kind) {
+            case 'invalid':
+                return c.json({ error: `invalid image ${image}: ${error.reason}` }, 400);
+            case 'not-found':
+                return c.json({ error: `the registry has no image ${image}` }, 400);
+            case 'unauthorized':
+                return c.json({ error: `the registry refused to serve ${image}; check registryAuth` }, 400);
+            case 'forbidden-address':
+                return c.json({ error: `${error.host} is not a public registry` }, 400);
+            case 'unavailable':
+                deps.log?.({ msg: 'registry unavailable', image, error: error.reason });
+                return c.json({ error: `the registry of ${image} cannot be reached now` }, 503);
+        }
+    };
+    const registryOf = (image: string) => {
+        const reference = parseImageReference(image);
+        return reference.ok ? reference.value.registry : undefined;
+    };
+    const sameRegistry = (a: string, b: string) => registryOf(a) !== undefined && registryOf(a) === registryOf(b);
+    const sealAuth = (projectId: string, serviceId: string, auth: RegistryAuth) =>
+        sealProjectValue(pool, deps.kek, projectId, registryAuthName(serviceId), JSON.stringify(auth));
+    /** The Service's stored credentials, opened; undefined when it has none. */
+    const storedAuth = async (service: Service): Promise<RegistryAuth | undefined> => {
+        const sealed = await sealedRegistryAuth(pool, service.projectId, service.id);
+        if (sealed === undefined) {
+            return undefined;
+        }
+        const opened = await openProjectValue(pool, deps.kek, service.projectId, registryAuthName(service.id), sealed);
+        if (!opened.ok) {
+            throw new Error(`cannot open the registry credentials of Service ${service.id}: ${opened.error.kind}`);
+        }
+        return JSON.parse(opened.value) as RegistryAuth;
+    };
+
+    app.get('/v1/projects/:projectId/services', async (c) => {
+        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
+        if (project === undefined) {
+            return c.json(notFound, 404);
+        }
+        return c.json(await Promise.all((await listServices(pool, project.id)).map(serviceDetails)));
+    });
+
+    app.post('/v1/projects/:projectId/services', async (c) => {
+        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
+        if (project === undefined) {
+            return c.json(notFound, 404);
+        }
+        const input = serviceInput.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        // Checked first so a held Account makes no registry calls; the schema checks again.
+        const holds = await holdsOf(pool, project.accountId);
+        if (holds.length > 0) {
+            return held(c, holds);
+        }
+        const { registryAuth, homeSite, replicas, ...rest } = input.data;
+        const digest = await resolve(rest.image, registryAuth);
+        if (!digest.ok) {
+            return unresolved(c, rest.image, digest.error);
+        }
+        const id = randomUUID();
+        const sealed = registryAuth === undefined ? undefined : await sealAuth(project.id, id, registryAuth);
+        if (sealed !== undefined && !sealed.ok) {
+            return sealed.error.kind === 'project-not-found' ? c.json(notFound, 404) : Promise.reject(new Error(`cannot seal: ${sealed.error.kind}`));
+        }
+        const created = await createService(pool, project.id, {
+            ...rest,
+            id,
+            imageDigest: digest.value,
+            replicas: replicas ?? 1,
+            homeSite: homeSite ?? null,
+            registryAuth: sealed?.value ?? null,
+        });
+        if (!created.ok) {
+            switch (created.error.kind) {
+                case 'held':
+                    return held(c, await holdsOf(pool, project.accountId));
+                case 'name-taken':
+                    return c.json({ error: `a Service named ${created.error.name} exists` }, 409);
+                case 'project-deleted':
+                    return c.json(notFound, 404);
+            }
+        }
+        if (registryAuth !== undefined) {
+            syncSecrets(project.id);
+        }
+        c.header('location', `/v1/projects/${project.id}/services/${created.value.id}`);
+        // The Services operator creates the Deployment within one pass.
+        return c.json({ ...created.value, state: 'deploying' } satisfies ServiceDetails, 201);
+    });
+
+    const serviceOf = async (accountIds: string[], projectId: string, id: string) => {
+        const project = await projectOf(accountIds, projectId);
+        return project === undefined || !UUID.test(id) ? undefined : getService(pool, project.id, id);
+    };
+
+    app.get('/v1/projects/:projectId/services/:serviceId', async (c) => {
+        const service = await serviceOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('serviceId'));
+        return service === undefined ? c.json(notFound, 404) : c.json(await serviceDetails(service));
+    });
+
+    app.patch('/v1/projects/:projectId/services/:serviceId', async (c) => {
+        const service = await serviceOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('serviceId'));
+        if (service === undefined) {
+            return c.json(notFound, 404);
+        }
+        const input = servicePatch.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const { image, registryAuth: givenAuth, ...rest } = input.data;
+        // Stored credentials belong to the old image's registry: a new image elsewhere drops them, so they never reach another registry.
+        const registryAuth =
+            givenAuth === undefined && image !== undefined && service.registryAuth && !sameRegistry(service.image, image) ? null : givenAuth;
+        // A new image or new credentials: the tag is resolved again, with the credentials it will be pulled with.
+        const redeploy = image !== undefined || registryAuth !== undefined;
+        const auth = registryAuth === undefined ? await storedAuth(service) : (registryAuth ?? undefined);
+        const digest = redeploy ? await resolve(image ?? service.image, auth) : undefined;
+        if (digest !== undefined && !digest.ok) {
+            return unresolved(c, image ?? service.image, digest.error);
+        }
+        const sealed = registryAuth === undefined || registryAuth === null ? undefined : await sealAuth(service.projectId, service.id, registryAuth);
+        if (sealed !== undefined && !sealed.ok) {
+            throw new Error(`cannot seal: ${sealed.error.kind}`);
+        }
+        const changes: ServiceChanges = {
+            ...rest,
+            ...(image === undefined ? {} : { image }),
+            ...(digest === undefined ? {} : { imageDigest: digest.value }),
+            ...(registryAuth === undefined ? {} : { registryAuth: sealed?.value ?? null }),
+        };
+        const updated = await updateService(pool, service.projectId, service.id, changes);
+        if (updated === undefined) {
+            return c.json(notFound, 404);
+        }
+        if (registryAuth !== undefined) {
+            syncSecrets(service.projectId);
+        }
+        return c.json(await serviceDetails(updated));
+    });
+
+    app.post('/v1/projects/:projectId/services/:serviceId/deploy', async (c) => {
+        const service = await serviceOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('serviceId'));
+        if (service === undefined) {
+            return c.json(notFound, 404);
+        }
+        const digest = await resolve(service.image, await storedAuth(service));
+        if (!digest.ok) {
+            return unresolved(c, service.image, digest.error);
+        }
+        const updated = await updateService(pool, service.projectId, service.id, { imageDigest: digest.value });
+        return updated === undefined ? c.json(notFound, 404) : c.json(await serviceDetails(updated));
+    });
+
+    app.delete('/v1/projects/:projectId/services/:serviceId', async (c) => {
+        const service = await serviceOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('serviceId'));
+        if (service === undefined) {
+            return c.json(notFound, 404);
+        }
+        const deleted = await deleteService(pool, service.projectId, service.id);
+        switch (deleted) {
+            case 'routed':
+                return c.json({ error: 'a Route still serves this Service; delete the Route first' }, 409);
+            case 'not-found':
+                return c.json(notFound, 404);
+            case 'deleted':
+                if (service.registryAuth) {
+                    syncSecrets(service.projectId);
+                }
+                return c.body(null, 202);
+        }
     });
 
     app.notFound((c) => c.json(notFound, 404));

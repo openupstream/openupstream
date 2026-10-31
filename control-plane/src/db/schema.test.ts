@@ -47,8 +47,8 @@ const createBucket = (projectId: string): Promise<string> =>
 
 const createService = (projectId: string): Promise<string> =>
     insert(
-        `insert into services (project_id, name, image, memory_mb, cpu_millicores, port)
-         values ($1, $2, 'ghcr.io/acme/api:1', 512, 250, 8080)`,
+        `insert into services (project_id, name, image, image_digest, memory_mb, cpu_millicores, port)
+         values ($1, $2, 'ghcr.io/acme/api:1', 'sha256:${'0'.repeat(64)}', 512, 250, 8080)`,
         [projectId, unique('s')],
     );
 

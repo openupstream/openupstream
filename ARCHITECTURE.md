@@ -248,8 +248,8 @@ a billing service nothing is held, which is what someone who runs
 openupstream themselves gets by default (Open question 16).
 
 The public API (Hono, zod validation, `control-plane/src/api`) serves
-Projects and their Databases, Buckets, Domains, Routes and Secrets in the
-caller's Accounts; another Account's
+Projects and their Databases, Buckets, Services, Domains, Routes and
+Secrets in the caller's Accounts; another Account's
 Project answers 404 (#61). A Database's state (`provisioning`, `ready`,
 `degraded`, `unknown`) is read live from its Cluster. Its connection details
 (the Pooler's in-cluster address, database and user `app`) are returned,
@@ -431,6 +431,34 @@ digest (#55).
   acceptable on shared nodes.
 - Services with two or more replicas are spread across both compute Sites;
   single-replica Services run in the Home site of the Project's Databases.
+- A Service is a row in the control plane (#92): `POST …/services` with its
+  image, port, replicas, memory and CPU, `PATCH` to change it, `POST
+  …/services/{id}/deploy` to resolve the same tag again, `DELETE` (409
+  while a Route serves it). Its state (`deploying`, `running`, `degraded`)
+  is read live from its Deployment. The control plane resolves the tag to
+  a digest while the request waits, with the registry's token flow: an image
+  the registry does not have, or will not serve with the given credentials,
+  is a 400, a registry that cannot be reached a 503, and nothing is written.
+  Only a new image, new credentials or a deploy resolve again, so scaling
+  never moves the image.
+- The registry is the customer's choice, so the control plane reaches it
+  over https only and refuses one whose name resolves to a loopback,
+  private, link-local or shared address: a Service cannot make the control
+  plane call into the cluster or a private network. The check is made when
+  the name is looked up; a registry that changes its DNS answer before the
+  request is not caught.
+- Pull credentials (`registryAuth`, a username and password) are sealed with
+  the Project's data key like a Secret's value and never returned. The
+  control plane renders all of a Project's into one
+  `kubernetes.io/dockerconfigjson` Secret, `project-registry-auth`, an entry
+  per Service under its image's repository (`ghcr.io/acme/api`), which
+  kubelet matches as a prefix of the image it pulls; every Service names
+  it in `imagePullSecrets`. Two Services of one Project that pull the same
+  repository with different credentials share one entry. Credentials go
+  only to their own registry: a new image at another registry drops them,
+  and a redirect to another host is followed without them.
+- Without a `homeSite` of its own, a single replica runs in the Home site of
+  the Project's oldest live Database, else in `hetzner-fsn1`.
 
 ## Routing and domains
 
@@ -534,7 +562,9 @@ digest (#55).
   `Secret`, `project-secrets`, in the Project's namespace (#91): right after
   every change through the API, and again every 30 s on one replica (an
   advisory lock, like the cleanup), so a write that failed, or that came
-  before an operator created the namespace, arrives within one pass (the
+  before an operator created the namespace, arrives within one pass; a
+  Project with Services but no Secrets gets an empty one, since a Service's
+  pods wait for it rather than start without their values (the
   API does not wait for its write; two quick changes can land out of order,
   which the pass also repairs). It
   alone holds the key-encryption key, so no decrypted value crosses the
@@ -727,6 +757,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 89 | Every Project namespace gets one NetworkPolicy, `project-isolation`: ingress from the Project's own pods, Traefik's namespace and `cnpg-system`, nothing else; egress open. The operators apply it right after the namespace; the platform namespace's exception for the operators (port 8081) is a static policy next to the control plane | a policy per Database and per Service; a deny-all policy plus one allow policy per source; Calico instead of k3s's built-in policy controller | one object that every operator applies identically under the shared field manager, so whichever operator creates the namespace isolates it before anything runs there; same-namespace traffic is what a Project needs inside (Services to Poolers, CloudNativePG replication); k3s enforces it without another CNI. Egress for customer containers is decided with the Services operator |
 | 90 | gVisor is installed by a script on each compute node before k3s starts (`infra/gvisor/install.sh`): a pinned release whose archive is checked against a SHA-512 in the script, and a containerd config template that extends k3s's base with the handler `runsc`. The RuntimeClass `gvisor` selects nodes labelled `openupstream.io/gvisor=true` | gVisor's apt repository; a privileged DaemonSet that installs runsc on the nodes | a node setup step like k3s itself, with nothing privileged left running in the cluster; the pin makes every node run the same sandbox, and an upgrade is a reviewed change of two lines; the apt repository serves whatever is newest. The label keeps gVisor pods off a node without runsc, where they would never start |
 | 91 | The control plane writes the Kubernetes Secret `project-secrets` per Project itself, after each change and in a 30 s pass; no Secrets operator. The public API: `GET …/secrets` (names), `PUT …/secrets/{name}` `{value}`, `DELETE …/secrets/{name}`; every Service of the Project gets all of them | a Secrets operator fed decrypted values by an internal API route (the earlier plan of decision 20); per-Service selection of Secrets | the control plane alone holds the key-encryption key, so plaintext never travels between processes and no operator can read every Project's Secrets; it needs `create` and `patch` on Secrets cluster-wide, which a Secrets operator would have needed as well. Project-wide Secrets match how they are described to customers; selecting per Service can come later without changing the API |
+| 92 | Services API: a Service is a row, created, changed (`PATCH`) and redeployed (`POST …/deploy`) through the API, its state read from its Deployment. The control plane resolves the tag to a digest at the registry while the request waits, over https and never at a private address; pull credentials are per Service, sealed with the Project's data key, and rendered into one dockerconfigjson Secret per Project keyed by repository | Deployments as immutable records with history and rollback; the operator resolving tags on its pass; named registry credentials shared by Services; a pull Secret per Service | the pattern of Buckets: a 201 means the image exists and can be pulled, and a bad tag or credentials is an answer, not a state to poll; the operator never needs credentials or the internet. One Secret per Project lives and dies with the namespace and needs no pruning by the control plane; kubelet's prefix match keeps credentials per repository. Rollback is a `PATCH` back to a digest (`image@sha256:…`) |
 
 ## Open questions
 
@@ -858,7 +889,9 @@ Decisions table once it is settled.
 3. Containers, Service mode. Done so far: the NetworkPolicy
    `project-isolation` in every Project namespace (#89), gVisor on the
    compute nodes and the RuntimeClass `gvisor` (#90), Secrets through the
-   API, written into each Project's namespace by the control plane (#91).
+   API, written into each Project's namespace by the control plane (#91);
+   Services through the API, each pinned to the digest its tag resolved to
+   (#92).
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
    staying writable while a whole Site is switched off.

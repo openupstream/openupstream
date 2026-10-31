@@ -33,7 +33,7 @@ subjects:
     name: control-plane
     namespace: project-00000000-0000-4000-8000-000000000002
 ---
-# Reads a Database's state for the API; deletes what the cleanup removes
+# Reads a Database's and a Service's state for the API; deletes what the cleanup removes
 # (ARCHITECTURE.md, decisions 48 and 58); writes the Projects' Secrets.
 # Creating everything else is the operators' job.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -53,6 +53,10 @@ rules:
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [delete]
+  # A Service's state for the API.
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get]
   # Every Project's Secret project-secrets, rendered from the encrypted store
   # (decision 91). Cluster-wide, since Project namespaces are created at run
   # time; server-side apply needs create and patch.

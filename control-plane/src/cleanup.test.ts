@@ -18,6 +18,7 @@ const fakes = () => {
     let failBackups = false;
     const kube: ControlPlaneKube = {
         readCluster: async () => ok(undefined),
+        readDeployment: async () => ok(undefined),
         remove: async (ref: ObjectRef) => {
             if (failKinds.has(ref.kind)) {
                 return err('forbidden');
