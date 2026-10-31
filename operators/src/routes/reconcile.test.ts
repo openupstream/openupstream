@@ -17,7 +17,7 @@ const routing: DomainRouting = {
     domainId: '22222222-2222-4222-8222-222222222222',
     hostname: 'shop-a1b2c3d4.openupstream.app',
     kind: 'default',
-    routes: [{ id: '44444444-4444-4444-8444-444444444444', pathPrefix: '/', bucketName: 'shop-site', spaFallback: true }],
+    routes: [{ id: '44444444-4444-4444-8444-444444444444', pathPrefix: '/', kind: 'bucket', bucketName: 'shop-site', spaFallback: true }],
 };
 
 /** A cluster holding `existing` objects of ours; records applies and removes. */
@@ -53,7 +53,7 @@ test('applies the plan and deletes only the objects of ours no longer wanted', a
     const report = await reconcileRoutes(kube, [routing], settings);
     assert.equal(applied.length, planRoutes([routing], settings).length);
     assert.deepEqual(removed, ['IngressRoute domain-gone', 'Middleware route-gone-bucket']);
-    assert.deepEqual(listed, Array(4).fill('openupstream.io/component=routes'));
+    assert.deepEqual(listed, Array(5).fill('openupstream.io/component=routes'));
     assert.equal(report.failed.length, 0);
 });
 

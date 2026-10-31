@@ -363,16 +363,23 @@ export interface Route {
 }
 
 /**
- * Creates a Route to a Bucket of the same Project. The prefix is stripped:
- * `/docs/a.html` on the Route `/docs` serves the object `a.html`. With
- * `spaFallback`, a path with no object serves `index.html` with status 200;
- * every Route to one Bucket has the same `spaFallback`.
+ * Creates a Route to a Bucket or a Service of the same Project. For a
+ * Bucket the prefix is stripped: `/docs/a.html` on the Route `/docs` serves
+ * the object `a.html`. With `spaFallback`, a path with no object serves
+ * `index.html` with status 200; every Route to one Bucket has the same
+ * `spaFallback`. A Service gets the path unchanged.
  */
-export interface RouteInput {
-    pathPrefix: string;
-    bucketId: Id;
-    spaFallback?: boolean;
-}
+export type RouteInput =
+    | {
+          pathPrefix: string;
+          bucketId: Id;
+          spaFallback?: boolean;
+      }
+    | {
+          pathPrefix: string;
+          /** The Service gets the request with its path as it came, prefix included. */
+          serviceId: Id;
+      };
 
 export const RESOURCE_KINDS = ['database', 'bucket', 'service'] as const;
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];

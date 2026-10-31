@@ -1,0 +1,47 @@
+# What the Services reconcile pass (src/services/reconcile.ts) may do:
+# apply a Project's namespace and NetworkPolicies, and each Service's
+# Deployment and Kubernetes Service, and delete those of its objects that
+# are no longer wanted (ARCHITECTURE.md, decision 93). Server-side apply is
+# a PATCH that creates missing objects, so every applied kind needs `patch`
+# and `create`; pruning lists by label and deletes. Namespaces are only
+# created, never deleted: the control plane's cleanup removes them. It
+# reads no Secret: the control plane writes the ones the pods use.
+#
+# Cluster-wide because Project namespaces are created at run time and RBAC
+# cannot select namespaces by name pattern.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: services-operator
+  namespace: openupstream-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openupstream-services-operator
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [create, patch]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [create, patch, list, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [create, patch, list, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [create, patch, list, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openupstream-services-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: openupstream-services-operator
+subjects:
+  - kind: ServiceAccount
+    name: services-operator
+    namespace: openupstream-system

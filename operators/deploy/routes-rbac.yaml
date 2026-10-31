@@ -30,7 +30,7 @@ rules:
     resources: [services]
     verbs: [create, patch, list, delete]
   - apiGroups: [traefik.io]
-    resources: [ingressroutes, middlewares]
+    resources: [ingressroutes, middlewares, serverstransports]
     verbs: [create, patch, list, delete]
   - apiGroups: [cert-manager.io]
     resources: [certificates]

@@ -3,7 +3,14 @@
  * rows and the routing table, fetched with the operator's ServiceAccount
  * token.
  */
-import { type DatabaseRow, type DomainRouting, INTERNAL_DATABASES_PATH, INTERNAL_ROUTES_PATH } from '@openupstream/sdk';
+import {
+    type DatabaseRow,
+    type DomainRouting,
+    INTERNAL_DATABASES_PATH,
+    INTERNAL_ROUTES_PATH,
+    INTERNAL_SERVICES_PATH,
+    type ServiceRow,
+} from '@openupstream/sdk';
 import { type Result, err, ok } from './result.js';
 
 export type FetchRowsError =
@@ -53,8 +60,8 @@ const isRouting = (value: unknown): value is DomainRouting =>
             isObject(route) &&
             typeof route['id'] === 'string' &&
             typeof route['pathPrefix'] === 'string' &&
-            typeof route['bucketName'] === 'string' &&
-            typeof route['spaFallback'] === 'boolean',
+            ((route['kind'] === 'bucket' && typeof route['bucketName'] === 'string' && typeof route['spaFallback'] === 'boolean') ||
+                (route['kind'] === 'service' && typeof route['serviceId'] === 'string' && typeof route['port'] === 'number')),
     );
 
 export const parseRoutings = (body: unknown): Result<DomainRouting[], FetchRowsError> =>
@@ -63,6 +70,31 @@ export const parseRoutings = (body: unknown): Result<DomainRouting[], FetchRowsE
         : err({ kind: 'malformed', message: 'expected an array of { projectId, projectName, domainId, hostname, kind, routes }' });
 
 export type FetchRoutings = () => Promise<Result<DomainRouting[], FetchRowsError>>;
+
+/** Only the shape the Services operator relies on; the control plane checked the values when it stored them. */
+const isServiceRow = (value: unknown): value is ServiceRow =>
+    isObject(value) &&
+    isObject(value['project']) &&
+    typeof value['project']['id'] === 'string' &&
+    typeof value['project']['name'] === 'string' &&
+    isObject(value['service']) &&
+    typeof value['service']['id'] === 'string' &&
+    typeof value['service']['name'] === 'string' &&
+    typeof value['service']['replicas'] === 'number' &&
+    typeof value['service']['memoryMb'] === 'number' &&
+    typeof value['service']['cpuMillicores'] === 'number' &&
+    typeof value['service']['port'] === 'number' &&
+    typeof value['pinnedImage'] === 'string' &&
+    /@sha256:[0-9a-f]{64}$/.test(value['pinnedImage']) &&
+    (value['site'] === 'hetzner-fsn1' || value['site'] === 'ovh-lim') &&
+    typeof value['secretsVersion'] === 'string';
+
+export const parseServiceRows = (body: unknown): Result<ServiceRow[], FetchRowsError> =>
+    Array.isArray(body) && body.every(isServiceRow)
+        ? ok(body)
+        : err({ kind: 'malformed', message: 'expected an array of { project, service, pinnedImage, site, secretsVersion }' });
+
+export type FetchServices = () => Promise<Result<ServiceRow[], FetchRowsError>>;
 
 /**
  * `token` is read on every call: projected ServiceAccount tokens are
@@ -74,6 +106,10 @@ export function controlPlaneRows(baseUrl: string, token: () => Promise<string>):
 
 export function controlPlaneRoutings(baseUrl: string, token: () => Promise<string>): FetchRoutings {
     return fetchInternal(baseUrl, INTERNAL_ROUTES_PATH, token, parseRoutings);
+}
+
+export function controlPlaneServices(baseUrl: string, token: () => Promise<string>): FetchServices {
+    return fetchInternal(baseUrl, INTERNAL_SERVICES_PATH, token, parseServiceRows);
 }
 
 function fetchInternal<T>(

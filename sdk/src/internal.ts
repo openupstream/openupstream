@@ -68,9 +68,16 @@ export const INTERNAL_SERVICES_PATH = '/internal/v1/services';
 /** The Traefik IngressRoute that serves one Domain, in its Project's namespace. */
 export const ingressRouteName = (domainId: Id): string => `domain-${domainId}`;
 
+/** A Route as the Routes operator needs it: the Bucket by name, or the Service with its port. */
+export type RoutedPath = Pick<Route, 'id' | 'pathPrefix'> &
+    (
+        | { readonly kind: 'bucket'; readonly bucketName: string; readonly spaFallback: boolean }
+        | { readonly kind: 'service'; readonly serviceId: Id; readonly port: number }
+    );
+
 /**
  * One Domain as the Routes operator needs it: where it lives, its hostname,
- * and its Routes with the name of the Bucket each one serves.
+ * and its Routes with what each one serves.
  */
 export interface DomainRouting {
     readonly projectId: Id;
@@ -80,7 +87,7 @@ export interface DomainRouting {
     readonly hostname: string;
     /** A default Domain uses the customer domain's wildcard certificate; a custom one gets its own. */
     readonly kind: Domain['kind'];
-    readonly routes: readonly (Pick<Route, 'id' | 'pathPrefix'> & { readonly bucketName: string; readonly spaFallback: boolean })[];
+    readonly routes: readonly RoutedPath[];
 }
 
 export interface AccountRecord extends Account {

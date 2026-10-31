@@ -25,6 +25,7 @@ import {
     type DatabaseDetails,
     type DatabaseState,
     type RegistryAuth,
+    type RouteInput,
     type Service,
     type ServiceDetails,
     type ServiceState,
@@ -156,11 +157,11 @@ const servicePatch = z.strictObject({
     registryAuth: registryAuthInput.nullable().optional(),
 });
 
-const routeInput = z.strictObject({
-    pathPrefix: z.string().regex(PATH_PREFIX, '`/` or `/segment[/segment…]`, without a trailing slash'),
-    bucketId: z.string().regex(UUID),
-    spaFallback: z.boolean().optional(),
-});
+const pathPrefix = z.string().regex(PATH_PREFIX, '`/` or `/segment[/segment…]`, without a trailing slash');
+const routeInput = z.union([
+    z.strictObject({ pathPrefix, bucketId: z.string().regex(UUID), spaFallback: z.boolean().optional() }),
+    z.strictObject({ pathPrefix, serviceId: z.string().regex(UUID) }),
+]);
 
 /** In-cluster connection through the Database's PgBouncer; CloudNativePG's application user and database. */
 const connectionOf = (database: Database) => ({
@@ -508,14 +509,20 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (!input.success) {
             return c.json(invalid(input.error.issues), 400);
         }
-        const { spaFallback, ...rest } = input.data;
-        const created = await createRoute(pool, storage, domain.projectId, domain.id, spaFallback === undefined ? rest : { ...rest, spaFallback });
+        const data = input.data;
+        const route: RouteInput =
+            'serviceId' in data
+                ? data
+                : { pathPrefix: data.pathPrefix, bucketId: data.bucketId, ...(data.spaFallback === undefined ? {} : { spaFallback: data.spaFallback }) };
+        const created = await createRoute(pool, storage, domain.projectId, domain.id, route);
         if (!created.ok) {
             switch (created.error.kind) {
                 case 'domain-not-found':
                     return c.json(notFound, 404);
                 case 'bucket-not-found':
                     return c.json({ error: 'no such Bucket in this Project' }, 400);
+                case 'service-not-found':
+                    return c.json({ error: 'no such Service in this Project' }, 400);
                 case 'prefix-taken':
                     return c.json({ error: `the Domain has a Route at ${created.error.pathPrefix}` }, 409);
                 case 'spa-conflict':

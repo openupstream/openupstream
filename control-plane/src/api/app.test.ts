@@ -554,8 +554,8 @@ describe('Routing', () => {
             hostname: domain.hostname,
             kind: 'default',
             routes: [
-                { id: routing?.routes[0]?.id, pathPrefix: '/docs', bucketName: 'alice-docs', spaFallback: false },
-                { id: routing?.routes[1]?.id, pathPrefix: '/', bucketName: 'alice-site', spaFallback: true },
+                { id: routing?.routes[0]?.id, pathPrefix: '/docs', kind: 'bucket', bucketName: 'alice-docs', spaFallback: false },
+                { id: routing?.routes[1]?.id, pathPrefix: '/', kind: 'bucket', bucketName: 'alice-site', spaFallback: true },
             ],
         });
     });
@@ -921,6 +921,22 @@ describe('Services', () => {
         assert.equal(await site(), 'ovh-lim');
         assert.equal((await call('PATCH', path(`/${service.id}`), 'alice', { homeSite: 'hetzner-fsn1' })).status, 200);
         assert.equal(await site(), 'hetzner-fsn1');
+    });
+
+    test('a Route sends a prefix to the Service, which cannot be deleted while it does', async () => {
+        const [domain] = (await (await call('GET', `/v1/projects/${projectId}/domains`, 'alice')).json()) as Domain[];
+        assert.ok(domain);
+        const routes = `/v1/projects/${projectId}/domains/${domain.id}/routes`;
+        const created = await call('POST', routes, 'alice', { pathPrefix: '/api', serviceId: service.id });
+        assert.equal(created.status, 201);
+        const route = (await created.json()) as Route;
+        assert.deepEqual(route.target, { kind: 'service', serviceId: service.id });
+        const routing = (await listDomainRoutings(db.pool)).find((d) => d.domainId === domain.id);
+        assert.deepEqual(routing?.routes, [{ id: route.id, pathPrefix: '/api', kind: 'service', serviceId: service.id, port: 8080 }]);
+        assert.equal((await call('POST', routes, 'alice', { pathPrefix: '/x', serviceId: service.id, spaFallback: true })).status, 400);
+        assert.equal((await call('POST', routes, 'alice', { pathPrefix: '/x', serviceId: '00000000-0000-4000-8000-000000000099' })).status, 400);
+        assert.equal((await call('DELETE', path(`/${service.id}`), 'alice')).status, 409);
+        assert.equal((await call('DELETE', `${routes}/${route.id}`, 'alice')).status, 204);
     });
 
     test("another Account's Project: 404; deleted: 202, then gone", async () => {
