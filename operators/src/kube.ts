@@ -3,7 +3,7 @@
  * reconcile logic can be tested without a cluster. `kubeFrom` implements it
  * with @kubernetes/client-node; its exceptions end here as `KubeError`s.
  */
-import { ApiException, type KubeConfig, KubernetesObjectApi, PatchStrategy } from '@kubernetes/client-node';
+import { ApiException, type KubeConfig, KubernetesObjectApi, PatchStrategy, loadYaml } from '@kubernetes/client-node';
 import { type Result, err, ok } from './result.js';
 
 /** The operators' field manager name for server-side apply. */
@@ -94,6 +94,16 @@ const attemptWithin = <T>(call: () => Promise<T>, timeoutMs: number): Promise<Re
 
 const DRY_RUN_ALL = 'All';
 
+/**
+ * The object in the shape the client's models expect. For a kind it has a
+ * model for, the client serializes by the model's attribute names, and some
+ * differ from the field names: a NetworkPolicy ingress rule's `from` is
+ * `_from` there, so a plain `from` would be dropped without a word.
+ * Deserializing first (JSON is YAML) maps every field to its attribute;
+ * kinds without a model, such as CRDs, pass through unchanged.
+ */
+export const toClientModel = (object: KubeObject): KubeObject => loadYaml<KubeObject>(JSON.stringify(object));
+
 export function kubeFrom(config: KubeConfig, { timeoutMs = KUBE_CALL_TIMEOUT_MS } = {}): Kube {
     const api = KubernetesObjectApi.makeApiClient(config);
     const attempt = <T>(call: () => Promise<T>) => attemptWithin(call, timeoutMs);
@@ -101,7 +111,7 @@ export function kubeFrom(config: KubeConfig, { timeoutMs = KUBE_CALL_TIMEOUT_MS 
         apply: async (object, { dryRun }) => {
             const result = await attempt(() =>
                 api.patch(
-                    object,
+                    toClientModel(object),
                     undefined,
                     dryRun ? DRY_RUN_ALL : undefined,
                     FIELD_MANAGER,
