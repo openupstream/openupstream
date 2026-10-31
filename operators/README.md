@@ -14,13 +14,13 @@ Traefik already implements is configured, not reimplemented.
   Database's backups. Pure functions; invalid input comes back as a list of
   errors.
 - `src/databases/reconcile.ts`: one reconcile pass. `planDatabases` (pure)
-  turns rows into the objects to apply: per Project its namespace and a copy
-  of the backup credentials Secret, then each Database's objects.
+  turns rows into the objects to apply: per Project its namespace, its
+  NetworkPolicy and a copy of the backup credentials Secret, then each Database's objects.
   `reconcileDatabases` applies them with server-side apply. It never deletes
   (ARCHITECTURE.md, decision 48).
 - `src/routes/`: the Routes operator (ARCHITECTURE.md, decisions 84 and
   85). `planRoutes` (pure) turns the routing table into, per Project, its
-  namespace, an ExternalName Service to Garage's website endpoint and the
+  namespace and NetworkPolicy, an ExternalName Service to Garage's website endpoint and the
   shared Middlewares (compression, HSTS); per Route, a Middleware that sets
   the Host header to the Bucket's name and one that strips the prefix; per
   Domain, an IngressRoute, on the default certificate for a default Domain,
@@ -42,9 +42,11 @@ Traefik already implements is configured, not reimplemented.
   apply, read a Secret, list by label, delete) behind the `Kube` interface, implemented with
   `@kubernetes/client-node`. Tests use a fake.
 - `src/kubernetes.ts`: what all operators share: the Project namespace
-  (`project-<project id>`) and its manifest, which both apply identically
-  under one field manager, labels, the Site zone label and the third Site's
-  taint.
+  (`project-<project id>`) with its NetworkPolicy `project-isolation`
+  (ingress only from the Project's own pods, Traefik and CloudNativePG's
+  operator; ARCHITECTURE.md, decision 89), which every operator applies
+  identically under one field manager before anything goes into the
+  namespace, labels, the Site zone label and the third Site's taint.
 - `deploy/`: each operator's ServiceAccount, RBAC and Deployment. The image
   is built by `Dockerfile` (GitHub Actions pushes it to
   `ghcr.io/openupstream/operators`); `infra/dev-cluster/platform.sh` deploys

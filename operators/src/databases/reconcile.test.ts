@@ -41,13 +41,13 @@ const kinds = (objects: readonly KubeObject[]) => objects.map((object) => object
 const planned = (plan: { projects: readonly (readonly KubeObject[])[]; databases: readonly (readonly KubeObject[])[] }) =>
     [...plan.projects, ...plan.databases].flat();
 
-test('a Project with two Databases gets one namespace, one credentials Secret and four objects per Database', () => {
+test('a Project with two Databases gets one namespace, its NetworkPolicy, one credentials Secret and four objects per Database', () => {
     const rows: DatabaseRow[] = [
         { project, database: orders },
         { project, database: invoices },
     ];
     const plan = planDatabases(rows, config, credentials);
-    assert.deepEqual(plan.projects.map(kinds), [['Namespace', 'Secret']]);
+    assert.deepEqual(plan.projects.map(kinds), [['Namespace', 'NetworkPolicy', 'Secret']]);
     assert.deepEqual(plan.databases.map(kinds), [
         ['ObjectStore', 'Cluster', 'Pooler', 'ScheduledBackup'],
         ['ObjectStore', 'Cluster', 'Pooler', 'ScheduledBackup'],
@@ -126,7 +126,7 @@ test('reconcile applies the plan in order and reports each object', async () => 
     const order = applied.map(({ object }) => `${object.kind}/${object.metadata.name}`);
     const position = (kind: string, id = '') => order.findIndex((entry) => entry.startsWith(kind) && entry.includes(id));
     // The Project's objects before any Database's; each Database in order.
-    assert.deepEqual(order.slice(0, 2), [`Namespace/${namespace}`, 'Secret/backup-s3']);
+    assert.deepEqual(order.slice(0, 3), [`Namespace/${namespace}`, 'NetworkPolicy/project-isolation', 'Secret/backup-s3']);
     for (const { id } of [orders, invoices]) {
         const steps = ['ObjectStore', 'Cluster', 'Pooler', 'ScheduledBackup'].map((kind) => position(kind, id));
         assert.deepEqual(
@@ -134,7 +134,7 @@ test('reconcile applies the plan in order and reports each object', async () => 
             [...steps].sort((a, b) => a - b),
         );
     }
-    assert.equal(result.value.applied.length, 10);
+    assert.equal(result.value.applied.length, 11);
     assert.deepEqual(result.value.failed, []);
     assert.equal(
         applied.every(({ dryRun }) => !dryRun),
@@ -155,7 +155,7 @@ test('a failed apply is reported and the pass goes on', async () => {
     const { kube, applied } = fakeKube(credentials, ['Cluster']);
     const result = await reconcileDatabases(kube, [{ project, database: orders }], config, options);
     assert.ok(result.ok);
-    assert.equal(applied.length, 6);
+    assert.equal(applied.length, 7);
     assert.deepEqual(result.value.failed, [
         {
             ref: { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', namespace, name: `db-${orders.id}` },

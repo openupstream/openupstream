@@ -130,3 +130,22 @@ spec:
   ports:
     - {name: http, port: 8080, targetPort: http}
     - {name: internal, port: 8081, targetPort: internal}
+---
+# The platform Project's namespace is isolated like every Project's (the
+# operators' NetworkPolicy project-isolation); this one also admits the
+# operators, from their own namespace, on the internal API's port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: internal-api-from-operators
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: control-plane}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: openupstream-system}
+      ports:
+        - {port: 8081, protocol: TCP}

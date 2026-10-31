@@ -24,6 +24,8 @@ helm upgrade --install bunny-webhook oci://ghcr.io/aardbol/charts/cert-manager-w
   -n cert-manager -f "$ROOT/infra/ingress/webhook-bunny-values.yaml" --wait --timeout 5m >/dev/null
 kubectl apply -f "$ROOT/infra/ingress/cluster-issuers.yaml" >/dev/null
 
+# The namespace traefik is admitted by every Project's NetworkPolicy
+# (INGRESS_FROM_NAMESPACES in operators/src/kubernetes.ts).
 helm upgrade --install traefik oci://ghcr.io/traefik/helm/traefik --version 42.0.0 \
   -n traefik --create-namespace -f "$ROOT/infra/ingress/traefik-values.yaml" --wait --timeout 5m >/dev/null
 kubectl -n traefik get pods -o wide --no-headers | awk '{print $1, $3, $7}'

@@ -32,9 +32,9 @@ test('a pass applies what the control plane lists and logs a summary', async () 
     assert.deepEqual(await databasesPass(platformRows, kube(applied), config, options), {
         msg: 'reconcile pass done',
         databases: 1,
-        applied: 6,
+        applied: 7,
     });
-    assert.equal(applied.length, 6);
+    assert.equal(applied.length, 7);
 });
 
 test('without rows nothing is applied: an unreachable control plane never means "no Databases"', async () => {

@@ -44,6 +44,52 @@ export const namespaceFor = (project: Pick<Project, 'id' | 'name'>) => ({
     },
 });
 
+/**
+ * The namespaces from which a Project's pods accept connections, besides
+ * their own: Traefik, which serves the Project's Routes, and CloudNativePG's
+ * operator, which asks each Database instance for its status. These are the
+ * namespaces infra/dev-cluster installs them into (ingress.sh,
+ * operators.sh); moving either one means changing this list first, or the
+ * Projects stop being served.
+ */
+export const INGRESS_FROM_NAMESPACES = ['traefik', 'cnpg-system'] as const;
+
+/**
+ * Default deny for a Project's namespace (ARCHITECTURE.md, "Project
+ * isolation"): its pods accept connections only from each other and from
+ * INGRESS_FROM_NAMESPACES, so Projects reach each other only through public
+ * Routes, also within one Account. Egress is not restricted here.
+ */
+export const networkPolicyFor = (projectId: Id) => ({
+    apiVersion: 'networking.k8s.io/v1',
+    kind: 'NetworkPolicy',
+    metadata: {
+        name: 'project-isolation',
+        namespace: namespaceOf(projectId),
+        labels: { [LABELS.projectId]: projectId, [LABELS.managedBy]: MANAGED_BY },
+    },
+    spec: {
+        podSelector: {},
+        policyTypes: ['Ingress'],
+        ingress: [
+            { from: [{ podSelector: {} }] },
+            ...INGRESS_FROM_NAMESPACES.map((name) => ({
+                from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': name } } }],
+            })),
+        ],
+    },
+});
+
+/**
+ * What every operator applies for a Project before anything goes into its
+ * namespace, in this order: the namespace, then its NetworkPolicy, so no pod
+ * of the Project ever runs unisolated.
+ */
+export const projectObjectsFor = (project: Pick<Project, 'id' | 'name'>) => [
+    namespaceFor(project),
+    networkPolicyFor(project.id),
+];
+
 /** The fields of Kubernetes object metadata the operators set. */
 export interface ObjectMeta {
     name: string;
