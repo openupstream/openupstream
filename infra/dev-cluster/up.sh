@@ -99,9 +99,16 @@ install_k3s() { # site, ip, extra args...
     $*"
 }
 
+# gVisor on the compute nodes, before k3s renders containerd's config at its
+# first start; the label lets the RuntimeClass gvisor schedule only there.
+for node_ip in "${IPS[0]}" "${IPS[1]}"; do
+  echo "installing gVisor on $node_ip"
+  "${SSH[@]}" "root@$node_ip" bash -s <../gvisor/install.sh
+done
+
 FIRST=${IPS[0]}
-install_k3s "${SITES[0]}" "$FIRST" --cluster-init
-install_k3s "${SITES[1]}" "${IPS[1]}" --server "https://$FIRST:6443"
+install_k3s "${SITES[0]}" "$FIRST" --cluster-init --node-label openupstream.io/gvisor=true
+install_k3s "${SITES[1]}" "${IPS[1]}" --server "https://$FIRST:6443" --node-label openupstream.io/gvisor=true
 install_k3s "${SITES[2]}" "${IPS[2]}" --server "https://$FIRST:6443" \
   --node-taint openupstream.io/third-site=true:NoSchedule
 
@@ -110,6 +117,7 @@ install_k3s "${SITES[2]}" "${IPS[2]}" --server "https://$FIRST:6443" \
 chmod 600 "$STATE/kubeconfig"
 
 KUBECONFIG=$STATE/kubeconfig kubectl wait --for=condition=Ready node --all --timeout=5m
+KUBECONFIG=$STATE/kubeconfig kubectl apply -f ../gvisor/runtimeclass.yaml >/dev/null
 echo "export KUBECONFIG=$PWD/$STATE/kubeconfig"
 echo "The API server is on $FIRST (hetzner-fsn1); switch the kubeconfig to"
 echo "another node's IP before switching that Site off."

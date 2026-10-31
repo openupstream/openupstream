@@ -99,8 +99,17 @@ Germany.
   kubelet 10250, Garage RPC 3901) only from the other two nodes' public IPs.
   These control-plane connections are TLS (k3s, etcd) or Garage's own
   encrypted RPC; flannel's WireGuard carries pod traffic only.
-- gVisor (`runsc`) is added by hand to k3s's containerd config template and
+- gVisor (`runsc`) is added to k3s's containerd config template and
   exposed as the `gvisor` RuntimeClass; k3s does not detect it on its own.
+  `infra/gvisor/install.sh` installs a pinned release, checked against the
+  SHA-512 recorded in the script, on each compute node before k3s first
+  starts, and writes the template (`config-v3.toml.tmpl`, extending k3s's
+  base) that adds the handler `runsc` (#90). The compute nodes carry the
+  label `openupstream.io/gvisor=true`, and the RuntimeClass schedules only
+  there; the third Site has no gVisor. Its `overhead` reserves 64 Mi and
+  10m CPU per pod for gVisor itself (50-60 MB measured), not billed.
+  Tested on the dev cluster (2026-10-31): pods run under `runsc`
+  (`dmesg` shows gVisor), installed on fresh Ubuntu 24.04 nodes.
 - Tailscale is for admin access only (Kubernetes API, SSH, Grafana). It is
   not the node mesh.
 
@@ -278,7 +287,11 @@ a misspelt or removed field fails the typecheck.
 
 The reconcile pass talks to Kubernetes through `@kubernetes/client-node`,
 with server-side apply under the field manager `openupstream-operators`
-(#47). It only creates and updates: a Database's objects are deleted by the
+(#47). The client serializes kinds it has a model for by the model's
+attribute names, which differ in places (a NetworkPolicy's `from` is
+`_from`); every object is first deserialized into that shape, so what is
+sent is what was written (found on the dev cluster: the peers of every
+NetworkPolicy had been dropped, which admitted all traffic). It only creates and updates: a Database's objects are deleted by the
 control plane's delete of that Database or its Project, never because a row
 is missing (#48). It runs in the cluster (`operators/deploy/`, one
 replica) and makes a pass every 30 s with the rows from the control plane's
@@ -515,6 +528,14 @@ digest (#55).
   reach each other only through public Routes. The platform Project's
   namespace, where the control plane runs, also admits the operators on the
   internal API's port.
+- The NetworkPolicy `project-isolation` (#89) lets a Project's pods accept
+  connections from each other (a Service to its Database's Pooler, a
+  standby to its primary), from Traefik's namespace and from
+  CloudNativePG's operator in `cnpg-system`, which asks each instance for
+  its status; nothing else. Every operator that applies a Project's
+  namespace applies it right after the namespace, before anything else goes
+  in, so no pod of a Project runs unisolated. The operators' exception in
+  the platform namespace is a second policy in `control-plane/deploy/`.
 - Egress to the internet is allowed, with a per-pod bandwidth limit.
 - One-off jobs are an API call; customers cannot spawn containers from inside
   containers.
@@ -733,6 +754,8 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 85 | Custom domains: a claim gets a random token, published by the Account as TXT at `_openupstream.<domain>` and looked up when it calls verify, once, through the cluster's resolver; hostnames under the customer and platform domains, or verified by another Project, cannot be claimed; the Routes operator gives a verified custom domain with Routes a cert-manager Certificate (HTTP-01, selected by label on the existing ClusterIssuers) and deletes it with the Domain, its Secret garbage-collected through cert-manager's owner references | the control plane polling pending claims; re-checking the TXT record periodically; a separate HTTP-01 ClusterIssuer; DNS-01 by CNAME-delegating `_acme-challenge` to us | verification while the request waits, like Buckets, gives the Account its answer at once; a removed record does not take a site down, the claim is what was proven; one issuer per environment keeps the platform's and customers' certificates on the same account; HTTP-01 needs nothing from the customer beyond the CNAME the traffic needs anyway. Traefik's Ingress provider is enabled, limited to cert-manager's solver Ingresses, and its port-80 redirect drops to the lowest priority |
 | 87 | `oup login` uses madAuth's device authorization grant (RFC 8628, madAuth 0.7) as the public client `oup CLI`, asking for `openid email offline_access`; the control plane accepts madAuth access tokens (`at+jwt`, `aud` = `CLI_CLIENT_ID`) with a session's rights and tells the CLI the issuer and client ID at `GET /v1/login`; the refresh token is kept in `~/.config/openupstream/credentials.json` (mode 600) and each new one stored before use; `OUP_API_KEY` for CI | authorization code with PKCE and a loopback redirect; both flows; e-mail and password in the terminal turned into an API key; pasting an API key | the flow RFC 8628 wrote for command-line tools, as `gh auth login` and `az login` use: it works over SSH, in containers and on headless machines, with every sign-in method, passkeys included; `verification_uri_complete` makes it one click when a browser is at hand, so a loopback flow would add code for no gain; a password in the terminal would leave out passkey users. madAuth refuses clients without `deviceFlow`, and only an admin with a fresh sign-in registers one |
 | 88 | `oup site deploy` makes the Bucket mirror the directory: changed files only (MD5 against the ETag), `index.html` files after the rest, then stale objects deleted (`--keep` to leave them); cache headers and content types from the file name | upload only, never delete | a deploy should leave exactly the build behind, or deleted pages stay reachable; uploading the index last keeps a client from loading an index whose assets are not there yet; hashed assets of the previous build go with it, so a page open from before the deploy may miss a lazily loaded chunk; `--keep` is for sites that need that |
+| 89 | Every Project namespace gets one NetworkPolicy, `project-isolation`: ingress from the Project's own pods, Traefik's namespace and `cnpg-system`, nothing else; egress open. The operators apply it right after the namespace; the platform namespace's exception for the operators (port 8081) is a static policy next to the control plane | a policy per Database and per Service; a deny-all policy plus one allow policy per source; Calico instead of k3s's built-in policy controller | one object that every operator applies identically under the shared field manager, so whichever operator creates the namespace isolates it before anything runs there; same-namespace traffic is what a Project needs inside (Services to Poolers, CloudNativePG replication); k3s enforces it without another CNI. Egress for customer containers is decided with the Services operator |
+| 90 | gVisor is installed by a script on each compute node before k3s starts (`infra/gvisor/install.sh`): a pinned release whose archive is checked against a SHA-512 in the script, and a containerd config template that extends k3s's base with the handler `runsc`. The RuntimeClass `gvisor` selects nodes labelled `openupstream.io/gvisor=true` | gVisor's apt repository; a privileged DaemonSet that installs runsc on the nodes | a node setup step like k3s itself, with nothing privileged left running in the cluster; the pin makes every node run the same sandbox, and an upgrade is a reviewed change of two lines; the apt repository serves whatever is newest. The label keeps gVisor pods off a node without runsc, where they would never start |
 | 91 | The control plane writes the Kubernetes Secret `project-secrets` per Project itself, after each change and in a 30 s pass; no Secrets operator. The public API: `GET …/secrets` (names), `PUT …/secrets/{name}` `{value}`, `DELETE …/secrets/{name}`; every Service of the Project gets all of them | a Secrets operator fed decrypted values by an internal API route (the earlier plan of decision 20); per-Service selection of Secrets | the control plane alone holds the key-encryption key, so plaintext never travels between processes and no operator can read every Project's Secrets; it needs `create` and `patch` on Secrets cluster-wide, which a Secrets operator would have needed as well. Project-wide Secrets match how they are described to customers; selecting per Service can come later without changing the API |
 | 92 | Services API: a Service is a row, created, changed (`PATCH`) and redeployed (`POST …/deploy`) through the API, its state read from its Deployment. The control plane resolves the tag to a digest at the registry while the request waits, over https and never at a private address; pull credentials are per Service, sealed with the Project's data key, and rendered into one dockerconfigjson Secret per Project keyed by repository | Deployments as immutable records with history and rollback; the operator resolving tags on its pass; named registry credentials shared by Services; a pull Secret per Service | the pattern of Buckets: a 201 means the image exists and can be pulled, and a bad tag or credentials is an answer, not a state to poll; the operator never needs credentials or the internet. One Secret per Project lives and dies with the namespace and needs no pruning by the control plane; kubelet's prefix match keeps credentials per repository. Rollback is a `PATCH` back to a digest (`image@sha256:…`) |
 
@@ -863,10 +886,12 @@ Decisions table once it is settled.
    index last and deleted the old bundle, and the served headers matched.
    Left: the approval page
    for `oup login` at madAuth's `loginUrl`, the production DNS zones.
-3. Containers, Service mode. Done so far: Secrets through the API, written
-   into each Project's namespace by the control plane (#91); Services
-   through the API, each pinned to the digest its tag resolved to (#92); not
-   yet tested on the dev cluster.
+3. Containers, Service mode. Done so far: the NetworkPolicy
+   `project-isolation` in every Project namespace (#89), gVisor on the
+   compute nodes and the RuntimeClass `gvisor` (#90), Secrets through the
+   API, written into each Project's namespace by the control plane (#91);
+   Services through the API, each pinned to the digest its tag resolved to
+   (#92).
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
    staying writable while a whole Site is switched off.
