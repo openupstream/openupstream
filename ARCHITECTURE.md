@@ -287,7 +287,11 @@ a misspelt or removed field fails the typecheck.
 
 The reconcile pass talks to Kubernetes through `@kubernetes/client-node`,
 with server-side apply under the field manager `openupstream-operators`
-(#47). It only creates and updates: a Database's objects are deleted by the
+(#47). The client serializes kinds it has a model for by the model's
+attribute names, which differ in places (a NetworkPolicy's `from` is
+`_from`); every object is first deserialized into that shape, so what is
+sent is what was written (found on the dev cluster: the peers of every
+NetworkPolicy had been dropped, which admitted all traffic). It only creates and updates: a Database's objects are deleted by the
 control plane's delete of that Database or its Project, never because a row
 is missing (#48). It runs in the cluster (`operators/deploy/`, one
 replica) and makes a pass every 30 s with the rows from the control plane's
