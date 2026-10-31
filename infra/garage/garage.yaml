@@ -14,35 +14,6 @@ kind: Namespace
 metadata:
   name: garage
 ---
-# What Garage's Kubernetes discovery publishes: one object per node, named
-# by its node id. Garage would create this definition itself, but that
-# needs the right to create any CustomResourceDefinition; it is installed
-# here instead and Garage is told to skip it.
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: garagenodes.deuxfleurs.fr
-spec:
-  group: deuxfleurs.fr
-  names: {kind: GarageNode, plural: garagenodes, singular: garagenode}
-  scope: Namespaced
-  versions:
-    - name: v1
-      served: true
-      storage: true
-      schema:
-        openAPIV3Schema:
-          type: object
-          required: [spec]
-          properties:
-            spec:
-              type: object
-              required: [hostname, address, port]
-              properties:
-                hostname: {type: string}
-                address: {type: string}
-                port: {type: integer, minimum: 0, maximum: 65535}
----
 apiVersion: v1
 kind: ServiceAccount
 metadata:

@@ -3,8 +3,10 @@
 Garage, the object storage behind Buckets (ARCHITECTURE.md, "Object
 storage" and "Static sites"; decisions 81 to 84).
 
-- `garage.yaml`: the namespace, Garage's GarageNode definition and the
-  rights to its own GarageNode objects (Kubernetes discovery), its
+- `crd.yaml`: Garage's GarageNode definition (Kubernetes discovery),
+  applied and established before any node starts.
+- `garage.yaml`: the namespace, the rights to Garage's own GarageNode
+  objects, its
   configuration and a StatefulSet with one node per Site, the third Site
   included. Replication factor 3, `consistent` mode: every object is stored
   once in each Site. Its website endpoint (port 3902) serves static sites;

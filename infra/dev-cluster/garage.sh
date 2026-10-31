@@ -5,7 +5,7 @@
 # 1. the Secret garage (RPC secret and admin token), generated once and kept
 #    in the cluster only; the admin token also goes to the platform
 #    Project's namespace as garage-admin, for the control plane;
-# 2. Garage, one node per Site (infra/garage/garage.yaml);
+# 2. Garage, one node per Site (infra/garage/crd.yaml, then garage.yaml);
 # 3. the layout: each node's zone is its Site, with GARAGE_CAPACITY each,
 #    applied once;
 # 4. the public S3 endpoint https://<bucket>.s3.$CUSTOMER_DOMAIN: the
@@ -42,6 +42,10 @@ kubectl -n garage get secret garage -o jsonpath='{.data.GARAGE_ADMIN_TOKEN}' | b
   kubectl -n "$PLATFORM_NS" create secret generic garage-admin --dry-run=client -o yaml \
     --from-file=GARAGE_ADMIN_TOKEN=/dev/stdin | kubectl apply -f - >/dev/null
 
+# The GarageNode definition first: a node that starts before it is
+# established gets a 429 from its discovery and joins only minutes later.
+kubectl apply -f "$ROOT/infra/garage/crd.yaml" >/dev/null
+kubectl wait crd/garagenodes.deuxfleurs.fr --for=condition=Established --timeout=1m >/dev/null
 sed -e "s#CUSTOMER_DOMAIN#$CUSTOMER_DOMAIN#g" -e "s#GARAGE_DATA_SIZE#$GARAGE_DATA_SIZE#g" "$ROOT/infra/garage/garage.yaml" |
   kubectl apply -f - >/dev/null
 # Not ready until the layout is applied (its health check needs a quorum),
@@ -54,9 +58,10 @@ kubectl -n garage wait pod -l app.kubernetes.io/name=garage --for=jsonpath='{.st
 # The CLI logs its connection to stderr; its exit code still counts.
 garage() { kubectl -n garage exec garage-0 -- /garage "$@" 2>/dev/null; }
 
-# The nodes find each other through their GarageNode objects; wait for all three.
+# The nodes find each other through their GarageNode objects; wait until
+# the first one is connected to all three.
 for _ in $(seq 60); do
-  [[ $(kubectl -n garage get garagenodes --no-headers 2>/dev/null | wc -l) -ge 3 ]] && break
+  [[ $(garage status | grep -c ' garage-[0-9] ') -ge 3 ]] && break
   sleep 5
 done
 
@@ -65,7 +70,8 @@ if [[ $(garage layout show | grep -c 'Current cluster layout version: 0') -eq 1 
   for pod in garage-0 garage-1 garage-2; do
     node=$(kubectl -n garage get pod "$pod" -o jsonpath='{.spec.nodeName}')
     site=$(kubectl get node "$node" -o jsonpath='{.metadata.labels.topology\.kubernetes\.io/zone}')
-    id=$(kubectl -n garage exec "$pod" -- /garage node id -q 2>/dev/null | cut -d@ -f1)
+    # Each node publishes its id as the name of its GarageNode, with its pod's name as hostname.
+    id=$(kubectl -n garage get garagenodes -o jsonpath="{.items[?(@.spec.hostname=='$pod')].metadata.name}")
     garage layout assign -z "$site" -c "$GARAGE_CAPACITY" "$id" >/dev/null
     echo "garage: $pod ($site) ${id:0:16}"
   done
