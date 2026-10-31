@@ -10,7 +10,8 @@
 # Needs the Secret madauth (MADAUTH_SIGNING_KEY, the same on every replica,
 # and WEBHOOK_SECRET) and the ConfigMap madauth-config (MADAUTH_ISSUER,
 # ALLOWED_ORIGINS, WEBHOOK_EVENTS, and for the sidecar MAIL, MAIL_FROM,
-# SES_REGION), and with MAIL=ses the Secret madauth-ses (the
+# SES_REGION, SIGNUP, SIGNUP_ALLOW, SIGNUP_MESSAGE), and with MAIL=ses the
+# Secret madauth-ses (the
 # send-only key, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY). The control plane's image is
 # pinned by digest when applied (infra/dev-cluster/platform.sh).
 apiVersion: v1
@@ -96,6 +97,17 @@ spec:
             - name: SES_REGION
               valueFrom:
                 configMapKeyRef: {name: madauth-config, key: SES_REGION, optional: true}
+            # Who may sign up (ARCHITECTURE.md, decision 86): open unless
+            # SIGNUP=closed; WEBHOOK_EVENTS must list user.signing_up.
+            - name: SIGNUP
+              valueFrom:
+                configMapKeyRef: {name: madauth-config, key: SIGNUP, optional: true}
+            - name: SIGNUP_ALLOW
+              valueFrom:
+                configMapKeyRef: {name: madauth-config, key: SIGNUP_ALLOW, optional: true}
+            - name: SIGNUP_MESSAGE
+              valueFrom:
+                configMapKeyRef: {name: madauth-config, key: SIGNUP_MESSAGE, optional: true}
           # The send-only SES key (MAIL=ses).
           envFrom:
             - secretRef: {name: madauth-ses, optional: true}

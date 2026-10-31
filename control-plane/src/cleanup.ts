@@ -13,7 +13,9 @@
  *    row (decision 82): unlike a Database, nothing of it is kept;
  * 4. removes a deleted Project's namespace once it has no Database or
  *    Bucket rows left, then its row (which cascades to its Secrets and the
- *    like).
+ *    like);
+ * 5. deletes the waitlist's addresses nobody confirmed in time (decision
+ *    86).
  *
  * Every step is idempotent and only recorded after it succeeded, so a failed
  * step is retried by the next pass.
@@ -23,6 +25,7 @@ import type pg from 'pg';
 import type { BackupStore } from './backups.js';
 import type { ObjectStorage } from './garage.js';
 import type { ControlPlaneKube, ObjectRef } from './kube.js';
+import { purgeUnconfirmed } from './waitlist/store.js';
 
 export interface CleanupDeps {
     readonly pool: pg.Pool;
@@ -153,6 +156,10 @@ export async function cleanupPass(deps: CleanupDeps): Promise<void> {
     await purgeExpiredDatabases(deps);
     await purgeDeletedBuckets(deps);
     await purgeEmptyProjects(deps);
+    const unconfirmed = await purgeUnconfirmed(deps.pool);
+    if (unconfirmed > 0) {
+        deps.log({ msg: 'cleanup: unconfirmed waitlist addresses deleted', count: unconfirmed });
+    }
 }
 
 /** `7d` (the DatabaseConfig's form) as a Postgres interval; undefined if malformed. */

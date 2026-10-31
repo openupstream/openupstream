@@ -13,6 +13,7 @@ Responsibilities:
 - secrets (envelope-encrypted, injected into containers as env)
 - usage events (stored here; rated, invoiced and collected by the private
   billing service)
+- the waitlist, while sign-up on the hosted service is closed
 
 Not here: anything that reconciles cluster state in a loop. That is
 `operators/`. Nor payments: the billing service (ARCHITECTURE.md, decision
@@ -44,10 +45,12 @@ at `<bucket>.s3.<CUSTOMER_DOMAIN>`; `PLATFORM_DOMAIN`, our own hostnames,
 which like `CUSTOMER_DOMAIN` cannot be claimed as custom domains; optionally
 `NEW_ACCOUNT_HOLDS`, the Holds every new Account starts with, e.g.
 `payment-method`, and `BILLING_CALLERS`, the billing service's
-ServiceAccount; `ROUTES_CALLERS`, default the Routes operator's). At
-startup it applies pending migrations, seeds the platform's own Account,
-Project and Database rows (`src/platform.ts`) and gives every Project
-without one its default Domain, then listens on `PORT` (8080, public API) and `INTERNAL_PORT` (8081).
+ServiceAccount; `ROUTES_CALLERS`, default the Routes operator's;
+`WAITLIST_*` for the waitlist, see below). At startup it applies pending
+migrations, seeds the platform's own Account, Project and Database rows
+(`src/platform.ts`) and gives every Project without one its default
+Domain, then listens on `PORT` (8080, public API) and `INTERNAL_PORT`
+(8081), and with `WAITLIST_URL` on `WAITLIST_PORT` (8082).
 
 In the cluster it runs from the image built by `Dockerfile` (GitHub Actions
 pushes it to `ghcr.io/openupstream/control-plane`) with
@@ -111,6 +114,41 @@ with `MAIL=ses` (`MAIL_FROM`, `SES_REGION` and the send-only key in
 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`), to the log with `MAIL=log`,
 and are refused without `MAIL`.
 
+Who may sign up (ARCHITECTURE.md, decision 86): madAuth asks before it
+creates a user, when its `WEBHOOK_EVENTS` list `user.signing_up`. With
+`SIGNUP=open`, the default, everyone may. With `SIGNUP=closed` only the
+addresses and `@domains` in `SIGNUP_ALLOW` (comma-separated, any case)
+may, and everyone else is refused with `SIGNUP_MESSAGE`, which madAuth
+shows them. Users who exist keep signing in. Refused addresses are not
+logged.
+
+## Waitlist
+
+While sign-up on the hosted service is closed, `src/waitlist/` serves
+`openupstream.com` in the dashboard's place (decision 86): plain HTML, no
+script, no cookies, routed by `infra/ingress/waitlist-route.yaml`. It is
+on only with `WAITLIST_URL`, the page's public URL, which the e-mails link
+to; then it needs `WAITLIST_IMPRINT`, the Impressum as plain text, and
+`WAITLIST_MAIL`: `ses` (`MAIL_FROM`, `SES_REGION` and the send-only key in
+`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, madAuth's Secret
+`madauth-ses` in the cluster) or `log`.
+
+| Route | |
+| --- | --- |
+| `GET /` | coming soon, and the form |
+| `POST /waitlist` | `email`, `consent=yes` (form fields): stores the address as pending and mails a link to confirm; an address on the list already gets a link to remove it instead. At most one e-mail per address an hour; the answer is the same either way. 400 without consent or a valid address, 503 if the e-mail could not be sent |
+| `GET /waitlist/confirm?token=` | a button that confirms; 404 for an unknown or expired token |
+| `POST /waitlist/confirm` | `token`: the address is on the list (`confirmed_at`) |
+| `GET /waitlist/remove?token=` | a button that removes |
+| `POST /waitlist/remove` | `token`: the address is deleted |
+| `GET /privacy`, `GET /imprint` | the privacy notice, the Impressum |
+
+The table `waitlist` keeps each address with the SHA-256 of the token in
+its latest e-mail (a new e-mail replaces the token), the consent text's
+version and when it was asked for, mailed and confirmed. A link works for
+48 hours until the address is confirmed, and from then on until the next
+e-mail to it.
+
 ## Cleanup
 
 Deleting only marks rows (`deleted_at`): the operator stops seeing them at
@@ -132,6 +170,9 @@ name stays taken.
 
 Once a deleted Project has neither Database nor Bucket rows left, the pass
 removes its namespace and its row.
+
+Last, it deletes the waitlist's addresses that were not confirmed within 48
+hours of their e-mail.
 
 ## Internal API
 

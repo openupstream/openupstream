@@ -7,7 +7,8 @@
  * (src/cleanup.ts).
  *
  * Two HTTP servers: the public API on PORT (src/api) and the internal API
- * for the operators on INTERNAL_PORT (src/internal). At startup it applies
+ * for the operators on INTERNAL_PORT (src/internal); with WAITLIST_URL a
+ * third, the waitlist page on WAITLIST_PORT (src/waitlist). At startup it applies
  * pending migrations and seeds the platform's own rows. Settings:
  * src/config.ts.
  */
@@ -31,7 +32,10 @@ import { tokenReviewAuthenticator } from './internal/auth.js';
 import { createInternalServer } from './internal/server.js';
 import { controlPlaneKube } from './kube.js';
 import { seedPlatform } from './platform.js';
+import { type Message, sesClient, sesSend } from './mail.js';
+import { ok } from './result.js';
 import { listDomainRoutings } from './routes/store.js';
+import { createWaitlistSite } from './waitlist/site.js';
 
 const log = (entry: Record<string, unknown>): void =>
     console.log(JSON.stringify({ time: new Date().toISOString(), ...entry }));
@@ -132,6 +136,28 @@ async function main(): Promise<void> {
         log,
     });
     const server = serve({ fetch: api.fetch, port: config.value.port });
+
+    const { waitlist } = config.value;
+    const waitlistServer =
+        waitlist === undefined
+            ? undefined
+            : serve({
+                  fetch: createWaitlistSite({
+                      pool,
+                      url: waitlist.url,
+                      imprint: waitlist.imprint,
+                      sendMail:
+                          waitlist.mail.kind === 'ses'
+                              ? sesSend(sesClient(waitlist.mail.region), waitlist.mail.from)
+                              : // The dev cluster: the link goes to the log instead of a mailbox.
+                                async (to: string, message: Message) => {
+                                    log({ msg: 'waitlist e-mail (not sent: WAITLIST_MAIL=log)', to, subject: message.subject, text: message.text });
+                                    return ok(undefined);
+                                },
+                      log,
+                  }).fetch,
+                  port: waitlist.port,
+              });
     log({
         msg: 'control plane listening',
         port: config.value.port,
@@ -139,6 +165,7 @@ async function main(): Promise<void> {
         allowedCallers: [...config.value.allowedCallers],
         billingCallers: [...config.value.billingCallers],
         newAccountHolds: config.value.newAccountHolds,
+        waitlist: waitlist === undefined ? 'off' : { url: waitlist.url, port: waitlist.port, mail: waitlist.mail.kind },
     });
 
     const stop = new AbortController();
@@ -146,6 +173,7 @@ async function main(): Promise<void> {
         stop.abort();
         server.close();
         internal.close();
+        waitlistServer?.close();
     });
     await runCleanup(
         {

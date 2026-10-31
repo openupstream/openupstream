@@ -14,6 +14,12 @@ _Avoid_: tenant, organization, subscription, customer (in code)
 A person who can sign in to an Account and act on its Projects.
 _Avoid_: user (ambiguous with the customer's own users)
 
+**Waitlist**:
+The e-mail addresses of people who want to hear when the hosted service
+opens for sign-up, each confirmed by its owner. Not Members: they have no
+sign-in and no Account.
+_Avoid_: newsletter, subscribers, leads
+
 **Hold**:
 A reason an Account may not create Resources now, such as a missing
 payment method. An Account without Holds may; its existing Resources keep

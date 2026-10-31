@@ -5,7 +5,8 @@
 # both in.
 #
 # - PLATFORM_DOMAIN: madAuth under /auth/* and /.well-known/*, so it is on
-#   the same site as the dashboard, which will serve the rest.
+#   the same site as the dashboard, which will serve the rest; until then,
+#   while sign-up is closed, the waitlist does (waitlist-route.yaml).
 # - api.PLATFORM_DOMAIN: the public API. The internal API (port 8081) is
 #   never routed.
 apiVersion: cert-manager.io/v1

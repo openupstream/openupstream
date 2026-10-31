@@ -9,10 +9,23 @@
  *   AWS_SECRET_ACCESS_KEY;
  * - `log`: write the e-mails to the log instead (dev cluster, tests);
  * - unset: no mail sender, e-mails are refused.
+ *
+ * SIGNUP (ARCHITECTURE.md, decision 86): `open` (the default) lets anyone
+ * sign up; `closed` refuses every new user but the addresses and `@domains`
+ * in SIGNUP_ALLOW, with SIGNUP_MESSAGE as madAuth's answer. Users who exist
+ * keep signing in either way.
  */
 import { serve } from '@hono/node-server';
-import { sesClient, sesMail } from './madauth/mail.js';
-import { type SendMail, createSidecar, logMail } from './madauth/sidecar.js';
+import { sesClient } from './mail.js';
+import { sesMail } from './madauth/mail.js';
+import {
+    DEFAULT_SIGNUP_MESSAGE,
+    type SendMail,
+    type SignupPolicy,
+    createSidecar,
+    logMail,
+    signupAllowList,
+} from './madauth/sidecar.js';
 
 const log = (entry: Record<string, unknown>): void =>
     console.log(JSON.stringify({ time: new Date().toISOString(), ...entry }));
@@ -44,7 +57,28 @@ const sendMail = ((): SendMail | undefined => {
     }
 })();
 
-const app = createSidecar({ webhookSecret, sendMail, log });
+const signupSetting = process.env['SIGNUP'] ?? 'open';
+if (signupSetting !== 'open' && signupSetting !== 'closed') {
+    log({ msg: `SIGNUP=${signupSetting} is not supported: open or closed` });
+    process.exit(1);
+}
+const signup: SignupPolicy =
+    signupSetting === 'open'
+        ? { open: true }
+        : {
+              open: false,
+              allow: signupAllowList(process.env['SIGNUP_ALLOW'] ?? ''),
+              message: process.env['SIGNUP_MESSAGE'] || DEFAULT_SIGNUP_MESSAGE,
+          };
+
+const app = createSidecar({ webhookSecret, sendMail, signup, log });
 // Only madAuth, in the same pod, may call it.
 serve({ fetch: app.fetch, port, hostname: '127.0.0.1' });
-log({ msg: 'madauth sidecar listening', port, mail: mail === '' ? 'none' : mail, ...(mail === 'ses' ? { from: mailFrom, region: sesRegion } : {}) });
+log({
+    msg: 'madauth sidecar listening',
+    port,
+    mail: mail === '' ? 'none' : mail,
+    ...(mail === 'ses' ? { from: mailFrom, region: sesRegion } : {}),
+    signup: signupSetting,
+    ...(signup.open ? {} : { signupAllowed: signup.allow.length }),
+});

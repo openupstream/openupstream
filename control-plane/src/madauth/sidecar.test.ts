@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { signWebhook } from '@madauth/server/webhook';
-import { type MailRequest, apiKeyScopes, createSidecar } from './sidecar.js';
+import { type MailRequest, apiKeyScopes, createSidecar, signupAllowList, signupAllowed } from './sidecar.js';
 
 const secret = `whsec_${randomBytes(32).toString('base64')}`;
 const NOW = 1_800_000_000;
@@ -89,4 +89,48 @@ test('a signed body that is not {type, data} is a 400, not a crash', async () =>
         const response = await app.request('/webhooks', { method: 'POST', body, headers: sign(body) });
         assert.equal(response.status, 400, body);
     }
+});
+
+const signingUp = (email: string) => ({ type: 'user.signing_up', data: { email, name: 'Dora', locale: 'en', method: 'password' } });
+
+test('while sign-up is open, every new user is allowed', async () => {
+    const response = await sidecar().post(signingUp('dora@example.test'));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { allow: true });
+});
+
+test('while sign-up is closed, only the allowed addresses and domains get in, and the rest see the message', async () => {
+    const logs: Record<string, unknown>[] = [];
+    const app = createSidecar({
+        webhookSecret: secret,
+        sendMail: undefined,
+        signup: { open: false, allow: signupAllowList(' Maintainer@Example.test, @team.example.test,'), message: 'Not open yet.' },
+        log: (entry) => logs.push(entry),
+        now: () => NOW * 1000,
+    });
+    const answer = async (call: unknown) => {
+        const body = JSON.stringify(call);
+        const response = await app.request('/webhooks', { method: 'POST', body, headers: sign(body) });
+        assert.equal(response.status, 200);
+        return response.json();
+    };
+    assert.deepEqual(await answer(signingUp('maintainer@example.test')), { allow: true });
+    assert.deepEqual(await answer(signingUp('MAINTAINER@example.TEST')), { allow: true });
+    assert.deepEqual(await answer(signingUp('anyone@team.example.test')), { allow: true });
+    assert.deepEqual(await answer(signingUp('dora@example.test')), { allow: false, message: 'Not open yet.' });
+    // A subdomain or a look-alike is not the allowed domain.
+    assert.deepEqual(await answer(signingUp('eve@evil.team.example.test')), { allow: false, message: 'Not open yet.' });
+    assert.deepEqual(await answer({ type: 'user.signing_up', data: { method: 'github' } }), { allow: false, message: 'Not open yet.' });
+    assert.ok(logs.every((entry) => !JSON.stringify(entry).includes('dora@')), 'refused addresses are not logged');
+});
+
+test('the allow list ignores case, spaces and empty entries', () => {
+    assert.deepEqual(signupAllowList(''), []);
+    const policy = { open: false, allow: signupAllowList('A@B.test , ,@c.test'), message: '' } as const;
+    assert.deepEqual(policy.allow, ['a@b.test', '@c.test']);
+    assert.equal(signupAllowed(policy, ' a@b.TEST '), true);
+    assert.equal(signupAllowed(policy, 'x@c.test'), true);
+    assert.equal(signupAllowed(policy, 'x@b.test'), false);
+    assert.equal(signupAllowed(policy, 'c.test'), false);
+    assert.equal(signupAllowed({ open: true }, undefined), true);
 });

@@ -80,7 +80,11 @@ madAuth sends real e-mails through SES; `MAIL=log ./platform.sh` writes
 them to the sidecar's log instead. To try the payment-method gate without a
 billing service, set `NEW_ACCOUNT_HOLDS=payment-method` and
 `BILLING_CALLERS` to a ServiceAccount you lift Holds with (control-plane
-README, "Internal API").
+README, "Internal API"). To close sign-up as the hosted service does, with
+the waitlist at `https://dev.openupstream.com`, set `SIGNUP=closed`,
+`IMPRINT_FILE` to a text file with an Impressum, and `SIGNUP_ALLOW` to your
+own address, so you can still create users (docs/self-hosting.md, "Sign-up
+and the waitlist").
 
 A custom domain (control-plane README) needs a hostname outside both dev
 zones, which are reserved; `test.openupstream.com` is a third zone on

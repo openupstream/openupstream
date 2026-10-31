@@ -1,17 +1,12 @@
 /**
  * madAuth's e-mails, written and sent by the sidecar (ARCHITECTURE.md,
  * decision 66). madAuth decides when to send and provides the link and the
- * code; this module only puts them into words and hands them to Amazon SES.
- * Plain text, English, for now.
+ * code; this module only puts them into words and hands them to Amazon SES
+ * (../mail.ts). Plain text, English, for now.
  */
-import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
+import { type Message, type SesSender, sesSend } from '../mail.js';
 import { type Result, err, ok } from '../result.js';
 import type { MailRequest, SendMail } from './sidecar.js';
-
-export interface Message {
-    readonly subject: string;
-    readonly text: string;
-}
 
 const str = (value: unknown): string | undefined => (typeof value === 'string' && value !== '' ? value : undefined);
 
@@ -61,33 +56,11 @@ export function compose(mail: MailRequest): Result<Message, string> {
     }
 }
 
-/** The part of the SES client that sending needs, so tests can stand in for it. */
-export interface SesSender {
-    send(command: SendEmailCommand): Promise<unknown>;
-}
-
-export const sesClient = (region: string): SesSender => new SESv2Client({ region });
-
-/** Sends through SES as `from`; the client takes the send-only key from AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY. */
-export const sesMail =
-    (client: SesSender, from: string): SendMail =>
-    async (mail) => {
+/** Writes each of madAuth's e-mails and sends it through SES as `from`. */
+export const sesMail = (client: SesSender, from: string): SendMail => {
+    const send = sesSend(client, from);
+    return async (mail) => {
         const message = compose(mail);
-        if (!message.ok) {
-            return message;
-        }
-        const command = new SendEmailCommand({
-            FromEmailAddress: from,
-            Destination: { ToAddresses: [mail.to] },
-            Content: {
-                Simple: {
-                    Subject: { Data: message.value.subject, Charset: 'UTF-8' },
-                    Body: { Text: { Data: message.value.text, Charset: 'UTF-8' } },
-                },
-            },
-        });
-        return client.send(command).then(
-            () => ok(undefined),
-            (error: unknown) => err(`SES: ${error instanceof Error ? error.message : String(error)}`),
-        );
+        return message.ok ? send(mail.to, message.value) : message;
     };
+};
