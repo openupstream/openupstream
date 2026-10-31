@@ -78,6 +78,8 @@ credentials and domains the platform needs, and how we set them up for the
 hosted service; [infra/dev-cluster](infra/dev-cluster/README.md) brings up a
 development cluster with them.
 
+---
+
 Created by David Neuy and contributors.
 
 ## License
