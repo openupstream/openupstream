@@ -421,6 +421,8 @@ digest (#55).
   they do not own. The proof is a random token per claim, looked up through
   the cluster's resolver when the Account asks for verification
   (`POST …/domains/{id}/verify`) and not checked again afterwards (#85).
+  The cluster's resolver caches a missing record for up to 30 s, so a
+  verify right after publishing it may need a retry.
   Hostnames under the customer domain and our own domain cannot be claimed,
   nor one another Project has verified. Deleting a custom domain deletes
   its Routes; the default Domain goes only with its Project.
@@ -774,8 +776,11 @@ Decisions table once it is settled.
    deleted through the API with a key of their own, reached at
    `https://<bucket>.s3.dev.openupstream.app`. Static sites at Projects'
    default hostnames (2026-10-31, #84): the routing table with Routes to
-   Buckets, SPA fallback, the Routes operator. Custom domains (#85): claim,
-   TXT proof, a certificate of their own through HTTP-01. Left:
+   Buckets, SPA fallback, the Routes operator. Custom domains (2026-10-31,
+   #85): claim, TXT proof, a certificate of their own through HTTP-01,
+   issued within 30 s of the first Route and served in both compute Sites;
+   deleting the Domain removed its Certificate and Secret in the next pass.
+   Left:
    `oup site deploy` with its cache headers, the production DNS zones.
 3. Containers, Service mode.
 4. Containers, Cron job and One-off job modes.

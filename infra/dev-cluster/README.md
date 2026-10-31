@@ -83,10 +83,13 @@ billing service, set `NEW_ACCOUNT_HOLDS=payment-method` and
 README, "Internal API").
 
 A custom domain (control-plane README) needs a hostname outside both dev
-zones, which are reserved: claim it, publish its TXT record, verify, point
-a CNAME at `ingress.dev.openupstream.app`, then add a Route. The Routes
+zones, which are reserved; `test.openupstream.com` is a third zone on
+bunny.net for that, empty between sessions. Claim e.g.
+`shop.test.openupstream.com`, publish its TXT record there, verify, point a
+CNAME at `ingress.dev.openupstream.app`, then add a Route. The Routes
 operator then requests its certificate through HTTP-01 from Let's Encrypt
-staging.
+staging. Delete the two records afterwards: `down.sh` does not touch that
+zone.
 
 madAuth is at `https://dev.openupstream.com/auth`, the API at
 `https://api.dev.openupstream.com`. Sign up with e-mail and password
