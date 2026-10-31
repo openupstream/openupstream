@@ -4,7 +4,7 @@
  *
  *   oup login [--api <url>] [--no-browser]   sign in through the browser (device grant)
  *   oup logout
- *   oup site deploy <dir> --bucket <name> [--keep]
+ *   oup site deploy <dir> --bucket <name> [--keep] [--force]
  *   oup version
  *
  * Planned (ARCHITECTURE.md build order): oup pg, oup bucket, oup deploy
@@ -25,7 +25,7 @@ import { apiAccess } from './session.js';
 const USAGE = `usage:
   oup login [--api <url>] [--no-browser]
   oup logout
-  oup site deploy <dir> --bucket <name> [--keep]
+  oup site deploy <dir> --bucket <name> [--keep] [--force]
   oup version`;
 
 const fail = (message: string): never => {
@@ -107,7 +107,7 @@ async function siteDeploy(args: string[]): Promise<void> {
     const { values, positionals } = parseArgs({
         args,
         allowPositionals: true,
-        options: { bucket: { type: 'string' }, keep: { type: 'boolean' } },
+        options: { bucket: { type: 'string' }, keep: { type: 'boolean' }, force: { type: 'boolean' } },
     });
     const [dir] = positionals;
     if (dir === undefined || values.bucket === undefined) {
@@ -123,16 +123,11 @@ async function siteDeploy(args: string[]): Promise<void> {
         return fail(projects.error.message);
     }
     // Bucket names are unique across all Projects.
-    const found = (
-        await Promise.all(
-            projects.value.map(async (project) => {
-                const buckets = await client.listBuckets(project.id);
-                return buckets.ok ? buckets.value.filter((bucket) => bucket.name === values.bucket) : [];
-            }),
-        )
-    ).flat()[0];
+    const listed = await Promise.all(projects.value.map((project) => client.listBuckets(project.id)));
+    const found = listed.flatMap((buckets) => (buckets.ok ? buckets.value : [])).find((bucket) => bucket.name === values.bucket);
     if (found === undefined) {
-        return fail(`no Bucket ${values.bucket} in your Projects`);
+        const failed = listed.find((buckets) => !buckets.ok);
+        return fail(failed !== undefined && !failed.ok ? failed.error.message : `no Bucket ${values.bucket} in your Projects`);
     }
     const details = await client.getBucket(found.projectId, found.id);
     if (!details.ok) {
@@ -145,7 +140,7 @@ async function siteDeploy(args: string[]): Promise<void> {
     // The Bucket's endpoint is its own hostname, <bucket>.s3.<domain>; the client puts the name in front itself.
     const host = new URL(endpoint).host.replace(`${found.name}.`, '');
     const s3 = new S3Client({ endpoint: `https://${host}`, region, credentials: { accessKeyId, secretAccessKey }, forcePathStyle: false });
-    const plan = await deploy(s3, found.name, dir, { keep: values.keep ?? false, log: (line) => console.log(line) });
+    const plan = await deploy(s3, found.name, dir, { keep: values.keep ?? false, force: values.force ?? false, log: (line) => console.log(line) });
     console.log(`${plan.uploads.length} uploaded, ${plan.unchanged} unchanged, ${plan.deletions.length} deleted`);
 }
 

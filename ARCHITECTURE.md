@@ -215,7 +215,9 @@ The API accepts three kinds of madAuth credentials (#64, #87):
   the code instead. It asks for `offline_access`, keeps the refresh token
   (30 days from its last use, rotated on every use) in
   `~/.config/openupstream/credentials.json` (mode 600) and stores each new
-  one before it uses the new access token. Like a session, it may do
+  one before it uses the new access token, one `oup` process at a time
+  (a lock file), since madAuth ends the chain when a refresh token is used
+  twice. Like a session, it may do
   everything its user may. It carries no e-mail address, so creating an
   Account still needs a session or an API key. The CLI learns madAuth's
   issuer and its client ID from `GET /v1/login`; `OUP_API_KEY` replaces the
@@ -397,7 +399,8 @@ digest (#55).
   directory (#88): it uploads only files whose MD5 differs from the
   object's ETag, every `index.html` after the other files, so a client that
   loads the new one finds the assets it names, then deletes the objects the
-  directory no longer has; `--keep` leaves them. Dotfiles stay out, except
+  directory no longer has; `--keep` leaves them, `--force` uploads every
+  file, rewriting the headers of objects another client put there. Dotfiles stay out, except
   `.well-known`. It uses the Bucket's own key, which the API hands to a
   caller who may write.
 - Compression (gzip, brotli, zstd) at Traefik. No CDN; customers who want one

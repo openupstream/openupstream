@@ -8,6 +8,7 @@
  * objects the directory no longer has are deleted, unless `keep`.
  */
 import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { DeleteObjectsCommand, ListObjectsV2Command, PutObjectCommand, type S3Client } from '@aws-sdk/client-s3';
@@ -17,11 +18,12 @@ export const NO_CACHE = 'no-cache';
 export const SHORT = 'public, max-age=300';
 
 /**
- * A content hash in the name, as bundlers write it: `app.3f2a9c1b.js`,
- * `index-BXk3a9Zp.css`. At least eight characters with a digit, so
- * `jquery-migration.js` is not taken for one.
+ * A content hash in the name, as bundlers write it: eight or more hex
+ * digits (`main.3f2a9c1b.js`, webpack) or eight base64url characters with a
+ * digit (`index-B-x3a9Zp.js`, Rollup and Vite), after `.` or `-`. The digit
+ * keeps `jquery-migration.js` from being taken for one.
  */
-const HASHED = /[.-](?=[A-Za-z0-9_]*\d)[A-Za-z0-9_]{8,}\.[A-Za-z0-9]+$/;
+const HASHED = /(?:[.-][a-f0-9]{8,}|[.-](?=[A-Za-z0-9_-]{0,7}\d)[A-Za-z0-9_-]{8})\.[A-Za-z0-9]+$/;
 
 const baseName = (key: string): string => key.slice(key.lastIndexOf('/') + 1);
 
@@ -81,10 +83,18 @@ export interface DeployPlan {
     readonly deletions: readonly string[];
 }
 
-/** Pure: what to upload (changed files only) and what to delete. */
-export function planDeploy(local: readonly LocalFile[], remote: readonly RemoteObject[], keep: boolean): DeployPlan {
+/**
+ * Pure: what to upload (changed files only, or all with `force`, which also
+ * rewrites the headers of objects another client uploaded) and what to
+ * delete.
+ */
+export function planDeploy(
+    local: readonly LocalFile[],
+    remote: readonly RemoteObject[],
+    { keep, force }: { readonly keep: boolean; readonly force: boolean },
+): DeployPlan {
     const etags = new Map(remote.map((object) => [object.key, object.etag?.replaceAll('"', '')]));
-    const changed = local.filter((file) => etags.get(file.key) !== file.md5);
+    const changed = force ? local : local.filter((file) => etags.get(file.key) !== file.md5);
     const isIndex = (file: LocalFile) => baseName(file.key) === 'index.html';
     const localKeys = new Set(local.map((file) => file.key));
     return {
@@ -102,10 +112,21 @@ export async function listLocal(dir: string): Promise<LocalFile[]> {
         .map((entry) => join(entry.parentPath, entry.name))
         .map((path) => ({ path, key: relative(dir, path).split(sep).join('/') }))
         .filter(({ key }) => !key.split('/').some((part) => part.startsWith('.') && part !== '.well-known'));
-    return Promise.all(
-        files.map(async ({ path, key }) => ({ key, path, md5: createHash('md5').update(await readFile(path)).digest('hex') })),
-    );
+    // Streamed and a few at a time, so a large site is never in memory at once.
+    const hashed: LocalFile[] = [];
+    await inBatches(files, UPLOADS_AT_ONCE, async ({ path, key }) => {
+        hashed.push({ key, path, md5: await md5Of(path) });
+    });
+    return hashed;
 }
+
+const md5Of = async (path: string): Promise<string> => {
+    const hash = createHash('md5');
+    for await (const chunk of createReadStream(path)) {
+        hash.update(chunk as Buffer);
+    }
+    return hash.digest('hex');
+};
 
 export async function listRemote(s3: S3Client, bucket: string): Promise<RemoteObject[]> {
     const page = async (token: string | undefined): Promise<RemoteObject[]> => {
@@ -131,9 +152,9 @@ export async function deploy(
     s3: S3Client,
     bucket: string,
     dir: string,
-    { keep, log }: { readonly keep: boolean; readonly log: (line: string) => void },
+    { keep, force, log }: { readonly keep: boolean; readonly force: boolean; readonly log: (line: string) => void },
 ): Promise<DeployPlan> {
-    const plan = planDeploy(await listLocal(dir), await listRemote(s3, bucket), keep);
+    const plan = planDeploy(await listLocal(dir), await listRemote(s3, bucket), { keep, force });
     const isIndex = (file: LocalFile) => baseName(file.key) === 'index.html';
     const upload = async (file: LocalFile) => {
         await s3.send(

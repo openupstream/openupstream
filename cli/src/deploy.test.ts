@@ -6,13 +6,13 @@ import { join } from 'node:path';
 import { IMMUTABLE, NO_CACHE, SHORT, cacheControlFor, contentTypeFor, listLocal, planDeploy } from './deploy.js';
 
 test('cache headers: hashed names for a year, index.html never cached, the rest five minutes', () => {
-    for (const key of ['assets/index-BXk3a9Zp.js', 'static/js/main.3f2a9c1b.js', 'chunk-4f1e2d3c5b6a.css', 'assets/logo.a1b2c3d4e5.svg']) {
+    for (const key of ['assets/index-BXk3a9Zp.js', 'assets/index-B-x3a9Zp.js', 'static/js/main.3f2a9c1b.js', 'chunk-4f1e2d3c5b6a.css', 'assets/logo.a1b2c3d4e5.svg']) {
         assert.equal(cacheControlFor(key), IMMUTABLE, key);
     }
     for (const key of ['index.html', 'docs/index.html']) {
         assert.equal(cacheControlFor(key), NO_CACHE, key);
     }
-    for (const key of ['favicon.ico', 'jquery-migration.js', 'docs/guide.html', 'robots.txt', 'assets/abcdefgh.js']) {
+    for (const key of ['favicon.ico', 'jquery-migration.js', 'jquery-3.7.1.min.js', 'my-app-v2-beta.js', 'docs/guide.html', 'robots.txt', 'assets/abcdefgh.js']) {
         assert.equal(cacheControlFor(key), SHORT, key);
     }
 });
@@ -35,11 +35,13 @@ test('only changed files are uploaded, the index files last; stale objects are d
         { key: 'assets/app-0a0b0c0d.js', etag: '"a1"' },
         { key: 'logo.svg', etag: '"l1"' },
     ];
-    const plan = planDeploy(local, remote, false);
+    const plan = planDeploy(local, remote, { keep: false, force: false });
     assert.deepEqual(plan.uploads.map((file) => file.key), ['assets/app-1a2b3c4d.js', 'index.html']);
     assert.equal(plan.unchanged, 1);
     assert.deepEqual(plan.deletions, ['assets/app-0a0b0c0d.js']);
-    assert.deepEqual(planDeploy(local, remote, true).deletions, []);
+    assert.deepEqual(planDeploy(local, remote, { keep: true, force: false }).deletions, []);
+    // --force uploads unchanged files too, to rewrite their headers.
+    assert.equal(planDeploy(local, remote, { keep: false, force: true }).uploads.length, 3);
 });
 
 test('the directory is read with / keys, without dotfiles but with .well-known', async () => {

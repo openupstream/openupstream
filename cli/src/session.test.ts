@@ -51,6 +51,20 @@ test('an expiring one is refreshed, and the new refresh token is stored before t
     assert.equal(after?.accessTokenExpiresAt, 990_000 + 900_000);
 });
 
+test('two processes refreshing at once use the refresh token once: the second finds the first one\'s tokens', async () => {
+    const path = await newPath();
+    await writeCredentials(path, stored);
+    let refreshes = 0;
+    const fetcher = madauth(async () => {
+        refreshes += 1;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    const deps = { now: () => 990_000, fetch: fetcher, sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms / 20)) };
+    const [first, second] = await Promise.all([apiAccess(path, {}, deps), apiAccess(path, {}, deps)]);
+    assert.equal(refreshes, 1);
+    assert.deepEqual([first, second].map((r) => r.ok && r.value.token), ['at2', 'at2']);
+});
+
 test('OUP_API_KEY needs no sign-in', async () => {
     assert.deepEqual(await apiAccess(await newPath(), { OUP_API_KEY: 'madauth_x', OUP_API_URL: 'https://api.dev.test' }), {
         ok: true,
