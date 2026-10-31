@@ -99,8 +99,17 @@ Germany.
   kubelet 10250, Garage RPC 3901) only from the other two nodes' public IPs.
   These control-plane connections are TLS (k3s, etcd) or Garage's own
   encrypted RPC; flannel's WireGuard carries pod traffic only.
-- gVisor (`runsc`) is added by hand to k3s's containerd config template and
+- gVisor (`runsc`) is added to k3s's containerd config template and
   exposed as the `gvisor` RuntimeClass; k3s does not detect it on its own.
+  `infra/gvisor/install.sh` installs a pinned release, checked against the
+  SHA-512 recorded in the script, on each compute node before k3s first
+  starts, and writes the template (`config-v3.toml.tmpl`, extending k3s's
+  base) that adds the handler `runsc` (#90). The compute nodes carry the
+  label `openupstream.io/gvisor=true`, and the RuntimeClass schedules only
+  there; the third Site has no gVisor. Its `overhead` reserves 64 Mi and
+  10m CPU per pod for gVisor itself (50-60 MB measured), not billed.
+  Tested on the dev cluster (2026-10-31): pods run under `runsc`
+  (`dmesg` shows gVisor), installed on fresh Ubuntu 24.04 nodes.
 - Tailscale is for admin access only (Kubernetes API, SSH, Grafana). It is
   not the node mesh.
 
@@ -701,6 +710,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 87 | `oup login` uses madAuth's device authorization grant (RFC 8628, madAuth 0.7) as the public client `oup CLI`, asking for `openid email offline_access`; the control plane accepts madAuth access tokens (`at+jwt`, `aud` = `CLI_CLIENT_ID`) with a session's rights and tells the CLI the issuer and client ID at `GET /v1/login`; the refresh token is kept in `~/.config/openupstream/credentials.json` (mode 600) and each new one stored before use; `OUP_API_KEY` for CI | authorization code with PKCE and a loopback redirect; both flows; e-mail and password in the terminal turned into an API key; pasting an API key | the flow RFC 8628 wrote for command-line tools, as `gh auth login` and `az login` use: it works over SSH, in containers and on headless machines, with every sign-in method, passkeys included; `verification_uri_complete` makes it one click when a browser is at hand, so a loopback flow would add code for no gain; a password in the terminal would leave out passkey users. madAuth refuses clients without `deviceFlow`, and only an admin with a fresh sign-in registers one |
 | 88 | `oup site deploy` makes the Bucket mirror the directory: changed files only (MD5 against the ETag), `index.html` files after the rest, then stale objects deleted (`--keep` to leave them); cache headers and content types from the file name | upload only, never delete | a deploy should leave exactly the build behind, or deleted pages stay reachable; uploading the index last keeps a client from loading an index whose assets are not there yet; hashed assets of the previous build go with it, so a page open from before the deploy may miss a lazily loaded chunk; `--keep` is for sites that need that |
 | 89 | Every Project namespace gets one NetworkPolicy, `project-isolation`: ingress from the Project's own pods, Traefik's namespace and `cnpg-system`, nothing else; egress open. The operators apply it right after the namespace; the platform namespace's exception for the operators (port 8081) is a static policy next to the control plane | a policy per Database and per Service; a deny-all policy plus one allow policy per source; Calico instead of k3s's built-in policy controller | one object that every operator applies identically under the shared field manager, so whichever operator creates the namespace isolates it before anything runs there; same-namespace traffic is what a Project needs inside (Services to Poolers, CloudNativePG replication); k3s enforces it without another CNI. Egress for customer containers is decided with the Services operator |
+| 90 | gVisor is installed by a script on each compute node before k3s starts (`infra/gvisor/install.sh`): a pinned release whose archive is checked against a SHA-512 in the script, and a containerd config template that extends k3s's base with the handler `runsc`. The RuntimeClass `gvisor` selects nodes labelled `openupstream.io/gvisor=true` | gVisor's apt repository; a privileged DaemonSet that installs runsc on the nodes | a node setup step like k3s itself, with nothing privileged left running in the cluster; the pin makes every node run the same sandbox, and an upgrade is a reviewed change of two lines; the apt repository serves whatever is newest. The label keeps gVisor pods off a node without runsc, where they would never start |
 
 ## Open questions
 
@@ -830,7 +840,8 @@ Decisions table once it is settled.
    Left: the approval page
    for `oup login` at madAuth's `loginUrl`, the production DNS zones.
 3. Containers, Service mode. Done so far: the NetworkPolicy
-   `project-isolation` in every Project namespace (#89).
+   `project-isolation` in every Project namespace (#89), gVisor on the
+   compute nodes and the RuntimeClass `gvisor` (#90).
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
    staying writable while a whole Site is switched off.

@@ -8,7 +8,12 @@ which is why it lives in the monorepo.
   firewalls, the Hetzner Object Storage bucket for backups, bunny.net DNS
   records and health checks.
 - `helm/` — values files for the off-the-shelf components: Traefik,
-  cert-manager, CloudNativePG, gVisor RuntimeClass, Prometheus/Loki/Grafana.
+  cert-manager, CloudNativePG, Prometheus/Loki/Grafana.
+- `gvisor/` — gVisor for customer containers: `install.sh` puts a pinned
+  `runsc` on a compute node and into k3s's containerd template, before k3s
+  starts; `runtimeclass.yaml` is the RuntimeClass `gvisor`, scheduled only
+  on nodes labelled `openupstream.io/gvisor=true` (ARCHITECTURE.md,
+  decision 90).
 - `garage/` — Garage cluster layout and configuration: replication factor 3,
   one zone per site.
 - `ingress/` — Traefik's values, cert-manager's DNS-01 webhook for bunny.net
