@@ -18,12 +18,14 @@ Traefik already implements is configured, not reimplemented.
   of the backup credentials Secret, then each Database's objects.
   `reconcileDatabases` applies them with server-side apply. It never deletes
   (ARCHITECTURE.md, decision 48).
-- `src/routes/`: the Routes operator (ARCHITECTURE.md, decision 84).
-  `planRoutes` (pure) turns the routing table into, per Project, its
+- `src/routes/`: the Routes operator (ARCHITECTURE.md, decisions 84 and
+  85). `planRoutes` (pure) turns the routing table into, per Project, its
   namespace, an ExternalName Service to Garage's website endpoint and the
   shared Middlewares (compression, HSTS); per Route, a Middleware that sets
   the Host header to the Bucket's name and one that strips the prefix; per
-  Domain, an IngressRoute on the default certificate. `reconcileRoutes`
+  Domain, an IngressRoute, on the default certificate for a default Domain,
+  on a Certificate of its own from `CLUSTER_ISSUER` (HTTP-01) for a custom
+  domain. `reconcileRoutes`
   applies them and deletes the objects labelled
   `openupstream.io/component=routes` that are no longer wanted. A pass
   without the routing table applies and deletes nothing.

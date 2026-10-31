@@ -1,7 +1,8 @@
 # What the Routes reconcile pass (src/routes/reconcile.ts) may do: apply a
-# Project's namespace and the Traefik objects and ExternalName Service for
-# its routing table, and delete those of its objects that are no longer
-# wanted (ARCHITECTURE.md, decision 84). Server-side apply is a PATCH that
+# Project's namespace and the Traefik objects, ExternalName Service and
+# custom domains' Certificates for its routing table, and delete those of
+# its objects that are no longer wanted (ARCHITECTURE.md, decisions 84 and
+# 85). Server-side apply is a PATCH that
 # creates missing objects, so every applied kind needs `patch` and `create`;
 # pruning lists by label and deletes. Namespaces are only created, never
 # deleted: the control plane's cleanup removes them.
@@ -27,6 +28,9 @@ rules:
     verbs: [create, patch, list, delete]
   - apiGroups: [traefik.io]
     resources: [ingressroutes, middlewares]
+    verbs: [create, patch, list, delete]
+  - apiGroups: [cert-manager.io]
+    resources: [certificates]
     verbs: [create, patch, list, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

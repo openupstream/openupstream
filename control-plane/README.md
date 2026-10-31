@@ -40,7 +40,8 @@ with the environment `src/config.ts` lists (`DATABASE_URL`, the `AUTH_*`
 and `BACKUP_*` settings and the backup credentials; Garage's admin API and
 S3 API inside the cluster, `GARAGE_ADMIN_URL` and `GARAGE_S3_URL`, with
 `GARAGE_ADMIN_TOKEN`; `CUSTOMER_DOMAIN`, under which Buckets are reached
-at `<bucket>.s3.<CUSTOMER_DOMAIN>`; optionally
+at `<bucket>.s3.<CUSTOMER_DOMAIN>`; `PLATFORM_DOMAIN`, our own hostnames,
+which like `CUSTOMER_DOMAIN` cannot be claimed as custom domains; optionally
 `NEW_ACCOUNT_HOLDS`, the Holds every new Account starts with, e.g.
 `payment-method`, and `BILLING_CALLERS`, the billing service's
 ServiceAccount; `ROUTES_CALLERS`, default the Routes operator's). At
@@ -82,6 +83,9 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `GET /v1/projects/{id}/buckets/{id}` | with `access`, the secret read from Garage; an API key with only `openupstream:read` gets no secret, since the Bucket's key may write |
 | `DELETE /v1/projects/{id}/buckets/{id}` | 202: its key is deleted at once, the Bucket with every object by the next cleanup pass; 409 while a Route serves it |
 | `GET /v1/projects/{id}/domains` | the Project's Domains, the default one first |
+| `POST /v1/projects/{id}/domains` | `{hostname}` → 201: a custom domain, pending, with the TXT record (`_openupstream.<hostname>`, a random token) that proves it; 400 for a hostname under `CUSTOMER_DOMAIN` or `PLATFORM_DOMAIN`; 409 if the Project has claimed it already or another Project has verified it |
+| `POST /v1/projects/{id}/domains/{id}/verify` | looks the TXT record up now → 200 with the Domain verified (it stays so), its Routes served from the next Routes operator pass; 409 if the record is not there yet (with the values found) or another Project verified the hostname first; 503 if DNS cannot be asked |
+| `DELETE /v1/projects/{id}/domains/{id}` | 204: the custom domain and its Routes; a Bucket left without Routes stops being served by Garage; 409 for the default Domain |
 | `GET /v1/projects/{id}/domains/{id}/routes` | the Domain's Routes, longest prefix first |
 | `POST /v1/projects/{id}/domains/{id}/routes` | `{pathPrefix, bucketId, spaFallback?}` → 201: the Bucket is served below the prefix (stripped) within one Routes operator pass; 400 for a Bucket not in the Project; 409 if the prefix is taken, or if the Bucket's other Routes have another `spaFallback`; 503 if Garage cannot be reached |
 | `DELETE /v1/projects/{id}/domains/{id}/routes/{id}` | 204; the Bucket's last Route also stops Garage serving it |

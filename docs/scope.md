@@ -32,7 +32,8 @@ deletes it all.
    scale-to-zero.
 5. **Routing**: `Domain → [(path prefix → Bucket | Service)]` per Project,
    automatic TLS. Every Project gets a default hostname; custom domains are
-   added after a TXT-record ownership check.
+   added after a TXT-record ownership check and CNAME to the platform's
+   ingress hostname, which gets them a certificate of their own.
 6. **Secrets**: encrypted key-value store injected as environment variables.
 7. **Log stream**: a live tail of a Service's or job's output.
 

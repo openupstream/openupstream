@@ -244,8 +244,8 @@ again at once. On the dev cluster a deleted Database's Cluster was gone in
 Thin reconcilers for the things no off-the-shelf operator does:
 
 - routing table → Traefik `IngressRoute` and `Middleware`s per Domain
-  (the Routes operator, `operators/src/routes`, #84); custom domains will
-  add a cert-manager `Certificate` each. A static site's website settings
+  (the Routes operator, `operators/src/routes`, #84), and a cert-manager
+  `Certificate` per custom domain (#85). A static site's website settings
   in Garage are not an operator's: the control plane sets them, since it
   alone holds Garage's admin token
 - Database → CloudNativePG `Cluster` (two instances, one per compute Site),
@@ -418,7 +418,12 @@ digest (#55).
   appears in the routing table at most once; a new claim needs a new proof.
   A pending claim does not reserve the hostname: several Projects may claim
   it, the first to publish the proof gets it, so nobody can squat a hostname
-  they do not own.
+  they do not own. The proof is a random token per claim, looked up through
+  the cluster's resolver when the Account asks for verification
+  (`POST …/domains/{id}/verify`) and not checked again afterwards (#85).
+  Hostnames under the customer domain and our own domain cannot be claimed,
+  nor one another Project has verified. Deleting a custom domain deletes
+  its Routes; the default Domain goes only with its Project.
 - A Route sends a path prefix (`/` or `/a/b`, no trailing slash) to a Bucket,
   optionally with SPA fallback, or to a Service. A Bucket or Service that a
   Route still targets cannot be deleted; deleting a Domain deletes its
@@ -429,14 +434,21 @@ digest (#55).
   header to the Bucket's name (how Garage's website endpoint finds the
   Bucket) and one that strips the prefix. It reaches Garage through an
   ExternalName Service in that namespace, since Traefik does not route
-  across namespaces. Unlike the Databases operator it deletes: objects of
-  its own that the routing table no longer has (#84).
+  across namespaces. A custom domain also gets a cert-manager Certificate
+  there, which its IngressRoute uses. Unlike the Databases operator it
+  deletes: objects of its own that the routing table no longer has (#84),
+  a Certificate's Secret with it (#85).
 - Traefik and cert-manager do ingress and TLS; certificates for custom
-  domains use HTTP-01. Wildcards (`*.s3.openupstream.app` for the Buckets)
-  need DNS-01, which cert-manager solves on bunny.net through a community
-  webhook, pinned and reviewed (#69). Port 80 redirects every request to
-  HTTPS today; HTTP-01 for custom domains will need its challenge path
-  exempted from that redirect.
+  domains use HTTP-01, since their zones are not ours. Wildcards
+  (`*.s3.openupstream.app` for the Buckets) need DNS-01, which cert-manager
+  solves on bunny.net through a community webhook, pinned and reviewed
+  (#69). Port 80 redirects every request to HTTPS, except the HTTP-01
+  challenges: the same ClusterIssuers pick an HTTP-01 solver for
+  Certificates labelled `openupstream.io/component=routes`, whose challenge
+  Ingress Traefik serves on port 80 ahead of the redirect, which has the
+  lowest priority. Traefik's Ingress provider sees only those solver
+  Ingresses (#85). A custom domain thus needs its CNAME to
+  `ingress.<customer domain>` before its certificate can be issued.
 
 ## Project isolation
 
@@ -644,6 +656,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 82 | A Bucket is created in Garage while the API request waits, and its row recorded only after that; deleting marks the row and the cleanup removes key, objects and bucket, keeping nothing. Buckets are reached at `https://<bucket>.s3.<customer domain>` through Traefik with one wildcard certificate | a row first and a reconcile loop, as for Databases; a retention window for deleted Buckets; the S3 endpoint only inside the cluster | a 201 means the Bucket can be used at once, with no state to poll and no second loop; Garage being down is a 503 the client can retry. Deleting is what the customer asked for, and keeping objects would mean billing for storage they deleted. A process that dies between Garage and the insert leaves an empty Garage bucket whose name stays taken |
 | 83 | Garage runs from our own manifests: a StatefulSet with one node per Site, Kubernetes discovery with its CustomResourceDefinition installed by us, the layout assigned once by the setup script | Garage's Helm chart (not published to a chart repository, only in Garage's git repository); letting Garage create its CustomResourceDefinition; connecting nodes by hand | a hundred lines of YAML we can read in one go, like the rest of `infra/`; Garage only needs rights on its own GarageNode objects, not to create any CustomResourceDefinition; nodes find each other again after restarts without a script |
 | 84 | Static sites: Garage's website endpoint behind Traefik. The control plane sets a Bucket's website settings (index, SPA fallback) in Garage when a Route is created; a Routes operator applies an IngressRoute per Domain with per-Route Middlewares (Host header = Bucket name, prefix stripped) and an ExternalName Service to Garage, and deletes its objects the routing table no longer has; default Domains share one wildcard certificate in Traefik's default TLS store; SPA fallback is per Bucket, so Routes to one Bucket must agree | the control plane writing the Traefik objects itself; keeping the prefix in object keys; SPA fallback in Traefik's errors middleware; a certificate per default Domain | the operator pattern of the Databases, with Garage's admin token staying in the control plane only; one site mounts at any prefix; Garage already has the routing rule; a wildcard needs no issuance per Project. Contradicts the earlier plan of an operator writing Garage's website settings. Traefik must allow ExternalName Services, which only the Routes operator creates |
+| 85 | Custom domains: a claim gets a random token, published by the Account as TXT at `_openupstream.<domain>` and looked up when it calls verify, once, through the cluster's resolver; hostnames under the customer and platform domains, or verified by another Project, cannot be claimed; the Routes operator gives a verified custom domain with Routes a cert-manager Certificate (HTTP-01, selected by label on the existing ClusterIssuers) and deletes it with the Domain, its Secret garbage-collected through cert-manager's owner references | the control plane polling pending claims; re-checking the TXT record periodically; a separate HTTP-01 ClusterIssuer; DNS-01 by CNAME-delegating `_acme-challenge` to us | verification while the request waits, like Buckets, gives the Account its answer at once; a removed record does not take a site down, the claim is what was proven; one issuer per environment keeps the platform's and customers' certificates on the same account; HTTP-01 needs nothing from the customer beyond the CNAME the traffic needs anyway. Traefik's Ingress provider is enabled, limited to cert-manager's solver Ingresses, and its port-80 redirect drops to the lowest priority |
 
 ## Open questions
 
@@ -759,7 +772,8 @@ Decisions table once it is settled.
    deleted through the API with a key of their own, reached at
    `https://<bucket>.s3.dev.openupstream.app`. Static sites at Projects'
    default hostnames (2026-10-31, #84): the routing table with Routes to
-   Buckets, SPA fallback, the Routes operator. Left: custom domains,
+   Buckets, SPA fallback, the Routes operator. Custom domains (#85): claim,
+   TXT proof, a certificate of their own through HTTP-01. Left:
    `oup site deploy` with its cache headers, the production DNS zones.
 3. Containers, Service mode.
 4. Containers, Cron job and One-off job modes.

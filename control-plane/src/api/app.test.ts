@@ -41,6 +41,14 @@ let otherKey: CryptoKey;
 let api: ReturnType<typeof createApi>;
 let accountA: string;
 let accountB: string;
+/** Published TXT records by name, as the fake resolver answers them; `dnsDown` makes it fail. */
+const txt = new Map<string, string[]>();
+let dnsDown = false;
+const domainDeps = {
+    customerDomain: 'openupstream.test',
+    platformDomain: 'platform.test',
+    lookupTxt: async (name: string) => (dnsDown ? err('ETIMEOUT') : ok(txt.get(name) ?? [])),
+};
 /** What the fake Kubernetes reports per Cluster name; a string is an error. */
 const clusters = new Map<string, ClusterStatus | string>();
 
@@ -75,7 +83,7 @@ before(async () => {
         pool: db.pool,
         kube,
         storage,
-        customerDomain: 'openupstream.test',
+        ...domainDeps,
         authenticate: madauthAuthenticator(sessionVerifier({ issuer: ISSUER, keys: jwks }), apiKeys),
     });
     const accounts = await db.pool.query<{ id: string }>(`insert into accounts (name) values ('A'), ('B') returning id`);
@@ -128,7 +136,7 @@ describe('authentication', () => {
             pool: db.pool,
             kube,
             storage,
-            customerDomain: 'openupstream.test',
+            ...domainDeps,
             authenticate: sessionVerifier({ issuer: ISSUER, keys: createRemoteJWKSet(new URL('http://127.0.0.1:9/jwks')) }),
         });
         const response = await down.request('/v1/projects', { headers: { authorization: `Bearer ${await token('alice')}` } });
@@ -476,6 +484,7 @@ describe('Routing', () => {
             projectName: 'site',
             domainId: domain.id,
             hostname: domain.hostname,
+            kind: 'default',
             routes: [
                 { id: routing?.routes[0]?.id, pathPrefix: '/docs', bucketName: 'alice-docs', spaFallback: false },
                 { id: routing?.routes[1]?.id, pathPrefix: '/', bucketName: 'alice-site', spaFallback: true },
@@ -535,6 +544,105 @@ describe('Routing', () => {
     });
 });
 
+describe('Custom domains', () => {
+    let projectId: string;
+    let otherProjectId: string;
+    let site: BucketDetails;
+    const domains = (pid: string, suffix = '') => `/v1/projects/${pid}/domains${suffix}`;
+    const claim = async (pid: string, hostname: string, subject = 'alice') => call('POST', domains(pid), subject, { hostname });
+    const pending = (domain: Domain) => {
+        assert.ok(domain.kind === 'custom' && domain.verification.state === 'pending');
+        return domain.verification.txtRecord;
+    };
+
+    before(async () => {
+        projectId = ((await (await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'shop' })).json()) as Project).id;
+        otherProjectId = ((await (await call('POST', '/v1/projects', 'bob', { accountId: accountB, name: 'squat' })).json()) as Project).id;
+        site = (await (await call('POST', `/v1/projects/${projectId}/buckets`, 'alice', { name: 'alice-shop' })).json()) as BucketDetails;
+    });
+
+    test('a claim is pending, with the TXT record that proves it; hostnames are normalized and checked', async () => {
+        const response = await claim(projectId, 'WWW.Shop.Example.');
+        assert.equal(response.status, 201);
+        const domain = (await response.json()) as Domain;
+        assert.equal(domain.hostname, 'www.shop.example');
+        const record = pending(domain);
+        assert.equal(record.name, '_openupstream.www.shop.example');
+        assert.ok(record.value.length >= 32);
+        assert.equal(response.headers.get('location'), domains(projectId, `/${domain.id}`));
+        for (const hostname of ['localhost', 'a..example', '-a.example', 'a_b.example', `${'a'.repeat(64)}.example`, 'shop.example/x']) {
+            assert.equal((await claim(projectId, hostname)).status, 400, hostname);
+        }
+        for (const hostname of ['openupstream.test', 'x.openupstream.test', 'api.platform.test']) {
+            assert.equal((await claim(projectId, hostname)).status, 400, hostname);
+        }
+        assert.equal((await claim(projectId, 'www.shop.example')).status, 409);
+        assert.equal((await claim(projectId, 'www.shop.example', 'bob')).status, 404);
+    });
+
+    test('verifying looks the TXT record up now; the first claim verified gets the hostname', async () => {
+        const [mine] = ((await (await call('GET', domains(projectId), 'alice')).json()) as Domain[]).filter((d) => d.kind === 'custom');
+        assert.ok(mine !== undefined);
+        // Another Account claims it too: a pending claim reserves nothing.
+        const theirs = (await (await claim(otherProjectId, 'www.shop.example', 'bob')).json()) as Domain;
+        const verify = (pid: string, id: string, subject = 'alice') => call('POST', domains(pid, `/${id}/verify`), subject);
+
+        const missing = await verify(projectId, mine.id);
+        assert.equal(missing.status, 409);
+        assert.deepEqual(((await missing.json()) as { found: string[] }).found, []);
+        dnsDown = true;
+        assert.equal((await verify(projectId, mine.id)).status, 503);
+        dnsDown = false;
+
+        txt.set(pending(mine).name, ['v=spf1 -all', pending(mine).value]);
+        const verified = await verify(projectId, mine.id);
+        assert.equal(verified.status, 200);
+        const domain = (await verified.json()) as Domain;
+        assert.ok(domain.kind === 'custom' && domain.verification.state === 'verified');
+        // Once verified it stays so, whatever DNS says later.
+        txt.delete(pending(mine).name);
+        assert.equal((await verify(projectId, mine.id)).status, 200);
+
+        // Bob cannot verify his claim even with his token published, nor claim the hostname anew.
+        txt.set(pending(theirs).name, [pending(theirs).value]);
+        assert.equal((await verify(otherProjectId, theirs.id, 'bob')).status, 409);
+        assert.equal((await claim(otherProjectId, 'shop.example', 'bob')).status, 201);
+        assert.equal((await claim(otherProjectId, 'www.shop.example', 'bob')).status, 409);
+        assert.equal((await verify(projectId, theirs.id)).status, 404);
+    });
+
+    test('a verified custom domain is routed like the default one, with its own kind', async () => {
+        const [mine] = ((await (await call('GET', domains(projectId), 'alice')).json()) as Domain[]).filter((d) => d.kind === 'custom');
+        assert.ok(mine !== undefined);
+        assert.equal((await call('POST', domains(projectId, `/${mine.id}/routes`), 'alice', { pathPrefix: '/', bucketId: site.id })).status, 201);
+        const routing = (await listDomainRoutings(db.pool)).find((d) => d.domainId === mine.id);
+        assert.equal(routing?.hostname, 'www.shop.example');
+        assert.equal(routing?.kind, 'custom');
+        // A pending claim is never routed.
+        const [theirs] = ((await (await call('GET', domains(otherProjectId), 'bob')).json()) as Domain[]).filter((d) => d.kind === 'custom');
+        assert.ok(!(await listDomainRoutings(db.pool)).some((d) => d.domainId === theirs?.id));
+    });
+
+    test('deleting a custom domain deletes its Routes and stops Garage serving a Bucket left without one; the default Domain stays', async () => {
+        const all = (await (await call('GET', domains(projectId), 'alice')).json()) as Domain[];
+        const mine = all.find((d) => d.kind === 'custom');
+        const defaultDomain = all.find((d) => d.kind === 'default');
+        assert.ok(mine !== undefined && defaultDomain !== undefined);
+        assert.equal(storage.websites.has(storage.buckets.get('alice-shop')?.bucketId ?? ''), true);
+        assert.equal((await call('DELETE', domains(projectId, `/${defaultDomain.id}`), 'alice')).status, 409);
+        assert.equal((await call('DELETE', domains(projectId, `/${mine.id}`), 'bob')).status, 404);
+        assert.equal((await call('DELETE', domains(projectId, `/${mine.id}`), 'alice')).status, 204);
+        assert.equal((await call('DELETE', domains(projectId, `/${mine.id}`), 'alice')).status, 404);
+        assert.equal(storage.websites.has(storage.buckets.get('alice-shop')?.bucketId ?? ''), false);
+        assert.equal((await db.pool.query('select 1 from routes where domain_id = $1', [mine.id])).rowCount, 0);
+        // The hostname is free again: Bob's claim can be verified now.
+        const [theirs] = ((await (await call('GET', domains(otherProjectId), 'bob')).json()) as Domain[]).filter(
+            (d) => d.hostname === 'www.shop.example',
+        );
+        assert.equal((await call('POST', domains(otherProjectId, `/${theirs?.id}/verify`), 'bob')).status, 200);
+    });
+});
+
 describe('Holds', () => {
     /** The API as the platform runs it with a billing service: new Accounts wait for a payment method. */
     let gated: ReturnType<typeof createApi>;
@@ -546,7 +654,7 @@ describe('Holds', () => {
             pool: db.pool,
             kube,
             storage,
-            customerDomain: 'openupstream.test',
+            ...domainDeps,
             newAccountHolds: ['payment-method'],
             authenticate: madauthAuthenticator(sessionVerifier({ issuer: ISSUER, keys: createLocalJWKSet({ keys: [] }) }), apiKeys),
         });

@@ -227,6 +227,23 @@ export function txtRecordName(hostname: string): string {
     return `_openupstream.${hostname}`;
 }
 
+/**
+ * A custom domain's hostname: lowercase labels of letters, digits and
+ * hyphens, at least two of them, at most 253 characters (the schema checks
+ * the same).
+ */
+export const HOSTNAME = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * Claims a custom domain for a Project. It is routed once its TXT record
+ * (`verification.txtRecord`) is published and verified; point the hostname
+ * at `ingress.<customer domain>` with a CNAME for traffic and its
+ * certificate.
+ */
+export interface CustomDomainInput {
+    hostname: string;
+}
+
 /** A Route's path prefix: `/` or `/segment[/segment…]`, no trailing slash (the schema checks the same). */
 export const PATH_PREFIX = /^(\/|(\/[A-Za-z0-9._~-]+)+)$/;
 

@@ -1,6 +1,6 @@
 /**
  * The public API (ARCHITECTURE.md, "Control plane"): the caller's Accounts,
- * and the Projects, Databases, Buckets and routing table in them. Every route under /v1 except the
+ * and the Projects, Databases, Buckets, Domains and routing table in them. Every route under /v1 except the
  * health check needs a madAuth session token or API key (./auth.ts); an
  * API key needs `openupstream:read` for GET and `openupstream:write` for
  * anything else. Another Account's Project answers 404, like one that does
@@ -12,6 +12,7 @@ import {
     COMPUTE_SITES,
     DATABASE_MIN_MEMORY_MB,
     DNS_LABEL,
+    HOSTNAME,
     PATH_PREFIX,
     UUID,
     type Bucket,
@@ -29,7 +30,8 @@ import { z } from 'zod';
 import { createAccount, holdsOf, listAccounts } from '../accounts/store.js';
 import { type BucketRecord, createBucket, deleteBucket, getBucket, listBuckets } from '../buckets/store.js';
 import { createDatabase, deleteDatabase, getDatabase, listDatabases } from '../databases/store.js';
-import { getDomain, listDomains } from '../domains/store.js';
+import type { TxtLookup } from '../domains/dns.js';
+import { createCustomDomain, deleteDomain, getDomain, isReserved, listDomains, verifyDomain } from '../domains/store.js';
 import { GARAGE_REGION, type ObjectStorage } from '../garage.js';
 import { type ControlPlaneKube, stateOf } from '../kube.js';
 import { createProject, deleteProject, getProject, listProjects } from '../projects/store.js';
@@ -44,6 +46,10 @@ export interface ApiDeps {
     readonly storage: ObjectStorage;
     /** Where Buckets are reached: `<bucket>.s3.<customerDomain>` (decision 68). */
     readonly customerDomain: string;
+    /** Our own hostnames (decision 67); neither it nor the customer domain can be claimed as a custom domain. */
+    readonly platformDomain: string;
+    /** Where custom domains' TXT ownership proofs are looked up. */
+    readonly lookupTxt: TxtLookup;
     /** The Holds every new Account starts with (ARCHITECTURE.md, decision 78). */
     readonly newAccountHolds?: readonly string[];
     readonly log?: (entry: Record<string, unknown>) => void;
@@ -74,6 +80,13 @@ const databaseInput = z.strictObject({
 
 const bucketInput = z.strictObject({
     name: z.string().regex(BUCKET_NAME, 'a hostname label of 3 to 63 lowercase letters, digits and hyphens'),
+});
+
+const domainInput = z.strictObject({
+    hostname: z
+        .string()
+        .transform((hostname) => hostname.toLowerCase().replace(/\.$/, ''))
+        .pipe(z.string().regex(HOSTNAME, 'a hostname such as www.example.com: lowercase labels of letters, digits and hyphens')),
 });
 
 const routeInput = z.strictObject({
@@ -342,10 +355,76 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         return project === undefined ? c.json(notFound, 404) : c.json(await listDomains(pool, project.id));
     });
 
+    app.post('/v1/projects/:projectId/domains', async (c) => {
+        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
+        if (project === undefined) {
+            return c.json(notFound, 404);
+        }
+        const input = domainInput.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const { hostname } = input.data;
+        if (isReserved(hostname, [deps.customerDomain, deps.platformDomain])) {
+            return c.json({ error: `hostnames under ${deps.customerDomain} and ${deps.platformDomain} are the platform's` }, 400);
+        }
+        const created = await createCustomDomain(pool, project.id, hostname);
+        if (!created.ok) {
+            return created.error.kind === 'claimed'
+                ? c.json({ error: `this Project has claimed ${hostname} already` }, 409)
+                : c.json({ error: `${hostname} is verified for another Project` }, 409);
+        }
+        c.header('location', `/v1/projects/${project.id}/domains/${created.value.id}`);
+        return c.json(created.value, 201);
+    });
+
     const domainOf = async (accountIds: string[], projectId: string, id: string) => {
         const project = await projectOf(accountIds, projectId);
         return project === undefined || !UUID.test(id) ? undefined : getDomain(pool, project.id, id);
     };
+
+    app.post('/v1/projects/:projectId/domains/:domainId/verify', async (c) => {
+        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
+        const domainId = c.req.param('domainId');
+        if (project === undefined || !UUID.test(domainId)) {
+            return c.json(notFound, 404);
+        }
+        const verified = await verifyDomain(pool, deps.lookupTxt, project.id, domainId);
+        if (!verified.ok) {
+            switch (verified.error.kind) {
+                case 'not-found':
+                    return c.json(notFound, 404);
+                case 'not-published': {
+                    const { txtRecord, found } = verified.error;
+                    return c.json({ error: `no TXT record ${txtRecord.name} with the value ${txtRecord.value} yet`, txtRecord, found }, 409);
+                }
+                case 'in-use':
+                    return c.json({ error: 'this hostname is verified for another Project' }, 409);
+                case 'unavailable':
+                    deps.log?.({ msg: 'TXT lookup failed', domain: domainId, error: verified.error.reason });
+                    return c.json({ error: 'cannot look up the TXT record now' }, 503);
+            }
+        }
+        return c.json(verified.value);
+    });
+
+    app.delete('/v1/projects/:projectId/domains/:domainId', async (c) => {
+        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
+        const domainId = c.req.param('domainId');
+        if (project === undefined || !UUID.test(domainId)) {
+            return c.json(notFound, 404);
+        }
+        const deleted = await deleteDomain(pool, storage, project.id, domainId);
+        if (!deleted.ok) {
+            return deleted.error.kind === 'not-found'
+                ? c.json(notFound, 404)
+                : c.json({ error: 'the default Domain is deleted with its Project only' }, 409);
+        }
+        for (const error of deleted.value.websiteErrors) {
+            deps.log?.({ msg: 'cannot stop serving a Bucket that has no Route left', domain: domainId, error });
+        }
+        return c.body(null, 204);
+    });
 
     app.get('/v1/projects/:projectId/domains/:domainId/routes', async (c) => {
         const domain = await domainOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('domainId'));

@@ -5,7 +5,8 @@
 # applied.
 #
 # Needs routes-rbac.yaml. The image is the operators' image, pinned by
-# digest when applied (infra/dev-cluster/platform.sh).
+# digest, and CLUSTER_ISSUER, the ClusterIssuer of custom domains'
+# certificates, are filled in when applied (infra/dev-cluster/platform.sh).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -36,6 +37,7 @@ spec:
             - {name: OPERATOR, value: routes}
             - {name: CONTROL_PLANE_URL, value: "http://control-plane.project-00000000-0000-4000-8000-000000000002.svc:8081"}
             - {name: TOKEN_PATH, value: /var/run/secrets/openupstream/control-plane/token}
+            - {name: CLUSTER_ISSUER, value: CLUSTER_ISSUER}
           volumeMounts:
             - {name: control-plane-token, mountPath: /var/run/secrets/openupstream/control-plane, readOnly: true}
           resources:

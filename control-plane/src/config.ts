@@ -39,6 +39,8 @@ export interface Config {
     readonly garage: GarageConfig;
     /** Customer hostnames live under it, e.g. Buckets at `<bucket>.s3.<customerDomain>` (decision 68). */
     readonly customerDomain: string;
+    /** Our own hostnames live under it (decision 67); like the customer domain, no Account may claim it. */
+    readonly platformDomain: string;
     readonly cleanupIntervalMs: number;
 }
 
@@ -103,9 +105,14 @@ export function configFrom(env: Env): Result<Config, string[]> {
         problems.push('GARAGE_ADMIN_URL and GARAGE_S3_URL must be URLs');
     }
     const garageAdminToken = required('GARAGE_ADMIN_TOKEN');
+    const domainName = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
     const customerDomain = required('CUSTOMER_DOMAIN');
-    if (customerDomain !== '' && !/^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/.test(customerDomain)) {
+    if (customerDomain !== '' && !domainName.test(customerDomain)) {
         problems.push('CUSTOMER_DOMAIN must be a domain name, e.g. openupstream.app');
+    }
+    const platformDomain = required('PLATFORM_DOMAIN');
+    if (platformDomain !== '' && !domainName.test(platformDomain)) {
+        problems.push('PLATFORM_DOMAIN must be a domain name, e.g. openupstream.com');
     }
     const publicPort = port(env['PORT'], 8080);
     const internalPort = port(env['INTERNAL_PORT'], 8081);
@@ -142,6 +149,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
         },
         garage: { adminUrl: garageAdminUrl, adminToken: garageAdminToken, s3Url: garageS3Url },
         customerDomain,
+        platformDomain,
         cleanupIntervalMs: cleanupSeconds * 1000,
     });
 }

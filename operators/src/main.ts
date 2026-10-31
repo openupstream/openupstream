@@ -13,6 +13,8 @@
  * - for `databases`: DATABASE_CONFIG_PATH, a DatabaseConfig as JSON (a
  *   ConfigMap), and BACKUP_CREDENTIALS, `<namespace>/<name>` of the backup
  *   credentials Secret
+ * - for `routes`: CLUSTER_ISSUER, the ClusterIssuer of custom domains'
+ *   certificates
  */
 import { readFile } from 'node:fs/promises';
 import { KubeConfig } from '@kubernetes/client-node';
@@ -67,8 +69,9 @@ const databases = async (): Promise<() => Promise<PassLog>> => {
         });
 };
 const routes = (): (() => Promise<PassLog>) => {
+    const settings = { clusterIssuer: required('CLUSTER_ISSUER') };
     const fetchRoutings = controlPlaneRoutings(controlPlaneUrl, token);
-    return () => routesPass(fetchRoutings, kube);
+    return () => routesPass(fetchRoutings, kube, settings);
 };
 
 const pass = operator === 'databases' ? await databases() : routes();

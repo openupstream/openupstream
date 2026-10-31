@@ -75,9 +75,11 @@ test('the routing table is checked for its shape', () => {
         projectName: 'shop',
         domainId: 'd',
         hostname: 'shop-a1b2c3d4.openupstream.app',
+        kind: 'default',
         routes: [{ id: 'r', pathPrefix: '/', bucketName: 'shop-site', spaFallback: false }],
     };
     assert.deepEqual(parseRoutings([routing]), { ok: true, value: [routing] });
+    assert.equal(parseRoutings([{ ...routing, kind: 'other' }]).ok, false);
     assert.equal(parseRoutings([{ ...routing, routes: [{ id: 'r' }] }]).ok, false);
     assert.equal(parseRoutings({}).ok, false);
 });
