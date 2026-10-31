@@ -157,3 +157,27 @@ test('a token realm inside the cluster is refused too', async () => {
         error: { kind: 'forbidden-address', host: 'evil.example' },
     });
 });
+
+test('a redirect to another host does not carry the credentials along', async () => {
+    const seen: { host: string; authorization: string | null }[] = [];
+    const deps: RegistryDeps = {
+        lookup: async () => ['140.82.112.33'],
+        fetch: (async (input: URL | RequestInfo, init?: RequestInit) => {
+            const url = new URL(String(input));
+            const authorization = new Headers(init?.headers).get('authorization');
+            seen.push({ host: url.host, authorization });
+            if (url.host === 'registry.example' && authorization === null) {
+                return new Response(null, { status: 401, headers: { 'www-authenticate': 'Basic realm="r"' } });
+            }
+            if (url.host === 'registry.example') {
+                return new Response(null, { status: 307, headers: { location: 'https://cdn.example/manifest' } });
+            }
+            return new Response(null, { status: 200, headers: { 'docker-content-digest': DIGEST } });
+        }) as typeof fetch,
+    };
+    assert.deepEqual(await resolveDigest(deps, image('registry.example/acme/api:v1'), { username: 'u', password: 'p' }), {
+        ok: true,
+        value: DIGEST,
+    });
+    assert.deepEqual(seen.at(-1), { host: 'cdn.example', authorization: null });
+});

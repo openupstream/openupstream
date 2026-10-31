@@ -133,7 +133,12 @@ async function checkUrl(deps: RegistryDeps, url: URL): Promise<Result<URL, Resol
 
 const MAX_REDIRECTS = 3;
 
-/** A request whose every hop is checked; redirects are followed by hand for that. */
+/**
+ * A request whose every hop is checked; redirects are followed by hand for
+ * that. Like fetch's own redirects, a hop to another origin leaves the
+ * Authorization header behind, so credentials reach only the host they
+ * were meant for.
+ */
 async function guardedFetch(deps: RegistryDeps, url: URL, init: RequestInit): Promise<Result<Response, ResolveError>> {
     let current = url;
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -141,8 +146,12 @@ async function guardedFetch(deps: RegistryDeps, url: URL, init: RequestInit): Pr
         if (!checked.ok) {
             return checked;
         }
+        const headers = new Headers(init.headers);
+        if (current.origin !== url.origin) {
+            headers.delete('authorization');
+        }
         const response = await deps
-            .fetch(current, { ...init, redirect: 'manual', signal: AbortSignal.timeout(deps.timeoutMs ?? 10_000) })
+            .fetch(current, { ...init, headers, redirect: 'manual', signal: AbortSignal.timeout(deps.timeoutMs ?? 10_000) })
             .catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
         if (response instanceof Error) {
             return err({ kind: 'unavailable', reason: `${current.host}: ${response.message}` });

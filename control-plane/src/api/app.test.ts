@@ -871,6 +871,18 @@ describe('Services', () => {
         assert.ok(!stored.rows[0]?.registry_auth.toString('latin1').includes('token'));
     });
 
+    test('a new image at another registry drops the stored credentials instead of sending them there', async () => {
+        const created = (await (
+            await call('POST', path(), 'alice', { ...input, name: 'moving', image: 'ghcr.io/acme/private:v1', registryAuth: { username: 'ci', password: 'token' } })
+        ).json()) as ServiceDetails;
+        const moved = await call('PATCH', path(`/${created.id}`), 'alice', { image: 'nginx' });
+        assert.equal(moved.status, 200);
+        const body = (await moved.json()) as ServiceDetails;
+        assert.equal(body.registryAuth, false);
+        assert.equal(body.imageDigest, digest('3'));
+        assert.equal((await call('DELETE', path(`/${created.id}`), 'alice')).status, 202);
+    });
+
     test('PATCH: a new tag is resolved again; replicas alone are not', async () => {
         images.set('acme/api:v2', digest('4'));
         const patched = await call('PATCH', path(`/${service.id}`), 'alice', { image: 'ghcr.io/acme/api:v2', replicas: 2 });

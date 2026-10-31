@@ -98,7 +98,7 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `GET /v1/projects/{id}/services` | with each Service's `state`, read live from its Deployment |
 | `POST /v1/projects/{id}/services` | `{name, image, port, memoryMb, cpuMillicores, replicas?, homeSite?, registryAuth?}` → 201, `state: deploying`, the image pinned to the digest its tag points at now (`src/registry.ts`); 400 for an image the registry does not have or will not serve with `registryAuth` (`{username, password}`, never returned), or a registry at a private address; 503 if the registry cannot be reached; 409 if the name is taken in the Project; 402 if the Account has a Hold |
 | `GET /v1/projects/{id}/services/{id}` | `state`: `deploying`, `running`, `degraded`, or `unknown` when Kubernetes cannot be asked |
-| `PATCH /v1/projects/{id}/services/{id}` | any of `image, port, replicas, memoryMb, cpuMillicores, homeSite, registryAuth` (`null` removes the last two); a new image or new credentials resolve the tag again |
+| `PATCH /v1/projects/{id}/services/{id}` | any of `image, port, replicas, memoryMb, cpuMillicores, homeSite, registryAuth` (`null` removes the last two); a new image or new credentials resolve the tag again; a new image at another registry without new credentials drops the stored ones |
 | `POST /v1/projects/{id}/services/{id}/deploy` | resolves the same tag again and pins what it points at now |
 | `DELETE /v1/projects/{id}/services/{id}` | 202: the row goes at once, the Deployment with the next Services operator pass; 409 while a Route serves it |
 | `GET /v1/projects/{id}/secrets` | the Project's Secrets, names and times only |

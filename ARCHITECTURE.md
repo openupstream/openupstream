@@ -441,7 +441,9 @@ digest (#55).
   per Service under its image's repository (`ghcr.io/acme/api`), which
   kubelet matches as a prefix of the image it pulls; every Service names
   it in `imagePullSecrets`. Two Services of one Project that pull the same
-  repository with different credentials share one entry.
+  repository with different credentials share one entry. Credentials go
+  only to their own registry: a new image at another registry drops them,
+  and a redirect to another host is followed without them.
 - Without a `homeSite` of its own, a single replica runs in the Home site of
   the Project's oldest live Database, else in `hetzner-fsn1`.
 

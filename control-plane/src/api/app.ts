@@ -643,6 +643,11 @@ export function createApi(deps: ApiDeps): Hono<Env> {
                 return c.json({ error: `the registry of ${image} cannot be reached now` }, 503);
         }
     };
+    const registryOf = (image: string) => {
+        const reference = parseImageReference(image);
+        return reference.ok ? reference.value.registry : undefined;
+    };
+    const sameRegistry = (a: string, b: string) => registryOf(a) !== undefined && registryOf(a) === registryOf(b);
     const sealAuth = (projectId: string, serviceId: string, auth: RegistryAuth) =>
         sealProjectValue(pool, deps.kek, projectId, registryAuthName(serviceId), JSON.stringify(auth));
     /** The Service's stored credentials, opened; undefined when it has none. */
@@ -735,7 +740,10 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (!input.success) {
             return c.json(invalid(input.error.issues), 400);
         }
-        const { registryAuth, image, ...rest } = input.data;
+        const { image, registryAuth: givenAuth, ...rest } = input.data;
+        // Stored credentials belong to the old image's registry: a new image elsewhere drops them, so they never reach another registry.
+        const registryAuth =
+            givenAuth === undefined && image !== undefined && service.registryAuth && !sameRegistry(service.image, image) ? null : givenAuth;
         // A new image or new credentials: the tag is resolved again, with the credentials it will be pulled with.
         const redeploy = image !== undefined || registryAuth !== undefined;
         const auth = registryAuth === undefined ? await storedAuth(service) : (registryAuth ?? undefined);
