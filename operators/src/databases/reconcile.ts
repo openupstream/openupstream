@@ -12,7 +12,7 @@
  */
 import type { DatabaseRow, Project } from '@openupstream/sdk';
 import { type Kube, type KubeError, type KubeObject, type ObjectRef, refOf } from '../kube.js';
-import { LABELS, MANAGED_BY, namespaceFor, projectNamespace } from '../kubernetes.js';
+import { LABELS, MANAGED_BY, projectNamespace, projectObjectsFor } from '../kubernetes.js';
 import { type Result, err, ok } from '../result.js';
 import {
     BACKUP_CREDENTIAL_KEYS,
@@ -27,7 +27,7 @@ export type { DatabaseRow };
 export type ApplyChain = readonly KubeObject[];
 
 export interface DatabasePlan {
-    /** Per Project: its namespace, then its backup credentials. Applied first. */
+    /** Per Project: its namespace and NetworkPolicy, then its backup credentials. Applied first. */
     readonly projects: readonly ApplyChain[];
     /** Per Database: ObjectStore, Cluster, Pooler, ScheduledBackup. */
     readonly databases: readonly ApplyChain[];
@@ -70,7 +70,7 @@ export function planDatabases(
     );
     return {
         projects: projects.map((project) => [
-            namespaceFor(project),
+            ...projectObjectsFor(project),
             backupSecretFor(project, config, backupCredentials),
         ]),
         databases: valid.map(({ manifests }) => [
