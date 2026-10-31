@@ -22,7 +22,7 @@ const fakeKube = (existing: ObjectRef[]) => {
     const listed: string[] = [];
     const kube: Kube = {
         apply: async (object) => {
-            applied.push(`${object.kind} ${object.metadata.name}`);
+            applied.push(`${object.kind} ${object.metadata.namespace ?? ''}/${object.metadata.name}`);
             return ok(undefined);
         },
         readSecret: async () => ok(undefined),
@@ -64,4 +64,16 @@ test('without the routing table nothing is applied or deleted', async () => {
     const log = await routesPass(async () => err({ kind: 'unreachable', message: 'ECONNREFUSED' }), kube);
     assert.equal(log.msg, 'cannot get the routing table');
     assert.deepEqual([applied, removed], [[], []]);
+});
+
+test('each Project in order, Projects side by side', async () => {
+    const other = { ...routing, projectId: '66666666-6666-4666-8666-666666666666', domainId: '77777777-7777-4777-8777-777777777777' };
+    const { kube, applied } = fakeKube([]);
+    await reconcileRoutes(kube, [routing, other]);
+    for (const project of [routing.projectId, other.projectId]) {
+        const own = planRoutes([routing, other])
+            .filter((o) => (o.metadata.namespace ?? o.metadata.name) === `project-${project}`)
+            .map((o) => `${o.kind} ${o.metadata.namespace ?? ''}/${o.metadata.name}`);
+        assert.deepEqual(applied.filter((entry) => own.includes(entry)), own);
+    }
 });

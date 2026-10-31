@@ -11,6 +11,7 @@ import type { DomainRouting, Route, RouteInput } from '@openupstream/sdk';
 import pg from 'pg';
 import { UNIQUE_VIOLATION } from '../db/errors.js';
 import type { ObjectStorage } from '../garage.js';
+import { inTransaction } from '../db/transaction.js';
 import { type Result, err, ok } from '../result.js';
 
 interface RouteRow {
@@ -66,9 +67,7 @@ export async function createRoute(
     input: RouteInput,
 ): Promise<Result<Route, CreateRouteError>> {
     const spaFallback = input.spaFallback ?? false;
-    const client = await pool.connect();
-    const outcome = await (async (): Promise<Result<Route, CreateRouteError>> => {
-        await client.query('begin');
+    return inTransaction(pool, async (client): Promise<Result<Route, CreateRouteError>> => {
         const bucket = await client.query<{ garage_bucket_id: string; spa_fallback: boolean | null }>(
             `select b.garage_bucket_id, (select r.spa_fallback from routes r where r.bucket_id = b.id limit 1) as spa_fallback
              from buckets b where b.id = $1 and b.project_id = $2 and b.deleted_at is null for share of b`,
@@ -103,18 +102,7 @@ export async function createRoute(
         }
         // An insert … returning always returns its row.
         return ok(toRoute(inserted.value.rows[0] as RouteRow));
-    })().then(
-        async (result) => {
-            await client.query(result.ok ? 'commit' : 'rollback');
-            return result;
-        },
-        async (error: unknown) => {
-            await client.query('rollback').catch(() => undefined);
-            throw error;
-        },
-    );
-    client.release();
-    return outcome;
+    }, (result) => result.ok);
 }
 
 export type DeleteRouteOutcome =
@@ -123,9 +111,10 @@ export type DeleteRouteOutcome =
 
 /**
  * Deletes the Route. When it was the Bucket's last one, the Bucket stops
- * being served by Garage's website endpoint too; if Garage cannot be reached
- * for that, the Route is gone all the same, since nothing routes to the
- * website endpoint without one.
+ * being served by Garage's website endpoint too, while the Bucket's row is
+ * locked, so a Route created for it meanwhile waits and sets the website
+ * again afterwards. If Garage cannot be reached for that, the Route is gone
+ * all the same, since nothing routes to the website endpoint without one.
  */
 export async function deleteRoute(
     pool: pg.Pool,
@@ -133,24 +122,35 @@ export async function deleteRoute(
     domainId: string,
     id: string,
 ): Promise<DeleteRouteOutcome> {
-    const { rows } = await pool.query<{ garage_bucket_id: string | null; still_routed: boolean }>(
-        `with route as (
-             delete from routes where id = $1 and domain_id = $2 returning bucket_id
-         )
-         select b.garage_bucket_id,
-                exists (select 1 from routes r where r.bucket_id = route.bucket_id and r.id <> $1) as still_routed
-         from route left join buckets b on b.id = route.bucket_id`,
-        [id, domainId],
+    return inTransaction(
+        pool,
+        async (client): Promise<DeleteRouteOutcome> => {
+            const route = await client.query<{ bucket_id: string | null }>(
+                'delete from routes where id = $1 and domain_id = $2 returning bucket_id',
+                [id, domainId],
+            );
+            const bucketId = route.rows[0]?.bucket_id;
+            if (route.rowCount !== 1) {
+                return { kind: 'not-found' };
+            }
+            if (bucketId === null || bucketId === undefined) {
+                return { kind: 'deleted' };
+            }
+            // A separate statement after the lock, so it sees Routes committed while it waited.
+            const bucket = await client.query<{ garage_bucket_id: string }>(
+                'select garage_bucket_id from buckets where id = $1 for update',
+                [bucketId],
+            );
+            const routed = await client.query('select 1 from routes where bucket_id = $1 limit 1', [bucketId]);
+            const garageBucketId = bucket.rows[0]?.garage_bucket_id;
+            if (garageBucketId === undefined || routed.rowCount !== 0) {
+                return { kind: 'deleted' };
+            }
+            const website = await storage.setWebsite(garageBucketId, undefined);
+            return website.ok ? { kind: 'deleted' } : { kind: 'deleted', websiteError: website.error };
+        },
+        (outcome) => outcome.kind === 'deleted',
     );
-    const deleted = rows[0];
-    if (deleted === undefined) {
-        return { kind: 'not-found' };
-    }
-    if (deleted.garage_bucket_id === null || deleted.still_routed) {
-        return { kind: 'deleted' };
-    }
-    const website = await storage.setWebsite(deleted.garage_bucket_id, undefined);
-    return website.ok ? { kind: 'deleted' } : { kind: 'deleted', websiteError: website.error };
 }
 
 /** Every Domain that has Routes to live Buckets, for the Routes operator; a stable order. */

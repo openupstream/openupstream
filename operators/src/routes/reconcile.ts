@@ -9,7 +9,8 @@
  * removed by the control plane's cleanup, with everything in it.
  */
 import type { DomainRouting } from '@openupstream/sdk';
-import { type Kube, type KubeError, type ObjectRef, refOf } from '../kube.js';
+import { type Kube, type KubeError, type KubeObject, type ObjectRef, refOf } from '../kube.js';
+import type { Result } from '../result.js';
 import { COMPONENT_LABEL, PRUNED_KINDS, ROUTES_COMPONENT, planRoutes } from './manifests.js';
 
 export interface RoutesReport {
@@ -22,18 +23,23 @@ const keyOf = (ref: ObjectRef): string => `${ref.apiVersion}/${ref.kind}/${ref.n
 
 export async function reconcileRoutes(kube: Kube, routings: readonly DomainRouting[]): Promise<RoutesReport> {
     const wanted = planRoutes(routings);
-    const applied: ObjectRef[] = [];
-    const failed: { ref: ObjectRef; error: KubeError }[] = [];
-    // In order: a namespace exists before what goes into it, a Middleware
-    // before the IngressRoute that names it.
+    // Per Project in order (its namespace before what goes into it, a
+    // Middleware before the IngressRoute that names it), Projects side by side.
+    const namespaceOf = (object: KubeObject) => object.metadata.namespace ?? object.metadata.name;
+    const byNamespace = new Map<string, KubeObject[]>();
     for (const object of wanted) {
-        const result = await kube.apply(object, { dryRun: false });
-        if (result.ok) {
-            applied.push(refOf(object));
-        } else {
-            failed.push({ ref: refOf(object), error: result.error });
-        }
+        byNamespace.set(namespaceOf(object), [...(byNamespace.get(namespaceOf(object)) ?? []), object]);
     }
+    const applyChain = async (chain: readonly KubeObject[]) => {
+        const outcomes: { ref: ObjectRef; result: Result<void, KubeError> }[] = [];
+        for (const object of chain) {
+            outcomes.push({ ref: refOf(object), result: await kube.apply(object, { dryRun: false }) });
+        }
+        return outcomes;
+    };
+    const outcomes = (await Promise.all([...byNamespace.values()].map(applyChain))).flat();
+    const applied = outcomes.filter(({ result }) => result.ok).map(({ ref }) => ref);
+    const failed = outcomes.flatMap(({ ref, result }) => (result.ok ? [] : [{ ref, error: result.error }]));
     const wantedKeys = new Set(wanted.map((object) => keyOf(refOf(object))));
     const removed: ObjectRef[] = [];
     for (const { apiVersion, kind } of PRUNED_KINDS) {

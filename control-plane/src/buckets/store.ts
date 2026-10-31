@@ -9,6 +9,7 @@ import type { Bucket } from '@openupstream/sdk';
 import type pg from 'pg';
 import { ACCOUNT_HELD, FOREIGN_KEY_VIOLATION, UNIQUE_VIOLATION, unlessCodes } from '../db/errors.js';
 import type { GarageBucket, ObjectStorage } from '../garage.js';
+import { inTransaction } from '../db/transaction.js';
 import { type Result, err, ok } from '../result.js';
 
 /** A Bucket with its counterparts in Garage, which the API does not show. */
@@ -97,23 +98,28 @@ export async function createBucket(
 
 /**
  * Marks the Bucket deleted, unless a Route still serves it (ARCHITECTURE.md,
- * "Routing and domains"). Creating a Route locks the Bucket's row, so the
- * two cannot pass each other.
+ * "Routing and domains"). The Bucket's row is locked first, and Routes are
+ * checked in a separate statement after that: creating a Route holds a
+ * share lock on the row, so a Route committed while this waited is seen.
  */
 export async function deleteBucket(pool: pg.Pool, projectId: string, id: string): Promise<'deleted' | 'not-found' | 'routed'> {
-    const { rows } = await pool.query<{ routed: boolean; deleted: boolean }>(
-        `with bucket as (
-             select id from buckets where id = $1 and project_id = $2 and deleted_at is null for update
-         ), marked as (
-             update buckets b set deleted_at = now() from bucket
-             where b.id = bucket.id and not exists (select 1 from routes r where r.bucket_id = bucket.id)
-             returning b.id
-         )
-         select exists (select 1 from routes r join bucket on r.bucket_id = bucket.id) as routed,
-                exists (select 1 from marked) as deleted
-         from bucket`,
-        [id, projectId],
+    return inTransaction(
+        pool,
+        async (client) => {
+            const bucket = await client.query(
+                'select 1 from buckets where id = $1 and project_id = $2 and deleted_at is null for update',
+                [id, projectId],
+            );
+            if (bucket.rowCount !== 1) {
+                return 'not-found' as const;
+            }
+            const routed = await client.query('select 1 from routes where bucket_id = $1 limit 1', [id]);
+            if (routed.rowCount !== 0) {
+                return 'routed' as const;
+            }
+            await client.query('update buckets set deleted_at = now() where id = $1', [id]);
+            return 'deleted' as const;
+        },
+        (outcome) => outcome === 'deleted',
     );
-    const found = rows[0];
-    return found === undefined ? 'not-found' : found.deleted ? 'deleted' : 'routed';
 }
