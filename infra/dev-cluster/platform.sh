@@ -106,8 +106,19 @@ if [[ $MAIL == ses ]]; then
     kubectl apply -f - >/dev/null
   unset SES_KEY_ID SES_SECRET
 fi
+# Pods read their ConfigMap once, at start: a hash of it in the pod template
+# rolls them out when a run of this script changes it (e.g. CLI_CLIENT_ID),
+# and only then.
+config_rollout() { # deployment, configmap
+  local hash
+  hash=$(kubectl -n "$PLATFORM_NS" get configmap "$2" -o jsonpath='{.data}' | shasum | cut -c1-16)
+  kubectl -n "$PLATFORM_NS" patch deployment "$1" >/dev/null \
+    -p "{\"spec\": {\"template\": {\"metadata\": {\"annotations\": {\"openupstream.io/config-hash\": \"$hash\"}}}}}"
+}
+
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/infra/madauth/madauth.yaml" |
   kubectl apply -f - >/dev/null
+config_rollout madauth madauth-config
 kubectl -n "$PLATFORM_NS" rollout status deployment/madauth --timeout=5m
 
 kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client -o yaml \
@@ -124,6 +135,7 @@ kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client
   --from-literal=CLI_CLIENT_ID="${CLI_CLIENT_ID:-}" | kubectl apply -f - >/dev/null
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/control-plane/deploy/control-plane.yaml" |
   kubectl apply -f - >/dev/null
+config_rollout control-plane control-plane-config
 kubectl -n "$PLATFORM_NS" rollout status deployment/control-plane --timeout=5m
 
 sed -e "s#PLATFORM_DOMAIN#$PLATFORM_DOMAIN#g" -e "s#CLUSTER_ISSUER#$CLUSTER_ISSUER#g" "$ROOT/infra/ingress/platform-routes.yaml" |

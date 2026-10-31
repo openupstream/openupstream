@@ -785,7 +785,10 @@ Decisions table once it is settled.
    public API, with the cleanup; madAuth with sign-up, API keys and
    Accounts created through the API (2026-10-17). Left: TopoLVM, restore
    through the API, the `oup pg` commands. Done since: `oup login`
-   (#87). Public hostnames for
+   (2026-10-31, #87), tested on the dev cluster with madAuth 0.7.0: the
+   code approved through madAuth's API, the tokens stored with mode 600,
+   a refresh that rotated the refresh token, a logout that ended it, and
+   `OUP_API_KEY`. Public hostnames for
    madAuth and the API come with step 2, together with SES and the
    payment-method gate that open sign-up needs.
 2. Object storage and static sites: Garage, routing table, Traefik,
@@ -808,7 +811,10 @@ Decisions table once it is settled.
    #85): claim, TXT proof, a certificate of their own through HTTP-01,
    issued within 30 s of the first Route and served in both compute Sites;
    deleting the Domain removed its Certificate and Secret in the next pass.
-   `oup site deploy` with its cache headers (#88). Left: the approval page
+   `oup site deploy` with its cache headers (2026-10-31, #88): a second
+   deploy uploaded nothing, a new build only its changed files with the
+   index last and deleted the old bundle, and the served headers matched.
+   Left: the approval page
    for `oup login` at madAuth's `loginUrl`, the production DNS zones.
 3. Containers, Service mode.
 4. Containers, Cron job and One-off job modes.
