@@ -1,0 +1,26 @@
+# The customer domain's default certificate (ARCHITECTURE.md, "Routing and
+# domains"; decisions 68 and 84): one wildcard for every Project's default
+# hostname, <project>-<random>.CUSTOMER_DOMAIN, through DNS-01 (decision
+# 69). Traefik's default TLS store serves it to every IngressRoute with
+# `tls: {}`, in any namespace, so the Routes operator needs no certificate
+# per Domain. CUSTOMER_DOMAIN and CLUSTER_ISSUER are filled in when applied
+# (infra/dev-cluster/garage.sh).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: customer-domain
+  namespace: traefik
+spec:
+  secretName: customer-domain-tls
+  issuerRef: {kind: ClusterIssuer, name: CLUSTER_ISSUER}
+  dnsNames: ['*.CUSTOMER_DOMAIN']
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
+---
+apiVersion: traefik.io/v1alpha1
+kind: TLSStore
+metadata:
+  name: default
+  namespace: traefik
+spec:
+  defaultCertificate:
+    secretName: customer-domain-tls

@@ -41,7 +41,7 @@ export async function databasesPass(
 }
 
 /** Runs passes until `signal` aborts; the next pass starts `intervalMs` after the last one ended. */
-export async function runDatabasesOperator(
+export async function runPasses(
     pass: () => Promise<PassLog>,
     intervalMs: number,
     log: (entry: PassLog) => void,

@@ -15,7 +15,9 @@
 #    https://$PLATFORM_DOMAIN/auth, the API at https://api.$PLATFORM_DOMAIN,
 #    with a certificate from CLUSTER_ISSUER;
 # 5. the Databases operator, reconciling every 30 s with rows from the
-#    control plane.
+#    control plane;
+# 6. the Routes operator, turning the routing table into Traefik objects
+#    every 30 s.
 #
 # Images come from GHCR, pinned by digest: by default the ones built for the
 # current commit (.github/workflows/images.yml). Override with IMAGE_TAG.
@@ -127,3 +129,8 @@ sed "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" "$ROOT/operators/d
   kubectl apply -f - >/dev/null
 kubectl -n openupstream-system rollout status deployment/databases-operator --timeout=5m
 kubectl -n openupstream-system logs deployment/databases-operator --tail=3
+
+kubectl apply -f "$ROOT/operators/deploy/routes-rbac.yaml" >/dev/null
+sed "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" "$ROOT/operators/deploy/routes-operator.yaml" |
+  kubectl apply -f - >/dev/null
+kubectl -n openupstream-system rollout status deployment/routes-operator --timeout=5m

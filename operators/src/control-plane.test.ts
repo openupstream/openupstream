@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { INTERNAL_DATABASES_PATH, PLATFORM } from '@openupstream/sdk';
-import { controlPlaneRows, parseRows } from './control-plane.js';
+import { controlPlaneRows, parseRoutings, parseRows } from './control-plane.js';
 
 const rows = [{ project: PLATFORM.project, database: PLATFORM.database }];
 
@@ -67,4 +67,17 @@ test('only the shape is checked; rows that cannot run are the manifests’ to ju
     assert.equal(parseRows([{ project: { id: 'p' } }]).ok, false);
     assert.equal(parseRows([{ project: null, database: { id: 'd' } }]).ok, false);
     assert.equal(parseRows(null).ok, false);
+});
+
+test('the routing table is checked for its shape', () => {
+    const routing = {
+        projectId: 'p',
+        projectName: 'shop',
+        domainId: 'd',
+        hostname: 'shop-a1b2c3d4.openupstream.app',
+        routes: [{ id: 'r', pathPrefix: '/', bucketName: 'shop-site', spaFallback: false }],
+    };
+    assert.deepEqual(parseRoutings([routing]), { ok: true, value: [routing] });
+    assert.equal(parseRoutings([{ ...routing, routes: [{ id: 'r' }] }]).ok, false);
+    assert.equal(parseRoutings({}).ok, false);
 });

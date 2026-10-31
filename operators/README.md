@@ -18,17 +18,30 @@ Traefik already implements is configured, not reimplemented.
   of the backup credentials Secret, then each Database's objects.
   `reconcileDatabases` applies them with server-side apply. It never deletes
   (ARCHITECTURE.md, decision 48).
-- `src/databases/loop.ts` and `src/main.ts`: the Databases operator, the
-  image's entry point. A pass every 30 s with the rows from
+- `src/routes/`: the Routes operator (ARCHITECTURE.md, decision 84).
+  `planRoutes` (pure) turns the routing table into, per Project, its
+  namespace, an ExternalName Service to Garage's website endpoint and the
+  shared Middlewares (compression, HSTS); per Route, a Middleware that sets
+  the Host header to the Bucket's name and one that strips the prefix; per
+  Domain, an IngressRoute on the default certificate. `reconcileRoutes`
+  applies them and deletes the objects labelled
+  `openupstream.io/component=routes` that are no longer wanted. A pass
+  without the routing table applies and deletes nothing.
+- `src/main.ts`: the image's entry point; `OPERATOR` (`databases`, the
+  default, or `routes`) picks which operator the process runs, each in its
+  own Deployment with its own ServiceAccount.
+- `src/databases/loop.ts`: the Databases operator's pass, and `runPasses`,
+  the loop both use. A pass every 30 s with the rows from
   `src/control-plane.ts`, the client of the control plane's internal API,
   which authenticates with the projected ServiceAccount token (audience
   `openupstream-control-plane`) and rereads it every pass. A pass without
   rows applies nothing.
-- `src/kube.ts`: the two Kubernetes calls the operators make (server-side
-  apply, read a Secret) behind the `Kube` interface, implemented with
+- `src/kube.ts`: the Kubernetes calls the operators make (server-side
+  apply, read a Secret, list by label, delete) behind the `Kube` interface, implemented with
   `@kubernetes/client-node`. Tests use a fake.
 - `src/kubernetes.ts`: what all operators share: the Project namespace
-  (`project-<project id>`), labels, the Site zone label and the third Site's
+  (`project-<project id>`) and its manifest, which both apply identically
+  under one field manager, labels, the Site zone label and the third Site's
   taint.
 - `deploy/`: each operator's ServiceAccount, RBAC and Deployment. The image
   is built by `Dockerfile` (GitHub Actions pushes it to

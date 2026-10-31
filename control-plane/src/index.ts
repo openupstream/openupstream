@@ -23,12 +23,14 @@ import { s3BackupStore } from './backups.js';
 import { type CleanupDeps, cleanupPass } from './cleanup.js';
 import { configFrom } from './config.js';
 import { listDatabaseRows } from './databases/rows.js';
+import { ensureDefaultDomains } from './domains/store.js';
 import { garageStorage } from './garage.js';
 import { migrate } from './db/migrate.js';
 import { tokenReviewAuthenticator } from './internal/auth.js';
 import { createInternalServer } from './internal/server.js';
 import { controlPlaneKube } from './kube.js';
 import { seedPlatform } from './platform.js';
+import { listDomainRoutings } from './routes/store.js';
 
 const log = (entry: Record<string, unknown>): void =>
     console.log(JSON.stringify({ time: new Date().toISOString(), ...entry }));
@@ -87,6 +89,10 @@ async function main(): Promise<void> {
     pool.on('error', (error) => log({ msg: 'idle database connection lost', error: error.message }));
     // A billing service needs its Database (ARCHITECTURE.md, decision 79).
     await seedPlatform(pool, { billing: config.value.billingCallers.size > 0 });
+    const domains = await ensureDefaultDomains(pool, config.value.customerDomain);
+    if (domains > 0) {
+        log({ msg: 'default Domains created for existing Projects', domains });
+    }
 
     const kubeConfig = new KubeConfig();
     kubeConfig.loadFromDefault();
@@ -97,7 +103,9 @@ async function main(): Promise<void> {
         authenticate: tokenReviewAuthenticator(kubeConfig, INTERNAL_API_AUDIENCE),
         allowedCallers: config.value.allowedCallers,
         billingCallers: config.value.billingCallers,
+        routesCallers: config.value.routesCallers,
         listDatabaseRows: () => listDatabaseRows(pool),
+        listDomainRoutings: () => listDomainRoutings(pool),
         getAccount: (id) => getAccountRecord(pool, id),
         placeHold: (accountId, reason) => placeHold(pool, accountId, reason),
         liftHold: (accountId, reason) => liftHold(pool, accountId, reason),

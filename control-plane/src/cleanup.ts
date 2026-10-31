@@ -124,7 +124,8 @@ async function purgeDeletedBuckets(deps: CleanupDeps): Promise<void> {
             deps.log({ msg: 'cleanup: cannot delete Bucket from Garage', bucket: row.id, error: deleted.error });
             continue;
         }
-        await deps.pool.query('delete from buckets where id = $1', [row.id]);
+        // A Route that slipped past the delete's check would keep the row; it serves nothing now.
+        await deps.pool.query('with routes as (delete from routes where bucket_id = $1) delete from buckets where id = $1', [row.id]);
         deps.log({ msg: 'cleanup: Bucket purged', bucket: row.id, objects: deleted.value });
     }
 }

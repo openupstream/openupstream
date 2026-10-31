@@ -53,6 +53,11 @@ providers:
     # IngressRoutes may only use Services of their own namespace: a Project's
     # routes never reach another Project.
     allowCrossNamespace: false
+    # A Project's IngressRoutes reach Garage's website endpoint through an
+    # ExternalName Service in their own namespace (decision 84). Only the
+    # Routes operator creates Services there; customers create no
+    # Kubernetes objects.
+    allowExternalNameServices: true
   kubernetesIngress:
     enabled: false
 

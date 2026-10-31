@@ -10,8 +10,8 @@
 # hcloud, curl, jq. The zone is DEV_ZONE (default dev.openupstream.com),
 # delegated to bunny.net (docs/self-hosting.md, section 5); the names in it
 # are DNS_NAMES, `@` for the zone apex (default `@ api`: madAuth, and later
-# the dashboard, at the apex; the API at api). garage.sh points `*.s3` in
-# the customer zone at the nodes the same way.
+# the dashboard, at the apex; the API at api). garage.sh points `*` and
+# `*.s3` in the customer zone at the nodes the same way.
 set -euo pipefail
 
 cd "$(dirname "$0")"

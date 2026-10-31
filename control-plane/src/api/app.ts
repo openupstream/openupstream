@@ -1,6 +1,6 @@
 /**
  * The public API (ARCHITECTURE.md, "Control plane"): the caller's Accounts,
- * and the Projects, Databases and Buckets in them. Every route under /v1 except the
+ * and the Projects, Databases, Buckets and routing table in them. Every route under /v1 except the
  * health check needs a madAuth session token or API key (./auth.ts); an
  * API key needs `openupstream:read` for GET and `openupstream:write` for
  * anything else. Another Account's Project answers 404, like one that does
@@ -12,6 +12,7 @@ import {
     COMPUTE_SITES,
     DATABASE_MIN_MEMORY_MB,
     DNS_LABEL,
+    PATH_PREFIX,
     UUID,
     type Bucket,
     type BucketDetails,
@@ -28,10 +29,12 @@ import { z } from 'zod';
 import { createAccount, holdsOf, listAccounts } from '../accounts/store.js';
 import { type BucketRecord, createBucket, deleteBucket, getBucket, listBuckets } from '../buckets/store.js';
 import { createDatabase, deleteDatabase, getDatabase, listDatabases } from '../databases/store.js';
+import { getDomain, listDomains } from '../domains/store.js';
 import { GARAGE_REGION, type ObjectStorage } from '../garage.js';
 import { type ControlPlaneKube, stateOf } from '../kube.js';
 import { createProject, deleteProject, getProject, listProjects } from '../projects/store.js';
 import { type Result, ok } from '../result.js';
+import { createRoute, deleteRoute, listRoutes } from '../routes/store.js';
 import { type Authenticate, type Identity, accountsOf } from './auth.js';
 
 export interface ApiDeps {
@@ -71,6 +74,12 @@ const databaseInput = z.strictObject({
 
 const bucketInput = z.strictObject({
     name: z.string().regex(BUCKET_NAME, 'a hostname label of 3 to 63 lowercase letters, digits and hyphens'),
+});
+
+const routeInput = z.strictObject({
+    pathPrefix: z.string().regex(PATH_PREFIX, '`/` or `/segment[/segment…]`, without a trailing slash'),
+    bucketId: z.string().regex(UUID),
+    spaFallback: z.boolean().optional(),
 });
 
 /** In-cluster connection through the Database's PgBouncer; CloudNativePG's application user and database. */
@@ -161,7 +170,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (!c.get('accountIds').includes(input.data.accountId)) {
             return c.json({ error: 'not a Member of that Account' }, 403);
         }
-        const created = await createProject(pool, input.data.accountId, input.data.name);
+        const created = await createProject(pool, input.data.accountId, input.data.name, deps.customerDomain);
         if (!created.ok) {
             return c.json({ error: `a Project named ${created.error.name} exists` }, 409);
         }
@@ -313,9 +322,12 @@ export function createApi(deps: ApiDeps): Hono<Env> {
 
     app.delete('/v1/projects/:projectId/buckets/:bucketId', async (c) => {
         const bucket = await bucketOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('bucketId'));
-        const deleted = bucket !== undefined && (await deleteBucket(pool, bucket.projectId, bucket.id));
-        if (!deleted) {
+        const deleted = bucket === undefined ? 'not-found' : await deleteBucket(pool, bucket.projectId, bucket.id);
+        if (bucket === undefined || deleted === 'not-found') {
             return c.json(notFound, 404);
+        }
+        if (deleted === 'routed') {
+            return c.json({ error: 'a Route serves this Bucket; delete the Route first' }, 409);
         }
         // Its objects go with the next cleanup pass; nothing written from now on would survive it.
         const revoked = await storage.deleteKey(bucket.accessKeyId);
@@ -323,6 +335,67 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             deps.log?.({ msg: 'cannot delete a deleted Bucket\'s key now; the cleanup will', bucket: bucket.id, error: revoked.error });
         }
         return c.body(null, 202);
+    });
+
+    app.get('/v1/projects/:projectId/domains', async (c) => {
+        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
+        return project === undefined ? c.json(notFound, 404) : c.json(await listDomains(pool, project.id));
+    });
+
+    const domainOf = async (accountIds: string[], projectId: string, id: string) => {
+        const project = await projectOf(accountIds, projectId);
+        return project === undefined || !UUID.test(id) ? undefined : getDomain(pool, project.id, id);
+    };
+
+    app.get('/v1/projects/:projectId/domains/:domainId/routes', async (c) => {
+        const domain = await domainOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('domainId'));
+        return domain === undefined ? c.json(notFound, 404) : c.json(await listRoutes(pool, domain.id));
+    });
+
+    app.post('/v1/projects/:projectId/domains/:domainId/routes', async (c) => {
+        const domain = await domainOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('domainId'));
+        if (domain === undefined) {
+            return c.json(notFound, 404);
+        }
+        const input = routeInput.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const { spaFallback, ...rest } = input.data;
+        const created = await createRoute(pool, storage, domain.projectId, domain.id, spaFallback === undefined ? rest : { ...rest, spaFallback });
+        if (!created.ok) {
+            switch (created.error.kind) {
+                case 'bucket-not-found':
+                    return c.json({ error: 'no such Bucket in this Project' }, 400);
+                case 'prefix-taken':
+                    return c.json({ error: `the Domain has a Route at ${created.error.pathPrefix}` }, 409);
+                case 'spa-conflict':
+                    return c.json(
+                        { error: `the Bucket's other Routes have spaFallback ${created.error.spaFallback}; every Route to a Bucket has the same` },
+                        409,
+                    );
+                case 'unavailable':
+                    return unavailable(c, created.error.reason);
+            }
+        }
+        c.header('location', `/v1/projects/${domain.projectId}/domains/${domain.id}/routes/${created.value.id}`);
+        return c.json(created.value, 201);
+    });
+
+    app.delete('/v1/projects/:projectId/domains/:domainId/routes/:routeId', async (c) => {
+        const domain = await domainOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('domainId'));
+        const routeId = c.req.param('routeId');
+        if (domain === undefined || !UUID.test(routeId)) {
+            return c.json(notFound, 404);
+        }
+        const deleted = await deleteRoute(pool, storage, domain.id, routeId);
+        if (deleted.kind === 'not-found') {
+            return c.json(notFound, 404);
+        }
+        if (deleted.websiteError !== undefined) {
+            deps.log?.({ msg: 'cannot stop serving a Bucket that has no Route left', route: routeId, error: deleted.websiteError });
+        }
+        return c.body(null, 204);
     });
 
     app.notFound((c) => c.json(notFound, 404));

@@ -11,7 +11,7 @@ LABEL="openupstream=dev"
 # A failure here must not keep the servers running (and billing).
 if [[ -f ${BUNNY_API_KEY_FILE:-$HOME/.config/openupstream/bunny-api-key} ]]; then
   ./dns.sh --delete || echo "could not remove the DNS records; remove them in bunny.net" >&2
-  DEV_ZONE=${CUSTOMER_DOMAIN:-dev.openupstream.app} DNS_NAMES='*.s3' ./dns.sh --delete ||
+  DEV_ZONE=${CUSTOMER_DOMAIN:-dev.openupstream.app} DNS_NAMES='* *.s3' ./dns.sh --delete ||
     echo "could not remove the S3 records; remove them in bunny.net" >&2
 fi
 for name in $(hcloud server list --selector "$LABEL" -o noheader -o columns=name); do

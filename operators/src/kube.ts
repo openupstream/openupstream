@@ -38,6 +38,10 @@ export interface Kube {
     apply(object: KubeObject, options: { readonly dryRun: boolean }): Promise<Result<void, KubeError>>;
     /** A Secret's `data` (base64 values), or undefined when it does not exist. */
     readSecret(namespace: string, name: string): Promise<Result<Record<string, string> | undefined, KubeError>>;
+    /** The objects of one kind in all namespaces that carry the labels in `labelSelector`, e.g. `a=b,c=d`. */
+    list(apiVersion: string, kind: string, labelSelector: string): Promise<Result<ObjectRef[], KubeError>>;
+    /** Deletes the object; one that is already gone counts as deleted. */
+    remove(ref: ObjectRef): Promise<Result<void, KubeError>>;
 }
 
 export const refOf = (object: KubeObject): ObjectRef => ({
@@ -119,6 +123,34 @@ export function kubeFrom(config: KubeConfig, { timeoutMs = KUBE_CALL_TIMEOUT_MS 
                 return result.error.status === 404 ? ok(undefined) : result;
             }
             return ok(result.value.data ?? {});
+        },
+        list: async (apiVersion, kind, labelSelector) => {
+            const result = await attempt(() =>
+                api.list(apiVersion, kind, undefined, undefined, undefined, undefined, undefined, labelSelector),
+            );
+            if (!result.ok) {
+                return result;
+            }
+            return ok(
+                result.value.items.flatMap((item) =>
+                    item.metadata?.name === undefined
+                        ? []
+                        : [
+                              {
+                                  apiVersion,
+                                  kind,
+                                  name: item.metadata.name,
+                                  ...(item.metadata.namespace === undefined ? {} : { namespace: item.metadata.namespace }),
+                              },
+                          ],
+                ),
+            );
+        },
+        remove: async (ref) => {
+            const result = await attempt(() =>
+                api.delete({ apiVersion: ref.apiVersion, kind: ref.kind, metadata: { name: ref.name, ...(ref.namespace === undefined ? {} : { namespace: ref.namespace }) } }),
+            );
+            return result.ok || result.error.status === 404 ? ok(undefined) : result;
         },
     };
 }

@@ -14,35 +14,6 @@ kind: Namespace
 metadata:
   name: garage
 ---
-# What Garage's Kubernetes discovery publishes: one object per node, named
-# by its node id. Garage would create this definition itself, but that
-# needs the right to create any CustomResourceDefinition; it is installed
-# here instead and Garage is told to skip it.
-apiVersion: apiextensions.k8s.io/v1
-kind: CustomResourceDefinition
-metadata:
-  name: garagenodes.deuxfleurs.fr
-spec:
-  group: deuxfleurs.fr
-  names: {kind: GarageNode, plural: garagenodes, singular: garagenode}
-  scope: Namespaced
-  versions:
-    - name: v1
-      served: true
-      storage: true
-      schema:
-        openAPIV3Schema:
-          type: object
-          required: [spec]
-          properties:
-            spec:
-              type: object
-              required: [hostname, address, port]
-              properties:
-                hostname: {type: string}
-                address: {type: string}
-                port: {type: integer, minimum: 0, maximum: 65535}
----
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -104,6 +75,13 @@ data:
     api_bind_addr = "[::]:3900"
     root_domain = ".s3.CUSTOMER_DOMAIN"
 
+    # Static sites (decision 84): Traefik sends a Domain's Routes here with
+    # the Bucket's name as the Host header, which Garage looks up as the
+    # Bucket's global alias. Never routed directly.
+    [s3_web]
+    bind_addr = "[::]:3902"
+    root_domain = ".web.garage.internal"
+
     [admin]
     api_bind_addr = "[::]:3903"
 ---
@@ -119,8 +97,9 @@ spec:
   ports:
     - {name: rpc, port: 3901}
 ---
-# The S3 API (behind Traefik) and the admin API (for the control plane
-# only), on any node: every node answers for every bucket.
+# The S3 API and the website endpoint (behind Traefik) and the admin API
+# (for the control plane only), on any node: every node answers for every
+# bucket.
 apiVersion: v1
 kind: Service
 metadata:
@@ -130,6 +109,7 @@ spec:
   selector: {app.kubernetes.io/name: garage}
   ports:
     - {name: s3, port: 3900, targetPort: s3}
+    - {name: web, port: 3902, targetPort: web}
     - {name: admin, port: 3903, targetPort: admin}
 ---
 apiVersion: apps/v1
@@ -172,6 +152,7 @@ spec:
           ports:
             - {name: s3, containerPort: 3900}
             - {name: rpc, containerPort: 3901}
+            - {name: web, containerPort: 3902}
             - {name: admin, containerPort: 3903}
           readinessProbe:
             httpGet: {path: /health, port: admin}

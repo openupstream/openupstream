@@ -227,6 +227,9 @@ export function txtRecordName(hostname: string): string {
     return `_openupstream.${hostname}`;
 }
 
+/** A Route's path prefix: `/` or `/segment[/segment…]`, no trailing slash (the schema checks the same). */
+export const PATH_PREFIX = /^(\/|(\/[A-Za-z0-9._~-]+)+)$/;
+
 export type RouteTarget =
     | { kind: 'bucket'; bucketId: Id; spaFallback: boolean }
     | { kind: 'service'; serviceId: Id };
@@ -242,6 +245,18 @@ export interface Route {
     pathPrefix: string;
     target: RouteTarget;
     createdAt: Timestamp;
+}
+
+/**
+ * Creates a Route to a Bucket of the same Project. The prefix is stripped:
+ * `/docs/a.html` on the Route `/docs` serves the object `a.html`. With
+ * `spaFallback`, a path with no object serves `index.html` with status 200;
+ * every Route to one Bucket has the same `spaFallback`.
+ */
+export interface RouteInput {
+    pathPrefix: string;
+    bucketId: Id;
+    spaFallback?: boolean;
 }
 
 export const RESOURCE_KINDS = ['database', 'bucket', 'service'] as const;

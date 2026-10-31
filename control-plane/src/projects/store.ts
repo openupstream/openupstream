@@ -1,11 +1,13 @@
 /**
  * Projects as the public API sees them: only live ones, only in the caller's
- * Accounts. Deleting marks the Project and its Databases deleted in one
+ * Accounts. Creating one creates its default Domain; deleting marks the
+ * Project and its Resources deleted and removes its Domains in one
  * statement; the cleanup (src/cleanup.ts) does the rest.
  */
 import type { Project } from '@openupstream/sdk';
 import type pg from 'pg';
 import { unlessUnique } from '../db/errors.js';
+import { defaultHostname } from '../domains/store.js';
 import { type Result, ok } from '../result.js';
 
 interface ProjectRow {
@@ -46,24 +48,38 @@ export async function getProject(
 
 export type CreateProjectError = { readonly kind: 'name-taken'; readonly name: string };
 
-/** The caller must already be known to be a Member of `accountId`. */
+/**
+ * Creates the Project with its default Domain under `customerDomain`, in one
+ * statement. The caller must already be known to be a Member of `accountId`.
+ */
 export async function createProject(
     pool: pg.Pool,
     accountId: string,
     name: string,
+    customerDomain: string,
 ): Promise<Result<Project, CreateProjectError>> {
     const inserted = await unlessUnique(
-        pool.query<ProjectRow>(`insert into projects (account_id, name) values ($1, $2) returning ${COLUMNS}`, [
-            accountId,
-            name,
-        ]),
+        pool.query<ProjectRow>(
+            `with project as (
+                 insert into projects (account_id, name) values ($1, $2) returning ${COLUMNS}
+             ), domain as (
+                 insert into domains (project_id, hostname, kind, verified_at)
+                 select id, $3, 'default', now() from project
+             )
+             select ${COLUMNS} from project`,
+            [accountId, name, defaultHostname(name, customerDomain)],
+        ),
         { kind: 'name-taken', name } as const,
     );
     // An insert … returning without a conflict always returns its row.
     return inserted.ok ? ok(toProject(inserted.value.rows[0] as ProjectRow)) : inserted;
 }
 
-/** Marks the Project and its live Databases and Buckets deleted; false when there was no such live Project. */
+/**
+ * Marks the Project and its live Databases and Buckets deleted and deletes
+ * its Domains with their Routes, so nothing of it is served any more; false
+ * when there was no such live Project.
+ */
 export async function deleteProject(pool: pg.Pool, accountIds: readonly string[], id: string): Promise<boolean> {
     // A data-modifying CTE runs to completion whether or not the outer
     // query reads it, so the Resources are marked in the same statement.
@@ -78,6 +94,8 @@ export async function deleteProject(pool: pg.Pool, accountIds: readonly string[]
          ), buckets as (
              update buckets b set deleted_at = project.deleted_at
              from project where b.project_id = project.id and b.deleted_at is null
+         ), domains as (
+             delete from domains d using project where d.project_id = project.id
          )
          select id from project`,
         [id, accountIds],

@@ -1,0 +1,43 @@
+# What the Routes reconcile pass (src/routes/reconcile.ts) may do: apply a
+# Project's namespace and the Traefik objects and ExternalName Service for
+# its routing table, and delete those of its objects that are no longer
+# wanted (ARCHITECTURE.md, decision 84). Server-side apply is a PATCH that
+# creates missing objects, so every applied kind needs `patch` and `create`;
+# pruning lists by label and deletes. Namespaces are only created, never
+# deleted: the control plane's cleanup removes them.
+#
+# Cluster-wide because Project namespaces are created at run time and RBAC
+# cannot select namespaces by name pattern.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: routes-operator
+  namespace: openupstream-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openupstream-routes-operator
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [create, patch]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [create, patch, list, delete]
+  - apiGroups: [traefik.io]
+    resources: [ingressroutes, middlewares]
+    verbs: [create, patch, list, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openupstream-routes-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: openupstream-routes-operator
+subjects:
+  - kind: ServiceAccount
+    name: routes-operator
+    namespace: openupstream-system

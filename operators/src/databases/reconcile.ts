@@ -12,7 +12,7 @@
  */
 import type { DatabaseRow, Project } from '@openupstream/sdk';
 import { type Kube, type KubeError, type KubeObject, type ObjectRef, refOf } from '../kube.js';
-import { LABELS, MANAGED_BY, projectNamespace } from '../kubernetes.js';
+import { LABELS, MANAGED_BY, namespaceFor, projectNamespace } from '../kubernetes.js';
 import { type Result, err, ok } from '../result.js';
 import {
     BACKUP_CREDENTIAL_KEYS,
@@ -34,19 +34,6 @@ export interface DatabasePlan {
     /** Rows that cannot run; their existing objects are left alone. */
     readonly invalid: readonly { readonly databaseId: string; readonly errors: readonly DatabaseManifestError[] }[];
 }
-
-const namespaceFor = (project: Project): KubeObject => ({
-    apiVersion: 'v1',
-    kind: 'Namespace',
-    metadata: {
-        name: projectNamespace(project.id),
-        labels: {
-            [LABELS.projectId]: project.id,
-            [LABELS.projectName]: project.name,
-            [LABELS.managedBy]: MANAGED_BY,
-        },
-    },
-});
 
 /** The platform's backup credentials, copied into a Project's namespace. */
 const backupSecretFor = (project: Project, config: DatabaseConfig, data: Readonly<Record<string, string>>): KubeObject => ({
