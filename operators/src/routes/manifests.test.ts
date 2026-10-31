@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { DomainRouting } from '@openupstream/sdk';
-import { matchOf, planRoutes } from './manifests.js';
+import { COMPONENT_LABEL, PRUNED_KINDS, matchOf, planRoutes } from './manifests.js';
 
 const routing: DomainRouting = {
     projectId: '11111111-1111-4111-8111-111111111111',
@@ -98,4 +98,11 @@ test('a custom domain gets a Certificate of its own through the ClusterIssuer, b
     });
     assert.deepEqual((ingress?.['spec'] as { tls: unknown }).tls, { secretName: 'domain-22222222-2222-4222-8222-222222222222-tls' });
     assert.ok(!planRoutes([routing], settings).some((o) => o.kind === 'Certificate'));
+});
+
+test("the namespace and its NetworkPolicy are never pruned: a Project's last Route going must not lift its isolation", () => {
+    const shared = planRoutes([routing], settings).slice(0, 2);
+    assert.deepEqual(shared.map((o) => o.kind), ['Namespace', 'NetworkPolicy']);
+    assert.ok(shared.every((o) => o.metadata.labels?.[COMPONENT_LABEL] === undefined));
+    assert.ok(PRUNED_KINDS.every(({ kind }) => !shared.some((o) => o.kind === kind)));
 });

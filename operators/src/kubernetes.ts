@@ -47,7 +47,10 @@ export const namespaceFor = (project: Pick<Project, 'id' | 'name'>) => ({
 /**
  * The namespaces from which a Project's pods accept connections, besides
  * their own: Traefik, which serves the Project's Routes, and CloudNativePG's
- * operator, which asks each Database instance for its status.
+ * operator, which asks each Database instance for its status. These are the
+ * namespaces infra/dev-cluster installs them into (ingress.sh,
+ * operators.sh); moving either one means changing this list first, or the
+ * Projects stop being served.
  */
 export const INGRESS_FROM_NAMESPACES = ['traefik', 'cnpg-system'] as const;
 
