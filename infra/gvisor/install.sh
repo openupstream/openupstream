@@ -15,6 +15,9 @@ GVISOR_RELEASE=20261012
 GVISOR_SHA512=9606445eed5aedfcf05310e7ccef61d994089914c6622fc82624c24d2b18db1b2210f40e40a7be27b8b7772859de7d95c501b4eba66423053c960bf671377c5e
 [[ $(uname -m) == x86_64 ]] || { echo "only x86_64 is pinned" >&2; exit 1; }
 
+# The archive is bzip2; minimal images (Ubuntu's cloud image) lack it.
+command -v bzip2 >/dev/null || { apt-get update -qq && apt-get install -y -qq bzip2 >/dev/null; }
+
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 curl -fsSL -o "$work/gvisor.tar.bz2" \
