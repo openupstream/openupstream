@@ -1,13 +1,12 @@
 /**
  * The routing table (ARCHITECTURE.md, "Routing and domains"): Routes under a
- * Domain, each sending a path prefix to a Bucket of the same Project. The
- * Routes operator turns them into Traefik objects (operators/src/routes);
- * the Bucket's website settings in Garage are set here, while the request
- * waits, since only the control plane holds Garage's admin token.
- *
- * Services as Route targets come with Services.
+ * Domain, each sending a path prefix to a Bucket or a Service of the same
+ * Project. The Routes operator turns them into Traefik objects
+ * (operators/src/routes); the Bucket's website settings in Garage are set
+ * here, while the request waits, since only the control plane holds
+ * Garage's admin token.
  */
-import type { DomainRouting, Route, RouteInput } from '@openupstream/sdk';
+import type { DomainRouting, Route, RouteInput, RoutedPath } from '@openupstream/sdk';
 import pg from 'pg';
 import { UNIQUE_VIOLATION } from '../db/errors.js';
 import type { ObjectStorage } from '../garage.js';
@@ -49,6 +48,7 @@ export async function listRoutes(pool: pg.Pool, domainId: string): Promise<Route
 export type CreateRouteError =
     | { readonly kind: 'domain-not-found' }
     | { readonly kind: 'bucket-not-found' }
+    | { readonly kind: 'service-not-found' }
     | { readonly kind: 'prefix-taken'; readonly pathPrefix: string }
     | { readonly kind: 'spa-conflict'; readonly spaFallback: boolean }
     | { readonly kind: 'unavailable'; readonly reason: string };
@@ -69,6 +69,59 @@ export async function createRoute(
     domainId: string,
     input: RouteInput,
 ): Promise<Result<Route, CreateRouteError>> {
+    return 'serviceId' in input
+        ? createServiceRoute(pool, projectId, domainId, input.pathPrefix, input.serviceId)
+        : createBucketRoute(pool, storage, projectId, domainId, input);
+}
+
+/** The insert's row, or `prefix-taken` when the Domain has a Route at the prefix. */
+const insertRoute = (client: pg.PoolClient, values: unknown[], pathPrefix: string) =>
+    client
+        .query<RouteRow>(
+            `insert into routes (project_id, domain_id, path_prefix, bucket_id, service_id, spa_fallback)
+             values ($1, $2, $3, $4, $5, $6) returning ${COLUMNS}`,
+            values,
+        )
+        .then(
+            // An insert … returning always returns its row.
+            (result) => ok(toRoute(result.rows[0] as RouteRow)),
+            (error: unknown) =>
+                error instanceof pg.DatabaseError && error.code === UNIQUE_VIOLATION
+                    ? err({ kind: 'prefix-taken', pathPrefix } as const)
+                    : Promise.reject(error),
+        );
+
+/**
+ * A Service needs nothing outside the database; its row is locked until the
+ * Route is committed, so it cannot be deleted under the new Route.
+ */
+async function createServiceRoute(
+    pool: pg.Pool,
+    projectId: string,
+    domainId: string,
+    pathPrefix: string,
+    serviceId: string,
+): Promise<Result<Route, CreateRouteError>> {
+    return inTransaction(pool, async (client): Promise<Result<Route, CreateRouteError>> => {
+        const domain = await client.query('select 1 from domains where id = $1 for key share', [domainId]);
+        if (domain.rowCount !== 1) {
+            return err({ kind: 'domain-not-found' });
+        }
+        const service = await client.query('select 1 from services where id = $1 and project_id = $2 for key share', [serviceId, projectId]);
+        if (service.rowCount !== 1) {
+            return err({ kind: 'service-not-found' });
+        }
+        return insertRoute(client, [projectId, domainId, pathPrefix, null, serviceId, false], pathPrefix);
+    }, (result) => result.ok);
+}
+
+async function createBucketRoute(
+    pool: pg.Pool,
+    storage: ObjectStorage,
+    projectId: string,
+    domainId: string,
+    input: Extract<RouteInput, { bucketId: string }>,
+): Promise<Result<Route, CreateRouteError>> {
     const spaFallback = input.spaFallback ?? false;
     return inTransaction(pool, async (client): Promise<Result<Route, CreateRouteError>> => {
         const domain = await client.query('select 1 from domains where id = $1 for key share', [domainId]);
@@ -87,28 +140,12 @@ export async function createRoute(
         if (found.spa_fallback !== null && found.spa_fallback !== spaFallback) {
             return err({ kind: 'spa-conflict', spaFallback: found.spa_fallback });
         }
-        const inserted = await client
-            .query<RouteRow>(
-                `insert into routes (project_id, domain_id, path_prefix, bucket_id, spa_fallback)
-                 values ($1, $2, $3, $4, $5) returning ${COLUMNS}`,
-                [projectId, domainId, input.pathPrefix, input.bucketId, spaFallback],
-            )
-            .then(
-                (result) => ok(result),
-                (error: unknown) =>
-                    error instanceof pg.DatabaseError && error.code === UNIQUE_VIOLATION
-                        ? err({ kind: 'prefix-taken', pathPrefix: input.pathPrefix } as const)
-                        : Promise.reject(error),
-            );
+        const inserted = await insertRoute(client, [projectId, domainId, input.pathPrefix, input.bucketId, null, spaFallback], input.pathPrefix);
         if (!inserted.ok) {
             return inserted;
         }
         const website = await storage.setWebsite(found.garage_bucket_id, { spaFallback });
-        if (!website.ok) {
-            return err({ kind: 'unavailable', reason: website.error });
-        }
-        // An insert … returning always returns its row.
-        return ok(toRoute(inserted.value.rows[0] as RouteRow));
+        return website.ok ? inserted : err({ kind: 'unavailable', reason: website.error });
     }, (result) => result.ok);
 }
 
@@ -167,7 +204,7 @@ export async function unserveIfUnrouted(client: pg.PoolClient, storage: ObjectSt
     return website.ok ? undefined : website.error;
 }
 
-/** Every Domain that has Routes to live Buckets, for the Routes operator; a stable order. */
+/** Every verified Domain that has Routes to live Buckets or Services, for the Routes operator; a stable order. */
 export async function listDomainRoutings(pool: pg.Pool): Promise<DomainRouting[]> {
     const { rows } = await pool.query<{
         project_id: string;
@@ -177,19 +214,26 @@ export async function listDomainRoutings(pool: pg.Pool): Promise<DomainRouting[]
         kind: 'default' | 'custom';
         route_id: string;
         path_prefix: string;
-        bucket_name: string;
+        bucket_name: string | null;
         spa_fallback: boolean;
+        service_id: string | null;
+        port: number | null;
     }>(`
-        select d.project_id, p.name as project_name, d.id as domain_id, d.hostname, d.kind, r.id as route_id, r.path_prefix, b.name as bucket_name, r.spa_fallback
+        select d.project_id, p.name as project_name, d.id as domain_id, d.hostname, d.kind, r.id as route_id, r.path_prefix,
+               b.name as bucket_name, r.spa_fallback, s.id as service_id, s.port
         from routes r
         join domains d on d.id = r.domain_id
-        join buckets b on b.id = r.bucket_id and b.deleted_at is null
         join projects p on p.id = d.project_id and p.deleted_at is null
-        where d.verified_at is not null
+        left join buckets b on b.id = r.bucket_id and b.deleted_at is null
+        left join services s on s.id = r.service_id
+        where d.verified_at is not null and (b.id is not null or s.id is not null)
         order by d.created_at, d.id, length(r.path_prefix) desc, r.path_prefix`);
     const byDomain = new Map<string, DomainRouting>();
     for (const row of rows) {
-        const route = { id: row.route_id, pathPrefix: row.path_prefix, bucketName: row.bucket_name, spaFallback: row.spa_fallback };
+        const route: RoutedPath =
+            row.service_id !== null && row.port !== null
+                ? { id: row.route_id, pathPrefix: row.path_prefix, kind: 'service', serviceId: row.service_id, port: row.port }
+                : { id: row.route_id, pathPrefix: row.path_prefix, kind: 'bucket', bucketName: row.bucket_name ?? '', spaFallback: row.spa_fallback };
         const domain = byDomain.get(row.domain_id);
         byDomain.set(
             row.domain_id,

@@ -74,7 +74,7 @@ nodes. Then:
 It creates the platform Project's Databases (the control plane's and
 madAuth's), runs madAuth with its sidecar, the control plane, the public
 routes with their certificate (Let's Encrypt staging: clients need `-k`)
-and the Databases and Routes operators, with the GHCR images of the current commit
+and the Databases, Routes and Services operators, with the GHCR images of the current commit
 pinned by digest (`IMAGE_TAG` to choose others; the commit must be pushed
 and its Images workflow done). The DatabaseConfig is `database-config.json`.
 madAuth sends real e-mails through SES; `MAIL=log ./platform.sh` writes

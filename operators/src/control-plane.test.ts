@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { INTERNAL_DATABASES_PATH, PLATFORM } from '@openupstream/sdk';
-import { controlPlaneRows, parseRoutings, parseRows } from './control-plane.js';
+import { controlPlaneRows, parseRoutings, parseRows, parseServiceRows } from './control-plane.js';
 
 const rows = [{ project: PLATFORM.project, database: PLATFORM.database }];
 
@@ -76,10 +76,23 @@ test('the routing table is checked for its shape', () => {
         domainId: 'd',
         hostname: 'shop-a1b2c3d4.openupstream.app',
         kind: 'default',
-        routes: [{ id: 'r', pathPrefix: '/', bucketName: 'shop-site', spaFallback: false }],
+        routes: [{ id: 'r', pathPrefix: '/', kind: 'bucket', bucketName: 'shop-site', spaFallback: false }],
     };
     assert.deepEqual(parseRoutings([routing]), { ok: true, value: [routing] });
     assert.equal(parseRoutings([{ ...routing, kind: 'other' }]).ok, false);
     assert.equal(parseRoutings([{ ...routing, routes: [{ id: 'r' }] }]).ok, false);
     assert.equal(parseRoutings({}).ok, false);
+});
+
+test('Services from the control plane: only rows with an image pinned by digest and a compute Site', () => {
+    const row = {
+        project: { id: 'p', accountId: 'a', name: 'shop', createdAt: '2026-10-31T00:00:00Z' },
+        service: { id: 's', name: 'api', image: 'nginx', imageDigest: `sha256:${'a'.repeat(64)}`, replicas: 1, memoryMb: 128, cpuMillicores: 100, port: 80 },
+        pinnedImage: `docker.io/library/nginx@sha256:${'a'.repeat(64)}`,
+        site: 'hetzner-fsn1',
+        secretsVersion: 'v',
+    };
+    assert.ok(parseServiceRows([row]).ok);
+    assert.equal(parseServiceRows([{ ...row, pinnedImage: 'docker.io/library/nginx:latest' }]).ok, false);
+    assert.equal(parseServiceRows([{ ...row, site: 'netcup-nbg' }]).ok, false);
 });

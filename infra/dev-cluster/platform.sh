@@ -18,7 +18,9 @@
 # 5. the Databases operator, reconciling every 30 s with rows from the
 #    control plane;
 # 6. the Routes operator, turning the routing table into Traefik objects
-#    every 30 s.
+#    every 30 s;
+# 7. the Services operator, running every Service as a Deployment under
+#    gVisor every 30 s.
 #
 # Images come from GHCR, pinned by digest: by default the ones built for the
 # current commit (.github/workflows/images.yml). Override with IMAGE_TAG.
@@ -164,3 +166,8 @@ sed -e "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" -e "s#value: CL
   "$ROOT/operators/deploy/routes-operator.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n openupstream-system rollout status deployment/routes-operator --timeout=5m
+
+kubectl apply -f "$ROOT/operators/deploy/services-rbac.yaml" >/dev/null
+sed "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" "$ROOT/operators/deploy/services-operator.yaml" |
+  kubectl apply -f - >/dev/null
+kubectl -n openupstream-system rollout status deployment/services-operator --timeout=5m

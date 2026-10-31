@@ -277,6 +277,9 @@ Thin reconcilers for the things no off-the-shelf operator does:
   alone holds Garage's admin token
 - Database → CloudNativePG `Cluster` (two instances, one per compute Site),
   PgBouncer `Pooler`, backup schedule
+- Service → a Deployment under gVisor and a Kubernetes Service (the
+  Services operator, `operators/src/services`, #93); like the Routes
+  operator it deletes its objects that no row wants any more
 
 The step from a control plane row to Kubernetes objects is a pure function
 that returns the objects or a list of errors; the reconcile loop around it
@@ -459,6 +462,20 @@ digest (#55).
   and a redirect to another host is followed without them.
 - Without a `homeSite` of its own, a single replica runs in the Home site of
   the Project's oldest live Database, else in `hetzner-fsn1`.
+- The Services operator (#93) runs each Service as a Deployment `svc-<id>`
+  with the image by digest and `runtimeClassName: gvisor`, and a Kubernetes
+  Service of the same name for its Routes. A single replica has a
+  preferred node affinity for its Site, so it moves to the other when that
+  one fails; two or more have a hard topology spread over the compute
+  Sites that leaves out a dark Site's tainted node (as in decision 46).
+  Rollouts start the new pod before stopping the old one. Requests and
+  limits are both the configured memory and CPU, so what is billed is
+  reserved and no Service takes another's CPU. Pods mount no
+  ServiceAccount token, read `project-secrets` with `envFrom` and do not
+  start before it exists; a version of the Project's Secrets on the pod
+  template rolls the Service when they change. The control plane records
+  that version only after it wrote the new values, so pods never restart
+  into the old ones.
 
 ## Routing and domains
 
@@ -493,7 +510,11 @@ digest (#55).
   nor one another Project has verified. Deleting a custom domain deletes
   its Routes; the default Domain goes only with its Project.
 - A Route sends a path prefix (`/` or `/a/b`, no trailing slash) to a Bucket,
-  optionally with SPA fallback, or to a Service. A Bucket or Service that a
+  optionally with SPA fallback, or to a Service. A Service gets the path
+  as it came, prefix included (#93); only a Bucket's prefix is stripped.
+  Like the platform's own routes, Traefik gives up connecting to a
+  Service's pod after 1 s and retries GET and HEAD on another; the longer
+  prefix always wins, whatever the method (explicit rule priorities). A Bucket or Service that a
   Route still targets cannot be deleted; deleting a Domain deletes its
   Routes, and deleting a Project deletes its Domains at once, so nothing of
   it is served any more.
@@ -536,7 +557,13 @@ digest (#55).
   namespace applies it right after the namespace, before anything else goes
   in, so no pod of a Project runs unisolated. The operators' exception in
   the platform namespace is a second policy in `control-plane/deploy/`.
-- Egress to the internet is allowed, with a per-pod bandwidth limit.
+- Egress to the internet is allowed, with a per-pod bandwidth limit (not
+  set yet). A Service's pods may connect only to DNS, their own Project's
+  namespace (its Databases' Poolers) and public addresses: the
+  NetworkPolicy `service-egress` (#93) leaves out every loopback, private,
+  shared and link-local range, which holds the cluster's pod and service
+  networks, the nodes' private addresses and metadata endpoints. Their
+  Buckets they reach at their public hostnames.
 - One-off jobs are an API call; customers cannot spawn containers from inside
   containers.
 - Deleting a Project deletes its namespace and every Resource, Secret and
@@ -758,6 +785,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 90 | gVisor is installed by a script on each compute node before k3s starts (`infra/gvisor/install.sh`): a pinned release whose archive is checked against a SHA-512 in the script, and a containerd config template that extends k3s's base with the handler `runsc`. The RuntimeClass `gvisor` selects nodes labelled `openupstream.io/gvisor=true` | gVisor's apt repository; a privileged DaemonSet that installs runsc on the nodes | a node setup step like k3s itself, with nothing privileged left running in the cluster; the pin makes every node run the same sandbox, and an upgrade is a reviewed change of two lines; the apt repository serves whatever is newest. The label keeps gVisor pods off a node without runsc, where they would never start |
 | 91 | The control plane writes the Kubernetes Secret `project-secrets` per Project itself, after each change and in a 30 s pass; no Secrets operator. The public API: `GET …/secrets` (names), `PUT …/secrets/{name}` `{value}`, `DELETE …/secrets/{name}`; every Service of the Project gets all of them | a Secrets operator fed decrypted values by an internal API route (the earlier plan of decision 20); per-Service selection of Secrets | the control plane alone holds the key-encryption key, so plaintext never travels between processes and no operator can read every Project's Secrets; it needs `create` and `patch` on Secrets cluster-wide, which a Secrets operator would have needed as well. Project-wide Secrets match how they are described to customers; selecting per Service can come later without changing the API |
 | 92 | Services API: a Service is a row, created, changed (`PATCH`) and redeployed (`POST …/deploy`) through the API, its state read from its Deployment. The control plane resolves the tag to a digest at the registry while the request waits, over https and never at a private address; pull credentials are per Service, sealed with the Project's data key, and rendered into one dockerconfigjson Secret per Project keyed by repository | Deployments as immutable records with history and rollback; the operator resolving tags on its pass; named registry credentials shared by Services; a pull Secret per Service | the pattern of Buckets: a 201 means the image exists and can be pulled, and a bad tag or credentials is an answer, not a state to poll; the operator never needs credentials or the internet. One Secret per Project lives and dies with the namespace and needs no pruning by the control plane; kubelet's prefix match keeps credentials per repository. Rollback is a `PATCH` back to a digest (`image@sha256:…`) |
+| 93 | A Services operator (`OPERATOR=services`, own ServiceAccount) applies per Service a Deployment (gVisor, image by digest, requests = limits, no ServiceAccount token, `envFrom` `project-secrets` required, Secrets version on the pod template) and a Kubernetes Service, plus per Project the NetworkPolicy `service-egress`, and deletes what no row wants. Routes to a Service keep the path, dial with a 1 s timeout and retry GET and HEAD only | extending the Routes operator; `optional` Secrets; stripping the prefix as for Buckets; egress left open | each operator keeps only the rights it needs and one concern per pass; a pod that waited for its Secrets never runs without them; apps behind `/api` usually expect their full path; customer code must not reach Garage's admin API, the control plane or other Projects from inside the cluster, so only the internet and its own namespace are open |
 
 ## Open questions
 
@@ -886,12 +914,25 @@ Decisions table once it is settled.
    index last and deleted the old bundle, and the served headers matched.
    Left: the approval page
    for `oup login` at madAuth's `loginUrl`, the production DNS zones.
-3. Containers, Service mode. Done so far: the NetworkPolicy
-   `project-isolation` in every Project namespace (#89), gVisor on the
-   compute nodes and the RuntimeClass `gvisor` (#90), Secrets through the
-   API, written into each Project's namespace by the control plane (#91);
-   Services through the API, each pinned to the digest its tag resolved to
-   (#92).
+3. Containers, Service mode. Done on the dev cluster (2026-10-31): the
+   NetworkPolicy `project-isolation` in every Project namespace (#89),
+   gVisor on the compute nodes and the RuntimeClass `gvisor` (#90),
+   Secrets through the API, written into each Project's namespace by the
+   control plane (#91), Services through the API pinned to the digest of
+   their tag (#92), run by the Services operator and served through Routes
+   (#93). Tested: `traefik/whoami:v1.10` from Docker Hub created through the
+   API, pinned to `sha256:1699d99c…`, running under `runsc` and answering
+   at the Project's default hostname through Traefik in the other Site,
+   with its name from a Secret; a new Secret value rolled it, two replicas
+   ran one per Site, a redeploy kept the digest, deleting it while routed
+   was refused and afterwards both operators removed its objects. A pod in
+   another namespace reached none of the Project's pods, madAuth or the
+   internal API; a Service's pod reached its own namespace, DNS and the
+   internet, not the control plane, Garage's admin API or the metadata
+   endpoint. The test found that the operators' Kubernetes client had
+   dropped every NetworkPolicy's peers (fixed, see "Operators"). Left: a
+   CLI for Services and Secrets, the log stream, private registries tried
+   against a real one (the Docker Hub credential key form included).
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
    staying writable while a whole Site is switched off.

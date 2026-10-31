@@ -27,7 +27,7 @@ const routings: DomainRouting[] = [
         domainId: '0b7c3f1e-2d4a-4c8b-9e6f-111111111111',
         hostname: 'shop-a1b2c3d4.openupstream.app',
         kind: 'default',
-        routes: [{ id: '0b7c3f1e-2d4a-4c8b-9e6f-222222222222', pathPrefix: '/', bucketName: 'shop-site', spaFallback: true }],
+        routes: [{ id: '0b7c3f1e-2d4a-4c8b-9e6f-222222222222', pathPrefix: '/', kind: 'bucket', bucketName: 'shop-site', spaFallback: true }],
     },
 ];
 const rows: DatabaseRow[] = [{ project: PLATFORM.project, database: PLATFORM.database }];

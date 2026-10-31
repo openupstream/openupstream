@@ -94,6 +94,8 @@ export async function syncProjectSecrets(
     deps: Pick<SecretsDeps, 'pool' | 'kube' | 'kek'>,
     projectId: string,
 ): Promise<Result<'applied' | 'no-namespace', string>> {
+    // Read before the values: a change in between leaves an older version recorded, so the next pass writes again.
+    const version = await secretsVersionOf(deps.pool, projectId);
     const values = await readSecretValues(deps.pool, deps.kek, projectId);
     if (!values.ok) {
         return err(`cannot read the Secrets: ${values.error.kind}`);
@@ -106,8 +108,24 @@ export async function syncProjectSecrets(
     if (!secrets.ok || secrets.value === 'no-namespace') {
         return secrets;
     }
-    return deps.kube.applySecret(registryAuthManifest(projectId, credentials.value));
+    const registry = await deps.kube.applySecret(registryAuthManifest(projectId, credentials.value));
+    if (!registry.ok || registry.value === 'no-namespace') {
+        return registry;
+    }
+    // Only now may the Services roll: their pods will read these values.
+    await deps.pool.query('update projects set secrets_version = $2 where id = $1 and secrets_version is distinct from $2', [projectId, version]);
+    return registry;
 }
+
+/** Changes whenever a Secret is created, changed or deleted: names and update times, no values. */
+const secretsVersionOf = async (pool: pg.Pool, projectId: string): Promise<string> => {
+    const { rows } = await pool.query<{ version: string }>(
+        `select md5(coalesce(string_agg(name || '@' || updated_at::text, ',' order by name), '')) as version
+         from secrets where project_id = $1`,
+        [projectId],
+    );
+    return rows[0]?.version ?? '';
+};
 
 /**
  * One pass over every live Project that has ever had a Secret or registry

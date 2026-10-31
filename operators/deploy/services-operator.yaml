@@ -1,0 +1,56 @@
+# The Services operator: one reconcile pass every 30 s with the Services
+# from the control plane's internal API (ARCHITECTURE.md, decision 93).
+# One replica: the pass is idempotent, and a restart in the other Site only
+# delays changes to Services; the Deployments it applied keep running.
+#
+# Needs services-rbac.yaml. The image is the operators' image, pinned by
+# digest when applied (infra/dev-cluster/platform.sh).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: services-operator
+  namespace: openupstream-system
+  labels: {app.kubernetes.io/name: services-operator}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: services-operator}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: services-operator}
+    spec:
+      serviceAccountName: services-operator
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: services-operator
+          image: ghcr.io/openupstream/operators:main
+          env:
+            - {name: OPERATOR, value: services}
+            - {name: CONTROL_PLANE_URL, value: "http://control-plane.project-00000000-0000-4000-8000-000000000002.svc:8081"}
+            - {name: TOKEN_PATH, value: /var/run/secrets/openupstream/control-plane/token}
+          volumeMounts:
+            - {name: control-plane-token, mountPath: /var/run/secrets/openupstream/control-plane, readOnly: true}
+          resources:
+            requests: {cpu: 20m, memory: 96Mi}
+            limits: {memory: 192Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+      volumes:
+        # A token only the control plane accepts (audience), rotated by the
+        # kubelet; the operator reads it before every pass.
+        - name: control-plane-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: openupstream-control-plane
+                  expirationSeconds: 3600
+                  path: token

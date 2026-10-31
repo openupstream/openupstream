@@ -10,8 +10,8 @@ const routing: DomainRouting = {
     hostname: 'shop-a1b2c3d4.openupstream.app',
     kind: 'default',
     routes: [
-        { id: '33333333-3333-4333-8333-333333333333', pathPrefix: '/docs', bucketName: 'shop-docs', spaFallback: false },
-        { id: '44444444-4444-4444-8444-444444444444', pathPrefix: '/', bucketName: 'shop-site', spaFallback: true },
+        { id: '33333333-3333-4333-8333-333333333333', pathPrefix: '/docs', kind: 'bucket', bucketName: 'shop-docs', spaFallback: false },
+        { id: '44444444-4444-4444-8444-444444444444', pathPrefix: '/', kind: 'bucket', bucketName: 'shop-site', spaFallback: true },
     ],
 };
 const namespace = 'project-11111111-1111-4111-8111-111111111111';
@@ -56,6 +56,7 @@ test('the IngressRoute sends each prefix to Garage with its Middlewares, on the 
             {
                 match: 'Host(`shop-a1b2c3d4.openupstream.app`) && (Path(`/docs`) || PathPrefix(`/docs/`))',
                 kind: 'Rule',
+                priority: 1010,
                 middlewares: [
                     { name: 'hsts' },
                     { name: 'compress' },
@@ -67,6 +68,7 @@ test('the IngressRoute sends each prefix to Garage with its Middlewares, on the 
             {
                 match: 'Host(`shop-a1b2c3d4.openupstream.app`)',
                 kind: 'Rule',
+                priority: 1000,
                 middlewares: [{ name: 'hsts' }, { name: 'compress' }, { name: 'route-44444444-4444-4444-8444-444444444444-bucket' }],
                 services: [{ name: 'garage-web', port: 3902 }],
             },
@@ -105,4 +107,40 @@ test("the namespace and its NetworkPolicy are never pruned: a Project's last Rou
     assert.deepEqual(shared.map((o) => o.kind), ['Namespace', 'NetworkPolicy']);
     assert.ok(shared.every((o) => o.metadata.labels?.[COMPONENT_LABEL] === undefined));
     assert.ok(PRUNED_KINDS.every(({ kind }) => !shared.some((o) => o.kind === kind)));
+});
+
+test('a Route to a Service: its Kubernetes Service, path unchanged, GET and HEAD retried on another pod, the rest never', () => {
+    const withService: DomainRouting = {
+        ...routing,
+        routes: [
+            { id: '66666666-6666-4666-8666-666666666666', pathPrefix: '/api', kind: 'service', serviceId: '77777777-7777-4777-8777-777777777777', port: 8080 },
+            ...routing.routes,
+        ],
+    };
+    const plan = planRoutes([withService], settings);
+    const names = plan.map((o) => `${o.kind} ${o.metadata.name}`);
+    assert.ok(names.includes('ServersTransport fail-fast'));
+    assert.ok(names.includes('Middleware retry-other-pod'));
+    assert.ok(!names.some((name) => name.startsWith('Middleware route-66666666')), 'no strip or host Middleware for a Service');
+    const rules = (plan.at(-1)?.['spec'] as { routes: { match: string; priority: number; middlewares: { name: string }[]; services: unknown[] }[] }).routes;
+    const service = [{ name: 'svc-77777777-7777-4777-8777-777777777777', port: 8080, serversTransport: 'fail-fast' }];
+    assert.deepEqual(rules.slice(0, 2), [
+        {
+            match: 'Host(`shop-a1b2c3d4.openupstream.app`) && (Path(`/api`) || PathPrefix(`/api/`)) && (Method(`GET`) || Method(`HEAD`))',
+            kind: 'Rule',
+            priority: 1009,
+            middlewares: [{ name: 'hsts' }, { name: 'compress' }, { name: 'retry-other-pod' }],
+            services: service,
+        },
+        {
+            match: 'Host(`shop-a1b2c3d4.openupstream.app`) && (Path(`/api`) || PathPrefix(`/api/`))',
+            kind: 'Rule',
+            priority: 1008,
+            middlewares: [{ name: 'hsts' }, { name: 'compress' }],
+            services: service,
+        },
+    ]);
+    // The longer prefix wins over `/` whatever the method.
+    assert.ok(rules.slice(0, 2).every((rule) => rule.priority > (rules.at(-1)?.priority ?? Infinity)));
+    assert.ok(!planRoutes([routing], settings).some((o) => o.kind === 'ServersTransport'), 'only Projects with Routes to Services');
 });
