@@ -22,12 +22,13 @@ test('a prefix matches itself and what is below it, not a longer segment', () =>
     assert.equal(matchOf('a.test', '/docs'), 'Host(`a.test`) && (Path(`/docs`) || PathPrefix(`/docs/`))');
 });
 
-test("a Project's namespace, Garage's website endpoint and the shared Middlewares, then each Route's, then the IngressRoute", () => {
+test("a Project's namespace and NetworkPolicy, Garage's website endpoint and the shared Middlewares, then each Route's, then the IngressRoute", () => {
     const plan = planRoutes([routing], settings);
     assert.deepEqual(
         plan.map((o) => `${o.kind} ${o.metadata.name}`),
         [
             `Namespace ${namespace}`,
+            'NetworkPolicy project-isolation',
             'Service garage-web',
             'Middleware compress',
             'Middleware hsts',
@@ -37,14 +38,14 @@ test("a Project's namespace, Garage's website endpoint and the shared Middleware
             'IngressRoute domain-22222222-2222-4222-8222-222222222222',
         ],
     );
-    assert.ok(plan.slice(1).every((o) => o.metadata.namespace === namespace && o.metadata.labels?.['openupstream.io/component'] === 'routes'));
-    assert.deepEqual(plan[1]?.['spec'], {
+    assert.ok(plan.slice(2).every((o) => o.metadata.namespace === namespace && o.metadata.labels?.['openupstream.io/component'] === 'routes'));
+    assert.deepEqual(plan[2]?.['spec'], {
         type: 'ExternalName',
         externalName: 'garage.garage.svc.cluster.local',
         ports: [{ name: 'web', port: 3902 }],
     });
-    assert.deepEqual(plan[4]?.['spec'], { headers: { customRequestHeaders: { Host: 'shop-docs' } } });
-    assert.deepEqual(plan[5]?.['spec'], { stripPrefix: { prefixes: ['/docs'] } });
+    assert.deepEqual(plan[5]?.['spec'], { headers: { customRequestHeaders: { Host: 'shop-docs' } } });
+    assert.deepEqual(plan[6]?.['spec'], { stripPrefix: { prefixes: ['/docs'] } });
 });
 
 test('the IngressRoute sends each prefix to Garage with its Middlewares, on the default certificate', () => {

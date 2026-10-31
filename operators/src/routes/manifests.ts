@@ -17,7 +17,7 @@
  */
 import { type DomainRouting, ingressRouteName } from '@openupstream/sdk';
 import type { KubeObject } from '../kube.js';
-import { LABELS, MANAGED_BY, namespaceFor, projectNamespace } from '../kubernetes.js';
+import { LABELS, MANAGED_BY, projectNamespace, projectObjectsFor } from '../kubernetes.js';
 
 /** Carried by every object this operator applies, so it can find and delete the ones no longer wanted. */
 export const COMPONENT_LABEL = 'openupstream.io/component';
@@ -66,7 +66,7 @@ const stripMiddlewareName = (route: Routed) => `route-${route.id}-strip`;
 
 /** What a Project's namespace needs once it has a Route. */
 const projectObjects = (routing: DomainRouting): KubeObject[] => [
-    namespaceFor({ id: routing.projectId, name: routing.projectName }),
+    ...projectObjectsFor({ id: routing.projectId, name: routing.projectName }),
     {
         apiVersion: 'v1',
         kind: 'Service',
