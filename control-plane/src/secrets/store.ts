@@ -7,9 +7,10 @@
  * uses to render the Project's Kubernetes Secret.
  */
 import type pg from 'pg';
-import type { Secret, SecretInput } from '@openupstream/sdk';
+import { SECRET_NAME, SECRETS_MAX_TOTAL_BYTES, type Secret, type SecretInput } from '@openupstream/sdk';
 import { type Result, err, ok } from '../result.js';
 import {
+    CIPHERTEXT_OVERHEAD_BYTES,
     type DataKey,
     type EnvelopeError,
     type KeyEncryptionKey,
@@ -22,12 +23,10 @@ import {
 
 export type Db = pg.Pool | pg.PoolClient;
 
-/** An environment variable name; the schema enforces the same rule. */
-const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,254}$/;
-
 export type SecretStoreError =
     | { readonly kind: 'project-not-found'; readonly projectId: string }
     | { readonly kind: 'invalid-name'; readonly name: string }
+    | { readonly kind: 'too-large'; readonly projectId: string; readonly bytes: number }
     | { readonly kind: 'envelope'; readonly projectId: string; readonly error: EnvelopeError };
 
 interface SecretRow {
@@ -108,6 +107,16 @@ export async function putSecret(
     const dataKey = await dataKeyFor(db, kek, projectId);
     if (!dataKey.ok) {
         return dataKey;
+    }
+    // The Project's other values plus this one; checked against their plaintext sizes, which the store does not keep.
+    // A soft limit: concurrent PUTs to one Project can pass it together; Kubernetes' 1 MiB per Secret stays far off.
+    const others = await db.query<{ bytes: string }>(
+        `select coalesce(sum(octet_length(ciphertext) - $3), 0) as bytes from secrets where project_id = $1 and name <> $2`,
+        [projectId, input.name, CIPHERTEXT_OVERHEAD_BYTES],
+    );
+    const bytes = Number(others.rows[0]?.bytes ?? 0) + Buffer.byteLength(input.value, 'utf8');
+    if (bytes > SECRETS_MAX_TOTAL_BYTES) {
+        return err({ kind: 'too-large', projectId, bytes });
     }
     const ciphertext = encryptSecretValue(dataKey.value, { projectId, name: input.name }, input.value);
     const result = await db.query<SecretRow>(

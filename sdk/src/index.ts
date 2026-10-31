@@ -28,6 +28,8 @@ import type {
     ProjectInput,
     Route,
     RouteInput,
+    Secret,
+    SecretInput,
 } from './model.js';
 
 export const DEFAULT_API_URL = 'https://api.openupstream.com';
@@ -165,6 +167,22 @@ export class OpenUpstreamClient {
             'DELETE',
             `/v1/projects/${encodeURIComponent(projectId)}/domains/${encodeURIComponent(domainId)}/routes/${encodeURIComponent(routeId)}`,
         );
+    }
+
+    /** The Project's Secrets, names only: a value is never returned. */
+    listSecrets(projectId: Id): Promise<ApiResult<Secret[]>> {
+        return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/secrets`);
+    }
+
+    /** Creates the Secret or replaces its value; the Project's Services get it in their environment. */
+    putSecret(projectId: Id, input: SecretInput): Promise<ApiResult<Secret>> {
+        return this.#call('PUT', `/v1/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(input.name)}`, {
+            value: input.value,
+        });
+    }
+
+    deleteSecret(projectId: Id, name: string): Promise<ApiResult<void>> {
+        return this.#call('DELETE', `/v1/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(name)}`);
     }
 
     async #call<T>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {

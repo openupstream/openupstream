@@ -10,12 +10,14 @@ import {
     type Domain,
     type Project,
     type Route,
+    type Secret,
 } from '@openupstream/sdk';
 import { getAccountRecord, liftHold, placeHold } from '../accounts/store.js';
 import { listDatabaseRows } from '../databases/rows.js';
 import { ensureDefaultDomains } from '../domains/store.js';
 import { listDomainRoutings } from '../routes/store.js';
-import { type ClusterStatus, type ControlPlaneKube } from '../kube.js';
+import { type ClusterStatus, type ControlPlaneKube, type SecretManifest } from '../kube.js';
+import { parseKeyEncryptionKey } from '../secrets/envelope.js';
 import { err, ok } from '../result.js';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
 import { fakeStorage } from '../testing/storage.js';
@@ -48,9 +50,18 @@ const domainDeps = {
     customerDomain: 'openupstream.test',
     platformDomain: 'platform.test',
     lookupTxt: async (name: string) => (dnsDown ? err('ETIMEOUT') : ok(txt.get(name) ?? [])),
+    kek: (() => {
+        const kek = parseKeyEncryptionKey('test-kek', Buffer.alloc(32, 1).toString('base64'));
+        assert.ok(kek.ok);
+        return kek.value;
+    })(),
 };
 /** What the fake Kubernetes reports per Cluster name; a string is an error. */
 const clusters = new Map<string, ClusterStatus | string>();
+
+/** The Secrets the fake Kubernetes received, latest last; namespaces in `missingNamespaces` do not exist. */
+const appliedSecrets: SecretManifest[] = [];
+const missingNamespaces = new Set<string>();
 
 const kube: ControlPlaneKube = {
     readCluster: async (_namespace, name) => {
@@ -58,6 +69,13 @@ const kube: ControlPlaneKube = {
         return typeof status === 'string' ? err(status) : ok(status);
     },
     remove: async () => ok(undefined),
+    applySecret: async (secret) => {
+        if (missingNamespaces.has(secret.metadata.namespace)) {
+            return ok('no-namespace');
+        }
+        appliedSecrets.push(secret);
+        return ok('applied');
+    },
 };
 
 /** A session token as madAuth issues it. */
@@ -655,6 +673,104 @@ describe('Custom domains', () => {
             (d) => d.hostname === 'www.shop.example',
         );
         assert.equal((await call('POST', domains(otherProjectId, `/${theirs?.id}/verify`), 'bob')).status, 200);
+    });
+});
+
+describe('Secrets', () => {
+    let projectId: string;
+    const path = (name = '') => `/v1/projects/${projectId}/secrets${name === '' ? '' : `/${name}`}`;
+    const latest = () => appliedSecrets.at(-1);
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    /** The API writes the Kubernetes Secret in the background: retries `check` for up to a second. */
+    const eventually = async (check: () => void) => {
+        for (let attempt = 0; ; attempt++) {
+            const failed = (() => {
+                try {
+                    check();
+                    return undefined;
+                } catch (error) {
+                    return error;
+                }
+            })();
+            if (failed === undefined) {
+                return;
+            }
+            if (attempt >= 50) {
+                throw failed;
+            }
+            await pause(20);
+        }
+    };
+    const decoded = (secret: SecretManifest | undefined) =>
+        Object.fromEntries(Object.entries(secret?.data ?? {}).map(([name, value]) => [name, Buffer.from(value, 'base64').toString('utf8')]));
+
+    before(async () => {
+        const response = await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'secret-tests' });
+        projectId = ((await response.json()) as Project).id;
+    });
+
+    test("created with PUT, and written into the Project's Kubernetes Secret at once", async () => {
+        const created = await call('PUT', path('API_TOKEN'), 'alice', { value: 's3cr3t ✓' });
+        assert.equal(created.status, 201);
+        const secret = (await created.json()) as Secret;
+        assert.equal(secret.name, 'API_TOKEN');
+        assert.ok(!('value' in secret));
+        await eventually(() => assert.deepEqual(decoded(latest()), { API_TOKEN: 's3cr3t ✓' }));
+        assert.equal(latest()?.metadata.name, 'project-secrets');
+        assert.equal(latest()?.metadata.namespace, `project-${projectId}`);
+    });
+
+    test('a second PUT replaces the value: 200; the list has names only', async () => {
+        assert.equal((await call('PUT', path('API_TOKEN'), 'alice', { value: 'rotated' })).status, 200);
+        assert.equal((await call('PUT', path('DATABASE_URL'), 'alice', { value: 'postgres://x' })).status, 201);
+        await eventually(() => assert.deepEqual(decoded(latest()), { API_TOKEN: 'rotated', DATABASE_URL: 'postgres://x' }));
+        const listed = (await (await call('GET', path(), 'alice')).json()) as Secret[];
+        assert.deepEqual(listed.map((s) => s.name), ['API_TOKEN', 'DATABASE_URL']);
+        assert.ok(listed.every((s) => !('value' in s)));
+    });
+
+    test('a name that is no environment variable name, or a value too large: 400', async () => {
+        assert.equal((await call('PUT', path('1ABC'), 'alice', { value: 'x' })).status, 400);
+        assert.equal((await call('PUT', path('A-B'), 'alice', { value: 'x' })).status, 400);
+        assert.equal((await call('PUT', path('BIG'), 'alice', { value: 'x'.repeat(64 * 1024 + 1) })).status, 400);
+        assert.equal((await call('PUT', path('NO_VALUE'), 'alice', {})).status, 400);
+    });
+
+    test("all of a Project's values together are limited", async () => {
+        for (const n of [1, 2, 3, 4, 5, 6, 7]) {
+            assert.equal((await call('PUT', path(`CHUNK_${n}`), 'alice', { value: 'x'.repeat(64 * 1024) })).status, 201);
+        }
+        const refused = await call('PUT', path('CHUNK_8'), 'alice', { value: 'x'.repeat(64 * 1024) });
+        assert.equal(refused.status, 400);
+        // Replacing a value counts the new one instead of the old.
+        assert.equal((await call('PUT', path('CHUNK_7'), 'alice', { value: 'small' })).status, 200);
+        for (const n of [1, 2, 3, 4, 5, 6, 7]) {
+            assert.equal((await call('DELETE', path(`CHUNK_${n}`), 'alice')).status, 204);
+        }
+    });
+
+    test('DELETE removes the value from the Kubernetes Secret; an unknown name: 404', async () => {
+        assert.equal((await call('DELETE', path('DATABASE_URL'), 'alice')).status, 204);
+        await eventually(() => assert.deepEqual(decoded(latest()), { API_TOKEN: 'rotated' }));
+        assert.equal((await call('DELETE', path('DATABASE_URL'), 'alice')).status, 404);
+    });
+
+    test('before the Project has a namespace the value is stored all the same', async () => {
+        await pause(200); // the earlier tests' writes
+        missingNamespaces.add(`project-${projectId}`);
+        const before = appliedSecrets.length;
+        assert.equal((await call('PUT', path('LATER'), 'alice', { value: 'v' })).status, 201);
+        await pause(200);
+        assert.equal(appliedSecrets.length, before);
+        missingNamespaces.delete(`project-${projectId}`);
+    });
+
+    test("another Account's Project: 404; a read-only key lists but cannot write", async () => {
+        assert.equal((await call('GET', path(), 'bob')).status, 404);
+        assert.equal((await call('PUT', path('X'), 'bob', { value: 'v' })).status, 404);
+        const read = { authorization: 'Bearer madauth_alice_read', 'content-type': 'application/json' };
+        assert.equal((await api.request(path(), { headers: read })).status, 200);
+        assert.equal((await api.request(path('X'), { method: 'PUT', headers: read, body: '{"value":"v"}' })).status, 403);
     });
 });
 

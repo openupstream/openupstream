@@ -10,7 +10,8 @@
 #    openupstream-ses (MAIL=log writes them to the sidecar's log instead);
 # 3. the control plane, which migrates and seeds the platform rows, so from
 #    then on the operator owns those Databases too; it manages Buckets in
-#    Garage with the admin token garage.sh left it;
+#    Garage with the admin token garage.sh left it, and encrypts Secrets
+#    with a key-encryption key generated once (secrets-kek);
 # 4. the public hostnames (after ingress.sh): madAuth at
 #    https://$PLATFORM_DOMAIN/auth, the API at https://api.$PLATFORM_DOMAIN,
 #    with a certificate from CLUSTER_ISSUER;
@@ -120,6 +121,14 @@ sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/inf
   kubectl apply -f - >/dev/null
 config_rollout madauth madauth-config
 kubectl -n "$PLATFORM_NS" rollout status deployment/madauth --timeout=5m
+
+# The key-encryption key for Secrets (ARCHITECTURE.md, "Secrets"): created
+# once and never replaced, since every Project's data key is wrapped by it.
+if ! kubectl -n "$PLATFORM_NS" get secret secrets-kek >/dev/null 2>&1; then
+  kubectl -n "$PLATFORM_NS" create secret generic secrets-kek --dry-run=client -o yaml \
+    --from-literal=SECRETS_KEK_ID="kek-$(date -u +%Y%m%d)" \
+    --from-literal=SECRETS_KEK="$(openssl rand -base64 32)" | kubectl apply -f - >/dev/null
+fi
 
 kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client -o yaml \
   --from-literal=AUTH_ISSUER="$MADAUTH_ISSUER" \

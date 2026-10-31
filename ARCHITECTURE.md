@@ -248,7 +248,8 @@ a billing service nothing is held, which is what someone who runs
 openupstream themselves gets by default (Open question 16).
 
 The public API (Hono, zod validation, `control-plane/src/api`) serves
-Projects and their Databases in the caller's Accounts; another Account's
+Projects and their Databases, Buckets, Domains, Routes and Secrets in the
+caller's Accounts; another Account's
 Project answers 404 (#61). A Database's state (`provisioning`, `ready`,
 `degraded`, `unknown`) is read live from its Cluster. Its connection details
 (the Pooler's in-cluster address, database and user `app`) are returned,
@@ -276,7 +277,6 @@ Thin reconcilers for the things no off-the-shelf operator does:
   alone holds Garage's admin token
 - Database → CloudNativePG `Cluster` (two instances, one per compute Site),
   PgBouncer `Pooler`, backup schedule
-- Secrets → a Kubernetes `Secret` in the Project's namespace
 
 The step from a control plane row to Kubernetes objects is a pure function
 that returns the objects or a list of errors; the reconcile loop around it
@@ -525,10 +525,25 @@ digest (#55).
   records the id of its key-encryption key, so the key-encryption key can be
   rotated by rewrapping the data keys without touching the values.
 - The key-encryption key is a Kubernetes Secret in the control plane's
-  namespace; k3s secrets encryption at rest is on.
-- The Secrets operator renders a Kubernetes `Secret` into the Project's
-  namespace; Services and jobs read it via `envFrom`. Changing a Secret rolls
-  the Services that use it.
+  namespace (`secrets-kek`); k3s secrets encryption at rest is on. On the
+  production cluster a copy is kept outside it, with the maintainer's
+  credentials: without the key, neither the cluster nor a restore of the
+  control plane's Database can read any Secret. The dev cluster's is
+  generated per session and thrown away with it.
+- The control plane renders all of a Project's Secrets into one Kubernetes
+  `Secret`, `project-secrets`, in the Project's namespace (#91): right after
+  every change through the API, and again every 30 s on one replica (an
+  advisory lock, like the cleanup), so a write that failed, or that came
+  before an operator created the namespace, arrives within one pass (the
+  API does not wait for its write; two quick changes can land out of order,
+  which the pass also repairs). It
+  alone holds the key-encryption key, so no decrypted value crosses the
+  internal API. Services and jobs read the Secret via `envFrom`. Changing a
+  Secret rolls the Services that use it.
+- The API takes a value with `PUT …/secrets/{name}` (an environment
+  variable name) and never returns it; a value is at most 64 KiB and a
+  Project's values together at most 512 KiB, since they share one
+  Kubernetes Secret and every container's environment.
 - The envelope protects copies of the control plane's Database that leave the
   cluster (backups). It does not protect against someone with cluster-admin;
   that is accepted.
@@ -711,6 +726,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 88 | `oup site deploy` makes the Bucket mirror the directory: changed files only (MD5 against the ETag), `index.html` files after the rest, then stale objects deleted (`--keep` to leave them); cache headers and content types from the file name | upload only, never delete | a deploy should leave exactly the build behind, or deleted pages stay reachable; uploading the index last keeps a client from loading an index whose assets are not there yet; hashed assets of the previous build go with it, so a page open from before the deploy may miss a lazily loaded chunk; `--keep` is for sites that need that |
 | 89 | Every Project namespace gets one NetworkPolicy, `project-isolation`: ingress from the Project's own pods, Traefik's namespace and `cnpg-system`, nothing else; egress open. The operators apply it right after the namespace; the platform namespace's exception for the operators (port 8081) is a static policy next to the control plane | a policy per Database and per Service; a deny-all policy plus one allow policy per source; Calico instead of k3s's built-in policy controller | one object that every operator applies identically under the shared field manager, so whichever operator creates the namespace isolates it before anything runs there; same-namespace traffic is what a Project needs inside (Services to Poolers, CloudNativePG replication); k3s enforces it without another CNI. Egress for customer containers is decided with the Services operator |
 | 90 | gVisor is installed by a script on each compute node before k3s starts (`infra/gvisor/install.sh`): a pinned release whose archive is checked against a SHA-512 in the script, and a containerd config template that extends k3s's base with the handler `runsc`. The RuntimeClass `gvisor` selects nodes labelled `openupstream.io/gvisor=true` | gVisor's apt repository; a privileged DaemonSet that installs runsc on the nodes | a node setup step like k3s itself, with nothing privileged left running in the cluster; the pin makes every node run the same sandbox, and an upgrade is a reviewed change of two lines; the apt repository serves whatever is newest. The label keeps gVisor pods off a node without runsc, where they would never start |
+| 91 | The control plane writes the Kubernetes Secret `project-secrets` per Project itself, after each change and in a 30 s pass; no Secrets operator. The public API: `GET …/secrets` (names), `PUT …/secrets/{name}` `{value}`, `DELETE …/secrets/{name}`; every Service of the Project gets all of them | a Secrets operator fed decrypted values by an internal API route (the earlier plan of decision 20); per-Service selection of Secrets | the control plane alone holds the key-encryption key, so plaintext never travels between processes and no operator can read every Project's Secrets; it needs `create` and `patch` on Secrets cluster-wide, which a Secrets operator would have needed as well. Project-wide Secrets match how they are described to customers; selecting per Service can come later without changing the API |
 
 ## Open questions
 
@@ -841,7 +857,8 @@ Decisions table once it is settled.
    for `oup login` at madAuth's `loginUrl`, the production DNS zones.
 3. Containers, Service mode. Done so far: the NetworkPolicy
    `project-isolation` in every Project namespace (#89), gVisor on the
-   compute nodes and the RuntimeClass `gvisor` (#90).
+   compute nodes and the RuntimeClass `gvisor` (#90), Secrets through the
+   API, written into each Project's namespace by the control plane (#91).
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
    staying writable while a whole Site is switched off.
