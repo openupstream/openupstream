@@ -35,9 +35,10 @@ export KUBECONFIG=$PWD/.state/kubeconfig
 ```
 
 `up.sh` creates the VMs, a firewall (SSH and the Kubernetes API only from
-your IP, HTTP and HTTPS from everywhere, everything between the nodes) and
+your IP, HTTP and HTTPS from everywhere, everything between the nodes),
+gVisor on the two compute nodes (`infra/gvisor`), and
 k3s with embedded etcd and
-flannel `wireguard-native`. `operators.sh` installs cert-manager, whose
+flannel `wireguard-native`, then the RuntimeClass `gvisor`. `operators.sh` installs cert-manager, whose
 Certificates own their Secrets (so a custom domain's key goes with its
 Certificate), CloudNativePG and the Barman Cloud Plugin at the versions in
 `operators/crds`, spreads CoreDNS and the CloudNativePG operator over the
