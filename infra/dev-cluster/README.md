@@ -60,8 +60,10 @@ It runs Garage with one node per Site (`infra/garage`), generates its RPC
 secret and admin token once (the token also goes to the platform Project's
 namespace for the control plane), assigns the layout (a node's zone is its
 Site, `GARAGE_CAPACITY` each, 20 GB by default) and serves the S3 API at
-`https://<bucket>.s3.dev.openupstream.app`, with a wildcard certificate and
-`*.s3` pointed at both compute nodes. Then:
+`https://<bucket>.s3.dev.openupstream.app`, with a wildcard certificate.
+It also makes `*.dev.openupstream.app` Traefik's default certificate, for
+every Project's default hostname, and points `*` and `*.s3` at both compute
+nodes. Then:
 
 ```bash
 ./platform.sh
@@ -70,7 +72,7 @@ Site, `GARAGE_CAPACITY` each, 20 GB by default) and serves the S3 API at
 It creates the platform Project's Databases (the control plane's and
 madAuth's), runs madAuth with its sidecar, the control plane, the public
 routes with their certificate (Let's Encrypt staging: clients need `-k`)
-and the Databases operator, with the GHCR images of the current commit
+and the Databases and Routes operators, with the GHCR images of the current commit
 pinned by digest (`IMAGE_TAG` to choose others; the commit must be pushed
 and its Images workflow done). The DatabaseConfig is `database-config.json`.
 madAuth sends real e-mails through SES; `MAIL=log ./platform.sh` writes

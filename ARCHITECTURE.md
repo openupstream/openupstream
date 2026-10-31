@@ -243,8 +243,11 @@ again at once. On the dev cluster a deleted Database's Cluster was gone in
 
 Thin reconcilers for the things no off-the-shelf operator does:
 
-- routing table → Traefik `IngressRoute` + cert-manager `Certificate`
-- static site → Garage bucket website config and routing rules
+- routing table → Traefik `IngressRoute` and `Middleware`s per Domain
+  (the Routes operator, `operators/src/routes`, #84); custom domains will
+  add a cert-manager `Certificate` each. A static site's website settings
+  in Garage are not an operator's: the control plane sets them, since it
+  alone holds Garage's admin token
 - Database → CloudNativePG `Cluster` (two instances, one per compute Site),
   PgBouncer `Pooler`, backup schedule
 - Secrets → a Kubernetes `Secret` in the Project's namespace
@@ -359,9 +362,17 @@ digest (#55).
 ### Static sites
 
 - A public Bucket served at a Domain through the routing table, using
-  Garage's website endpoint behind Traefik.
+  Garage's website endpoint behind Traefik (#84). Creating a Route turns the
+  Bucket into a website in Garage (`index.html` for a directory) while the
+  request waits; deleting its last Route turns that off again. Only the
+  website endpoint is public this way: the Bucket's S3 API still needs its
+  key.
+- The Route's path prefix is stripped: `/docs/guide.html` on the Route
+  `/docs` serves the object `guide.html`, so one built site can be mounted
+  at any prefix.
 - SPA fallback is a Garage routing rule: a 404 serves `index.html` with
-  status 200.
+  status 200. Garage keeps it per Bucket, so every Route to one Bucket has
+  the same setting (#84).
 - Cache headers are object metadata, set when `oup site deploy` uploads each
   file: files with a content hash in the name get
   `max-age=31536000, immutable`, `index.html` gets `no-cache`, everything else
@@ -392,8 +403,11 @@ digest (#55).
 - Every Project gets a default hostname under a separate customer domain,
   `openupstream.app` (#68), that is on the Public Suffix List, so one
   Project's site cannot set cookies for another's. The hostname is
-  `<project>-<random>.openupstream.app`, its suffix chosen once (#71). Bucket hostnames
-  (`<bucket>.s3.openupstream.app`) live there too.
+  `<project>-<random>.openupstream.app`, its suffix chosen once (#71): the
+  Project's default Domain, created with the Project. One wildcard
+  certificate, `*.openupstream.app`, is the default certificate of
+  Traefik's TLS store, so no default Domain needs one of its own (#84).
+  Bucket hostnames (`<bucket>.s3.openupstream.app`) live there too.
 - `openupstream.com` is only for our own services (#67): the dashboard and
   madAuth at `openupstream.com` (madAuth under `/auth/*` and
   `/.well-known/*`, on the same site as the dashboard, as it requires), the
@@ -408,7 +422,15 @@ digest (#55).
 - A Route sends a path prefix (`/` or `/a/b`, no trailing slash) to a Bucket,
   optionally with SPA fallback, or to a Service. A Bucket or Service that a
   Route still targets cannot be deleted; deleting a Domain deletes its
-  Routes.
+  Routes, and deleting a Project deletes its Domains at once, so nothing of
+  it is served any more.
+- The Routes operator applies, every 30 s, one IngressRoute per Domain in
+  the Project's namespace, with a Middleware per Route that sets the Host
+  header to the Bucket's name (how Garage's website endpoint finds the
+  Bucket) and one that strips the prefix. It reaches Garage through an
+  ExternalName Service in that namespace, since Traefik does not route
+  across namespaces. Unlike the Databases operator it deletes: objects of
+  its own that the routing table no longer has (#84).
 - Traefik and cert-manager do ingress and TLS; certificates for custom
   domains use HTTP-01. Wildcards (`*.s3.openupstream.app` for the Buckets)
   need DNS-01, which cert-manager solves on bunny.net through a community
@@ -621,6 +643,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 81 | Every Bucket has a Garage key of its own, created with it, that may read and write that Bucket and no other; the API shows it with the Bucket (Garage keeps the secret) | keys per Project with permissions the customer chooses (read-only, several Buckets); one key per Project for all its Buckets | the simplest model that is still least privilege: a leaked key exposes one Bucket, and a Service can later get exactly the keys of the Buckets it uses. Keys of their own, read-only keys or one key for several Buckets are a later addition |
 | 82 | A Bucket is created in Garage while the API request waits, and its row recorded only after that; deleting marks the row and the cleanup removes key, objects and bucket, keeping nothing. Buckets are reached at `https://<bucket>.s3.<customer domain>` through Traefik with one wildcard certificate | a row first and a reconcile loop, as for Databases; a retention window for deleted Buckets; the S3 endpoint only inside the cluster | a 201 means the Bucket can be used at once, with no state to poll and no second loop; Garage being down is a 503 the client can retry. Deleting is what the customer asked for, and keeping objects would mean billing for storage they deleted. A process that dies between Garage and the insert leaves an empty Garage bucket whose name stays taken |
 | 83 | Garage runs from our own manifests: a StatefulSet with one node per Site, Kubernetes discovery with its CustomResourceDefinition installed by us, the layout assigned once by the setup script | Garage's Helm chart (not published to a chart repository, only in Garage's git repository); letting Garage create its CustomResourceDefinition; connecting nodes by hand | a hundred lines of YAML we can read in one go, like the rest of `infra/`; Garage only needs rights on its own GarageNode objects, not to create any CustomResourceDefinition; nodes find each other again after restarts without a script |
+| 84 | Static sites: Garage's website endpoint behind Traefik. The control plane sets a Bucket's website settings (index, SPA fallback) in Garage when a Route is created; a Routes operator applies an IngressRoute per Domain with per-Route Middlewares (Host header = Bucket name, prefix stripped) and an ExternalName Service to Garage, and deletes its objects the routing table no longer has; default Domains share one wildcard certificate in Traefik's default TLS store; SPA fallback is per Bucket, so Routes to one Bucket must agree | the control plane writing the Traefik objects itself; keeping the prefix in object keys; SPA fallback in Traefik's errors middleware; a certificate per default Domain | the operator pattern of the Databases, with Garage's admin token staying in the control plane only; one site mounts at any prefix; Garage already has the routing rule; a wildcard needs no issuance per Project. Contradicts the earlier plan of an operator writing Garage's website settings. Traefik must allow ExternalName Services, which only the Routes operator creates |
 
 ## Open questions
 
@@ -734,9 +757,10 @@ Decisions table once it is settled.
    the Hold `payment-method` and the €0.01 refunded. Garage and Buckets
    (2026-10-20, #81–83): Garage on all three Sites, Buckets created and
    deleted through the API with a key of their own, reached at
-   `https://<bucket>.s3.dev.openupstream.app`. Left: static sites, the
-   routing table with default hostnames (#71) and custom domains, the
-   production DNS zones.
+   `https://<bucket>.s3.dev.openupstream.app`. Static sites at Projects'
+   default hostnames (2026-10-31, #84): the routing table with Routes to
+   Buckets, SPA fallback, the Routes operator. Left: custom domains,
+   `oup site deploy` with its cache headers, the production DNS zones.
 3. Containers, Service mode.
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`

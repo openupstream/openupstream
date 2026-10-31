@@ -24,8 +24,9 @@ deletes it all.
    `<bucket>.s3.openupstream.app`. Deleting a Bucket deletes its objects;
    nothing is kept.
 3. **Static sites**: a public Bucket served at a Domain through the routing
-   table, SPA fallback, cache headers set by `oup site deploy`, compression.
-   A feature of object storage, not a separate product.
+   table, below any path prefix, SPA fallback, cache headers set by
+   `oup site deploy`, compression. A feature of object storage, not a
+   separate product.
 4. **Containers**: the customer's image from any registry, in three modes:
    Service (HTTP), Cron job, One-off job. gVisor sandbox. Scales 1..N, no
    scale-to-zero.

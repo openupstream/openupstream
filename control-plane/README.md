@@ -43,9 +43,10 @@ S3 API inside the cluster, `GARAGE_ADMIN_URL` and `GARAGE_S3_URL`, with
 at `<bucket>.s3.<CUSTOMER_DOMAIN>`; optionally
 `NEW_ACCOUNT_HOLDS`, the Holds every new Account starts with, e.g.
 `payment-method`, and `BILLING_CALLERS`, the billing service's
-ServiceAccount). At startup it applies pending migrations and seeds the
-platform's own Account, Project and Database rows (`src/platform.ts`), then
-listens on `PORT` (8080, public API) and `INTERNAL_PORT` (8081).
+ServiceAccount; `ROUTES_CALLERS`, default the Routes operator's). At
+startup it applies pending migrations, seeds the platform's own Account,
+Project and Database rows (`src/platform.ts`) and gives every Project
+without one its default Domain, then listens on `PORT` (8080, public API) and `INTERNAL_PORT` (8081).
 
 In the cluster it runs from the image built by `Dockerfile` (GitHub Actions
 pushes it to `ghcr.io/openupstream/control-plane`) with
@@ -69,9 +70,9 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `GET /v1/accounts` | the caller's Accounts, each with its `holds` |
 | `POST /v1/accounts` | `{name}` → 201: a new Account, the caller its first Member |
 | `GET /v1/projects` | the Projects of the caller's Accounts |
-| `POST /v1/projects` | `{accountId, name}` → 201; 409 if the name is taken in the Account |
+| `POST /v1/projects` | `{accountId, name}` → 201, with its default Domain `<name>-<random>.<CUSTOMER_DOMAIN>`; 409 if the name is taken in the Account |
 | `GET /v1/projects/{id}` | |
-| `DELETE /v1/projects/{id}` | 202: the Project and its Databases and Buckets are deleted, see Cleanup |
+| `DELETE /v1/projects/{id}` | 202: the Project and its Databases and Buckets are deleted, see Cleanup; its Domains and Routes at once |
 | `GET /v1/projects/{id}/databases` | with each Database's `state` and in-cluster `connection` |
 | `POST /v1/projects/{id}/databases` | `{name, homeSite?, memoryMb, storageGb}` → 201, `state: provisioning`; 402 if the Account has a Hold |
 | `GET /v1/projects/{id}/databases/{id}` | `state` read live from the Cluster |
@@ -79,7 +80,11 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `GET /v1/projects/{id}/buckets` | the Buckets, without their keys |
 | `POST /v1/projects/{id}/buckets` | `{name}` → 201 with `access`: the Bucket's `endpoint`, `region` and its own key; 409 if the name is taken in any Project, also by a Bucket still being deleted; 402 if the Account has a Hold; 503 if Garage cannot be reached |
 | `GET /v1/projects/{id}/buckets/{id}` | with `access`, the secret read from Garage; an API key with only `openupstream:read` gets no secret, since the Bucket's key may write |
-| `DELETE /v1/projects/{id}/buckets/{id}` | 202: its key is deleted at once, the Bucket with every object by the next cleanup pass |
+| `DELETE /v1/projects/{id}/buckets/{id}` | 202: its key is deleted at once, the Bucket with every object by the next cleanup pass; 409 while a Route serves it |
+| `GET /v1/projects/{id}/domains` | the Project's Domains, the default one first |
+| `GET /v1/projects/{id}/domains/{id}/routes` | the Domain's Routes, longest prefix first |
+| `POST /v1/projects/{id}/domains/{id}/routes` | `{pathPrefix, bucketId, spaFallback?}` → 201: the Bucket is served below the prefix (stripped) within one Routes operator pass; 400 for a Bucket not in the Project; 409 if the prefix is taken, or if the Bucket's other Routes have another `spaFallback`; 503 if Garage cannot be reached |
+| `DELETE /v1/projects/{id}/domains/{id}/routes/{id}` | 204; the Bucket's last Route also stops Garage serving it |
 
 A Bucket name is a hostname label of 3 to 63 characters. Creating one
 creates its Garage bucket (the name as its global alias) and a key that may
@@ -132,6 +137,9 @@ the audience `openupstream-control-plane`; a TokenReview confirms it, and
 only the ServiceAccounts listed for the route get an answer: 401 without a
 valid token, 403 for anyone else, 503 when the token cannot be checked.
 
+- `GET /internal/v1/routes`: every Domain with Routes to live Buckets, with
+  its Project and each Route's Bucket name (`DomainRouting`). For
+  `ROUTES_CALLERS` (default: the Routes operator).
 - `GET /internal/v1/databases`: every Database with its Project
   (`DatabaseRow` in `sdk/src/internal.ts`). For `ALLOWED_CALLERS`
   (default: the Databases operator).
