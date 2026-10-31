@@ -106,7 +106,10 @@ Germany.
   starts, and writes the template (`config-v3.toml.tmpl`, extending k3s's
   base) that adds the handler `runsc` (#90). The compute nodes carry the
   label `openupstream.io/gvisor=true`, and the RuntimeClass schedules only
-  there; the third Site has no gVisor.
+  there; the third Site has no gVisor. Its `overhead` reserves 64 Mi and
+  10m CPU per pod for gVisor itself (50-60 MB measured), not billed.
+  Tested on the dev cluster (2026-10-31): pods run under `runsc`
+  (`dmesg` shows gVisor), installed on fresh Ubuntu 24.04 nodes.
 - Tailscale is for admin access only (Kubernetes API, SSH, Grafana). It is
   not the node mesh.
 
