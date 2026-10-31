@@ -40,6 +40,9 @@ test('Garage inside the cluster, the customer domain and the platform domain', (
     });
     assert.equal(config.value.customerDomain, 'openupstream.app');
     assert.equal(config.value.platformDomain, 'openupstream.com');
+    assert.equal(config.value.auth.cliClientId, undefined);
+    const withCli = configFrom({ ...env, CLI_CLIENT_ID: 'mc_cli' });
+    assert.equal(withCli.ok && withCli.value.auth.cliClientId, 'mc_cli');
     const bad = configFrom({ ...env, GARAGE_S3_URL: 'not a url', CUSTOMER_DOMAIN: 'https://openupstream.app', PLATFORM_DOMAIN: 'Openupstream' });
     assert.deepEqual(bad.ok ? [] : bad.error, [
         'GARAGE_ADMIN_URL and GARAGE_S3_URL must be URLs',

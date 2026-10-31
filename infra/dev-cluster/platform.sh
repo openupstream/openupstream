@@ -48,6 +48,11 @@ SES_PROFILE=${SES_PROFILE:-openupstream-ses}
 # ServiceAccount (ARCHITECTURE.md, decision 78).
 NEW_ACCOUNT_HOLDS=${NEW_ACCOUNT_HOLDS:-}
 BILLING_CALLERS=${BILLING_CALLERS:-}
+# INITIAL_ADMIN_EMAIL makes that user madAuth's first admin once they sign
+# in; an admin registers the CLI (infra/madauth/register-cli.sh), whose
+# client ID then goes into CLI_CLIENT_ID for `oup login` (decision 87).
+INITIAL_ADMIN_EMAIL=${INITIAL_ADMIN_EMAIL:-}
+CLI_CLIENT_ID=${CLI_CLIENT_ID:-}
 
 # Anonymous, like the cluster's pull: fails while a package is not public.
 digest() { # image name → image@sha256:…
@@ -88,7 +93,8 @@ kubectl -n "$PLATFORM_NS" create configmap madauth-config --dry-run=client -o ya
   --from-literal=WEBHOOK_EVENTS=email.send_verification,email.send_password_reset,email.send_already_registered,email.send_password_reset_no_password \
   --from-literal=MAIL="$MAIL" \
   --from-literal=MAIL_FROM="$MAIL_FROM" \
-  --from-literal=SES_REGION="${SES_REGION:-eu-central-1}" | kubectl apply -f - >/dev/null
+  --from-literal=SES_REGION="${SES_REGION:-eu-central-1}" \
+  ${INITIAL_ADMIN_EMAIL:+--from-literal=INITIAL_ADMIN_EMAIL="$INITIAL_ADMIN_EMAIL"} | kubectl apply -f - >/dev/null
 if [[ $MAIL == ses ]]; then
   # The send-only key (docs/self-hosting.md, section 6), straight from the
   # profile into the Secret. Read first: set -e does not see a failure
@@ -100,8 +106,19 @@ if [[ $MAIL == ses ]]; then
     kubectl apply -f - >/dev/null
   unset SES_KEY_ID SES_SECRET
 fi
+# Pods read their ConfigMap once, at start: a hash of it in the pod template
+# rolls them out when a run of this script changes it (e.g. CLI_CLIENT_ID),
+# and only then.
+config_rollout() { # deployment, configmap
+  local hash
+  hash=$(kubectl -n "$PLATFORM_NS" get configmap "$2" -o jsonpath='{.data}' | shasum | cut -c1-16)
+  kubectl -n "$PLATFORM_NS" patch deployment "$1" >/dev/null \
+    -p "{\"spec\": {\"template\": {\"metadata\": {\"annotations\": {\"openupstream.io/config-hash\": \"$hash\"}}}}}"
+}
+
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/infra/madauth/madauth.yaml" |
   kubectl apply -f - >/dev/null
+config_rollout madauth madauth-config
 kubectl -n "$PLATFORM_NS" rollout status deployment/madauth --timeout=5m
 
 kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client -o yaml \
@@ -114,9 +131,11 @@ kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client
   --from-literal=GARAGE_ADMIN_URL=http://garage.garage.svc:3903 \
   --from-literal=GARAGE_S3_URL=http://garage.garage.svc:3900 \
   --from-literal=CUSTOMER_DOMAIN="$CUSTOMER_DOMAIN" \
-  --from-literal=PLATFORM_DOMAIN="$PLATFORM_DOMAIN" | kubectl apply -f - >/dev/null
+  --from-literal=PLATFORM_DOMAIN="$PLATFORM_DOMAIN" \
+  --from-literal=CLI_CLIENT_ID="${CLI_CLIENT_ID:-}" | kubectl apply -f - >/dev/null
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/control-plane/deploy/control-plane.yaml" |
   kubectl apply -f - >/dev/null
+config_rollout control-plane control-plane-config
 kubectl -n "$PLATFORM_NS" rollout status deployment/control-plane --timeout=5m
 
 sed -e "s#PLATFORM_DOMAIN#$PLATFORM_DOMAIN#g" -e "s#CLUSTER_ISSUER#$CLUSTER_ISSUER#g" "$ROOT/infra/ingress/platform-routes.yaml" |

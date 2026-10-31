@@ -18,6 +18,7 @@ import type {
     Bucket,
     BucketDetails,
     BucketInput,
+    CliLogin,
     CustomDomainInput,
     DatabaseDetails,
     DatabaseInput,
@@ -29,10 +30,17 @@ import type {
     RouteInput,
 } from './model.js';
 
+export const DEFAULT_API_URL = 'https://api.openupstream.com';
+
 export interface ClientOptions {
     baseUrl?: string;
-    /** A madAuth session token, or one of the user's madAuth API keys (`madauth_…`). */
+    /** A madAuth session token, an access token of `oup`, or one of the user's madAuth API keys (`madauth_…`). */
     token: string;
+}
+
+/** Where the CLI signs in; asked before there is a token. 404 when the platform has no CLI client. */
+export async function cliLogin(baseUrl: string = DEFAULT_API_URL): Promise<ApiResult<CliLogin>> {
+    return new OpenUpstreamClient({ baseUrl, token: '' }).cliLogin();
 }
 
 /** What went wrong, as the API said it: the HTTP status and its message. 0: the API was not reached. */
@@ -48,13 +56,17 @@ export class OpenUpstreamClient {
     readonly #token: string;
 
     constructor(options: ClientOptions) {
-        this.baseUrl = options.baseUrl ?? 'https://api.openupstream.com';
+        this.baseUrl = options.baseUrl ?? DEFAULT_API_URL;
         this.#token = options.token;
     }
 
     async health(): Promise<{ ok: boolean }> {
         const res = await fetch(`${this.baseUrl}/v1/health`);
         return { ok: res.ok };
+    }
+
+    cliLogin(): Promise<ApiResult<CliLogin>> {
+        return this.#call('GET', '/v1/login');
     }
 
     /** The Accounts the caller is a Member of. */
