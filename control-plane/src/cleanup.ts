@@ -2,6 +2,8 @@
  * Carries out deletes (ARCHITECTURE.md, decisions 48, 58 and 60). The API
  * only marks rows deleted; each pass then, in this order:
  *
+ * 0. deletes the waitlist's addresses nobody confirmed in time (decision
+ *    86), first, so a failing later step does not keep them;
  * 1. removes a deleted Database's Cluster, Pooler and ScheduledBackup (with
  *    the Cluster go its volumes); it records that only once the deletion is
  *    older than OPERATOR_GRACE, because an operator pass that fetched its
@@ -13,9 +15,7 @@
  *    row (decision 82): unlike a Database, nothing of it is kept;
  * 4. removes a deleted Project's namespace once it has no Database or
  *    Bucket rows left, then its row (which cascades to its Secrets and the
- *    like);
- * 5. deletes the waitlist's addresses nobody confirmed in time (decision
- *    86).
+ *    like).
  *
  * Every step is idempotent and only recorded after it succeeded, so a failed
  * step is retried by the next pass.
@@ -152,14 +152,14 @@ async function purgeEmptyProjects(deps: CleanupDeps): Promise<void> {
 
 /** One pass over everything that is marked deleted. A database error rejects; the runner logs it. */
 export async function cleanupPass(deps: CleanupDeps): Promise<void> {
-    await removeRunningObjects(deps);
-    await purgeExpiredDatabases(deps);
-    await purgeDeletedBuckets(deps);
-    await purgeEmptyProjects(deps);
     const unconfirmed = await purgeUnconfirmed(deps.pool);
     if (unconfirmed > 0) {
         deps.log({ msg: 'cleanup: unconfirmed waitlist addresses deleted', count: unconfirmed });
     }
+    await removeRunningObjects(deps);
+    await purgeExpiredDatabases(deps);
+    await purgeDeletedBuckets(deps);
+    await purgeEmptyProjects(deps);
 }
 
 /** `7d` (the DatabaseConfig's form) as a Postgres interval; undefined if malformed. */

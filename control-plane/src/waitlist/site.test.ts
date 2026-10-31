@@ -4,7 +4,7 @@ import type { Message } from '../mail.js';
 import { type Result, err, ok } from '../result.js';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
 import { CONSENT, createWaitlistSite } from './site.js';
-import { purgeUnconfirmed } from './store.js';
+import { TOKENS_PER_ADDRESS, purgeUnconfirmed } from './store.js';
 
 const URL_BASE = 'https://openupstream.test';
 
@@ -119,13 +119,14 @@ test('the answer is the same whether or not the address is on the list, and an a
     assert.equal(await again.text(), first);
     assert.equal(sent.length, 1, 'no second e-mail within the hour');
 
-    // An hour later a pending address gets a new confirmation; its old link no longer works.
+    // An hour later a pending address gets a new confirmation; the link it had keeps working,
+    // so someone else asking for the address breaks nothing its owner holds.
     const oldToken = tokenIn('/waitlist/confirm');
     await db.pool.query(`update waitlist set mailed_at = now() - interval '61 minutes'`);
     await join('dora@example.test');
     assert.equal(sent.length, 2);
     assert.notEqual(tokenIn('/waitlist/confirm'), oldToken);
-    assert.equal((await post('/waitlist/confirm', { token: oldToken })).status, 404);
+    assert.match(await (await site.request(`/waitlist/confirm?token=${oldToken}`)).text(), /Confirm your address/);
 
     // A confirmed address is told it is on the list, with a link to remove it.
     assert.equal((await post('/waitlist/confirm', { token: tokenIn('/waitlist/confirm') })).status, 200);
@@ -159,6 +160,7 @@ test('an unconfirmed address expires after 48 hours: its link stops working and 
     const erik = tokenIn('/waitlist/confirm');
     await post('/waitlist/confirm', { token: erik });
     await db.pool.query(`update waitlist set mailed_at = now() - interval '49 hours'`);
+    await db.pool.query(`update waitlist_tokens set created_at = now() - interval '49 hours'`);
     const dora = sent[0]?.message.text.match(/confirm\?token=([A-Za-z0-9_-]+)/)?.[1] ?? '';
     assert.equal((await site.request(`/waitlist/confirm?token=${dora}`)).status, 404);
     assert.equal((await post('/waitlist/confirm', { token: dora })).status, 404);
@@ -177,10 +179,34 @@ test('when the e-mail cannot be sent, the visitor is told, may try again at once
     await join('dora@example.test');
     mailResult = err('SES: throttled');
     await db.pool.query(`update waitlist set mailed_at = now() - interval '61 minutes'`);
+    await db.pool.query(`update waitlist_tokens set created_at = now() - interval '61 minutes'`);
     assert.equal((await join('dora@example.test')).status, 503);
     mailResult = ok(undefined);
     assert.equal((await join('dora@example.test')).status, 200);
     assert.equal(sent.length, 4, 'the retry after a failure was not held back by the hour');
+});
+
+test('a confirmed address keeps its removal link when a later e-mail to it fails', async () => {
+    await join('dora@example.test');
+    const token = tokenIn('/waitlist/confirm');
+    await post('/waitlist/confirm', { token });
+    await db.pool.query(`update waitlist set mailed_at = now() - interval '61 minutes'`);
+    mailResult = err('SES: throttled');
+    assert.equal((await join('dora@example.test')).status, 503);
+    assert.equal((await db.pool.query('select 1 from waitlist_tokens')).rowCount, 1, 'the unsent token is gone');
+    assert.equal(await purgeUnconfirmed(db.pool), 0);
+    assert.equal((await post('/waitlist/remove', { token })).status, 200);
+    assert.equal(await row('dora@example.test'), undefined);
+    assert.equal((await db.pool.query('select 1 from waitlist_tokens')).rowCount, 0, 'its tokens go with it');
+});
+
+test('an address keeps at most its newest tokens', async () => {
+    await join('dora@example.test');
+    for (let i = 0; i < TOKENS_PER_ADDRESS + 3; i += 1) {
+        await db.pool.query(`update waitlist set mailed_at = now() - interval '61 minutes'`);
+        await join('dora@example.test');
+    }
+    assert.equal((await db.pool.query('select 1 from waitlist_tokens')).rowCount, TOKENS_PER_ADDRESS);
 });
 
 test('malformed and unknown tokens get the expired-link page', async () => {

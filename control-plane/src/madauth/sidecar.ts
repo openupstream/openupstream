@@ -146,12 +146,12 @@ export function createSidecar(deps: SidecarDeps): Hono {
         const { type, data } = call;
         if (type === 'user.signing_up') {
             // madAuth refuses on `allow: false` and shows `message` to whoever tried.
-            if (signupAllowed(signup, data['email'])) {
+            if (signup.open || signupAllowed(signup, data['email'])) {
                 return c.json({ allow: true });
             }
             // The address is personal data; the log only needs the fact.
             deps.log({ msg: 'madauth webhook: sign-up refused, sign-up is closed', method: data['method'] });
-            return c.json({ allow: false, message: signup.open ? '' : signup.message });
+            return c.json({ allow: false, message: signup.message });
         }
         if (!type.startsWith('email.send_')) {
             // Events (user.*) and anything newer: acknowledged, nothing to do yet.

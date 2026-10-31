@@ -128,7 +128,7 @@ const linkGone = (): Page =>
     layout(
         'Link expired: openupstream',
         html`<h1>This link no longer works</h1>
-<p>A confirmation link works for 48 hours, and every new e-mail replaces the links of the one before. If your address was removed, it is gone already.</p>
+<p>A confirmation link works for 48 hours. If your address was removed, it is gone already.</p>
 <p><a href="/">Join the waitlist again</a></p>`,
     );
 

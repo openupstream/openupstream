@@ -143,11 +143,12 @@ to; then it needs `WAITLIST_IMPRINT`, the Impressum as plain text, and
 | `POST /waitlist/remove` | `token`: the address is deleted |
 | `GET /privacy`, `GET /imprint` | the privacy notice, the Impressum |
 
-The table `waitlist` keeps each address with the SHA-256 of the token in
-its latest e-mail (a new e-mail replaces the token), the consent text's
-version and when it was asked for, mailed and confirmed. A link works for
-48 hours until the address is confirmed, and from then on until the next
-e-mail to it.
+The table `waitlist` keeps each address with the consent text's version
+and when it was asked for, mailed and confirmed; `waitlist_tokens` the
+SHA-256 of the token in each of its e-mails (the newest 20), so a request
+by someone else adds links and breaks none. A link works for 48 hours
+until the address is confirmed, and from then on until the address is
+removed.
 
 ## Cleanup
 
@@ -171,8 +172,8 @@ name stays taken.
 Once a deleted Project has neither Database nor Bucket rows left, the pass
 removes its namespace and its row.
 
-Last, it deletes the waitlist's addresses that were not confirmed within 48
-hours of their e-mail.
+First, before anything that can fail, it deletes the waitlist's addresses
+that were not confirmed within 48 hours of their last e-mail.
 
 ## Internal API
 
