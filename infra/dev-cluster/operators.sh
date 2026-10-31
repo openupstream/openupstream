@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Installs what build step 1 needs on the dev cluster: cert-manager,
-# CloudNativePG and the Barman Cloud Plugin, at the versions vendored in
+# Installs what build step 1 needs on the dev cluster: cert-manager (with
+# Certificates owning their Secrets), CloudNativePG and the Barman Cloud Plugin, at the versions vendored in
 # operators/crds, and makes the cluster survive a dark Site (ARCHITECTURE.md,
 # "Sites and failure handling"):
 #
@@ -25,8 +25,8 @@ apply "https://github.com/cert-manager/cert-manager/releases/download/$CERT_MANA
 # A Certificate owns its Secret, so a custom domain's key goes when the
 # Routes operator deletes the Certificate (ARCHITECTURE.md, decision 85).
 # Applying the manifest resets the arguments, so this is added once per run.
-kubectl -n cert-manager get deployment cert-manager -o jsonpath='{.spec.template.spec.containers[0].args}' |
-  grep -q enable-certificate-owner-ref ||
+args=$(kubectl -n cert-manager get deployment cert-manager -o jsonpath='{.spec.template.spec.containers[0].args}')
+[[ $args == *enable-certificate-owner-ref* ]] ||
   kubectl -n cert-manager patch deployment cert-manager --type=json \
     -p '[{"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--enable-certificate-owner-ref=true"}]' >/dev/null
 apply "https://github.com/cloudnative-pg/cloudnative-pg/releases/download/v$CNPG/cnpg-$CNPG.yaml"

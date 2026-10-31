@@ -448,7 +448,9 @@ digest (#55).
   Ingress Traefik serves on port 80 ahead of the redirect, which has the
   lowest priority. Traefik's Ingress provider sees only those solver
   Ingresses (#85). A custom domain thus needs its CNAME to
-  `ingress.<customer domain>` before its certificate can be issued.
+  `ingress.<customer domain>` before its first Route: the Certificate is
+  requested with it, and after a failed attempt cert-manager waits an hour
+  before the next. Deleting and re-adding the Route starts over.
 
 ## Project isolation
 

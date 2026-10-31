@@ -37,8 +37,9 @@ export KUBECONFIG=$PWD/.state/kubeconfig
 `up.sh` creates the VMs, a firewall (SSH and the Kubernetes API only from
 your IP, HTTP and HTTPS from everywhere, everything between the nodes) and
 k3s with embedded etcd and
-flannel `wireguard-native`. `operators.sh` installs cert-manager,
-CloudNativePG and the Barman Cloud Plugin at the versions in
+flannel `wireguard-native`. `operators.sh` installs cert-manager, whose
+Certificates own their Secrets (so a custom domain's key goes with its
+Certificate), CloudNativePG and the Barman Cloud Plugin at the versions in
 `operators/crds`, spreads CoreDNS and the CloudNativePG operator over the
 compute Sites, and creates the backup credentials Secret in
 `openupstream-system`. Then:
@@ -80,6 +81,12 @@ them to the sidecar's log instead. To try the payment-method gate without a
 billing service, set `NEW_ACCOUNT_HOLDS=payment-method` and
 `BILLING_CALLERS` to a ServiceAccount you lift Holds with (control-plane
 README, "Internal API").
+
+A custom domain (control-plane README) needs a hostname outside both dev
+zones, which are reserved: claim it, publish its TXT record, verify, point
+a CNAME at `ingress.dev.openupstream.app`, then add a Route. The Routes
+operator then requests its certificate through HTTP-01 from Let's Encrypt
+staging.
 
 madAuth is at `https://dev.openupstream.com/auth`, the API at
 `https://api.dev.openupstream.com`. Sign up with e-mail and password

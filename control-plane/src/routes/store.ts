@@ -47,6 +47,7 @@ export async function listRoutes(pool: pg.Pool, domainId: string): Promise<Route
 }
 
 export type CreateRouteError =
+    | { readonly kind: 'domain-not-found' }
     | { readonly kind: 'bucket-not-found' }
     | { readonly kind: 'prefix-taken'; readonly pathPrefix: string }
     | { readonly kind: 'spa-conflict'; readonly spaFallback: boolean }
@@ -56,6 +57,8 @@ export type CreateRouteError =
  * Inserts the Route and sets the Bucket's website settings in Garage in one
  * transaction: if Garage cannot be reached, there is no Route. The Bucket's
  * row stays locked meanwhile, so it cannot be deleted under the new Route.
+ * The Domain is locked first, as deleteDomain does, so the two never wait
+ * for each other's locks; a Domain deleted meanwhile is `domain-not-found`.
  * `projectId` and `domainId` are the caller's, already checked; `input` is
  * validated by the API, and the schema checks the prefix again.
  */
@@ -68,6 +71,10 @@ export async function createRoute(
 ): Promise<Result<Route, CreateRouteError>> {
     const spaFallback = input.spaFallback ?? false;
     return inTransaction(pool, async (client): Promise<Result<Route, CreateRouteError>> => {
+        const domain = await client.query('select 1 from domains where id = $1 for key share', [domainId]);
+        if (domain.rowCount !== 1) {
+            return err({ kind: 'domain-not-found' });
+        }
         const bucket = await client.query<{ garage_bucket_id: string; spa_fallback: boolean | null }>(
             `select b.garage_bucket_id, (select r.spa_fallback from routes r where r.bucket_id = b.id limit 1) as spa_fallback
              from buckets b where b.id = $1 and b.project_id = $2 and b.deleted_at is null for share of b`,

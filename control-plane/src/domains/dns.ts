@@ -11,7 +11,8 @@ export type TxtLookup = (name: string) => Promise<Result<string[], string>>;
 /** What the resolver answers for a name without TXT records; anything else is an outage. */
 const NO_RECORDS = new Set(['ENOTFOUND', 'ENODATA']);
 
-export const txtLookup = (resolver: Resolver = new Resolver({ timeout: 5000, tries: 2 })): TxtLookup => (name) =>
+/** Short, since the verify request waits for it: a slow answer is retried by the Account, not by us. */
+export const txtLookup = (resolver: Resolver = new Resolver({ timeout: 2000, tries: 2 })): TxtLookup => (name) =>
     resolver.resolveTxt(name).then(
         (records) => ok(records.map((strings) => strings.join(''))),
         (error: NodeJS.ErrnoException) => (NO_RECORDS.has(error.code ?? '') ? ok([]) : err(error.code ?? String(error))),

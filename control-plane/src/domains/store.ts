@@ -180,6 +180,7 @@ export async function deleteDomain(
             if (kind === 'default') {
                 return err({ kind: 'default' });
             }
+            // The Domain before its Buckets, the order createRoute locks them in.
             const routes = await client.query<{ bucket_id: string | null }>('delete from routes where domain_id = $1 returning bucket_id', [id]);
             await client.query('delete from domains where id = $1', [id]);
             // One at a time and in a fixed order, so two deletions never wait for each other's locks.

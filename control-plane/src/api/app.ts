@@ -384,12 +384,11 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     };
 
     app.post('/v1/projects/:projectId/domains/:domainId/verify', async (c) => {
-        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
-        const domainId = c.req.param('domainId');
-        if (project === undefined || !UUID.test(domainId)) {
+        const domain = await domainOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('domainId'));
+        if (domain === undefined) {
             return c.json(notFound, 404);
         }
-        const verified = await verifyDomain(pool, deps.lookupTxt, project.id, domainId);
+        const verified = await verifyDomain(pool, deps.lookupTxt, domain.projectId, domain.id);
         if (!verified.ok) {
             switch (verified.error.kind) {
                 case 'not-found':
@@ -401,7 +400,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
                 case 'in-use':
                     return c.json({ error: 'this hostname is verified for another Project' }, 409);
                 case 'unavailable':
-                    deps.log?.({ msg: 'TXT lookup failed', domain: domainId, error: verified.error.reason });
+                    deps.log?.({ msg: 'TXT lookup failed', domain: domain.id, error: verified.error.reason });
                     return c.json({ error: 'cannot look up the TXT record now' }, 503);
             }
         }
@@ -409,19 +408,18 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     });
 
     app.delete('/v1/projects/:projectId/domains/:domainId', async (c) => {
-        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
-        const domainId = c.req.param('domainId');
-        if (project === undefined || !UUID.test(domainId)) {
+        const domain = await domainOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('domainId'));
+        if (domain === undefined) {
             return c.json(notFound, 404);
         }
-        const deleted = await deleteDomain(pool, storage, project.id, domainId);
+        const deleted = await deleteDomain(pool, storage, domain.projectId, domain.id);
         if (!deleted.ok) {
             return deleted.error.kind === 'not-found'
                 ? c.json(notFound, 404)
                 : c.json({ error: 'the default Domain is deleted with its Project only' }, 409);
         }
         for (const error of deleted.value.websiteErrors) {
-            deps.log?.({ msg: 'cannot stop serving a Bucket that has no Route left', domain: domainId, error });
+            deps.log?.({ msg: 'cannot stop serving a Bucket that has no Route left', domain: domain.id, error });
         }
         return c.body(null, 204);
     });
@@ -444,6 +442,8 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         const created = await createRoute(pool, storage, domain.projectId, domain.id, spaFallback === undefined ? rest : { ...rest, spaFallback });
         if (!created.ok) {
             switch (created.error.kind) {
+                case 'domain-not-found':
+                    return c.json(notFound, 404);
                 case 'bucket-not-found':
                     return c.json({ error: 'no such Bucket in this Project' }, 400);
                 case 'prefix-taken':
