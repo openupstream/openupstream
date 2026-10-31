@@ -203,8 +203,8 @@ interface OperatorRow extends Row {
 
 /**
  * Every Service of a live Project, as the Services operator needs it: the
- * pinned image, where a single replica runs, and a version of the Project's
- * Secrets that changes with them.
+ * pinned image, where a single replica runs, and the version of the
+ * Project's Secrets that is in the cluster (secrets/render.ts).
  */
 export async function listServiceRows(pool: pg.Pool): Promise<ServiceRow[]> {
     const { rows } = await pool.query<OperatorRow>(
@@ -216,8 +216,7 @@ export async function listServiceRows(pool: pg.Pool): Promise<ServiceRow[]> {
                      order by d.created_at, d.id limit 1),
                     'hetzner-fsn1'
                 ) as site,
-                (select md5(coalesce(string_agg(x.name || '@' || x.updated_at::text, ',' order by x.name), ''))
-                 from secrets x where x.project_id = s.project_id) as secrets_version
+                coalesce(p.secrets_version, '') as secrets_version
          from services s join projects p on p.id = s.project_id
          where p.deleted_at is null
          order by s.project_id, s.created_at, s.id`,

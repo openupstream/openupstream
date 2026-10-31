@@ -103,9 +103,10 @@ export interface ServiceRow {
     /** Where a single replica runs: the Service's homeSite, else the Project's oldest Database's, else `hetzner-fsn1`. */
     readonly site: Site;
     /**
-     * Changes whenever the Project's Secrets do (names and update times, no
-     * values): the operator puts it on the pod template, so a change rolls
-     * the Service and its pods read the new values.
+     * The version of the Project's Secrets in its Kubernetes Secret: it
+     * changes once the control plane has written new values there, never
+     * before. The operator puts it on the pod template, so a change rolls the
+     * Service and its pods read the new values.
      */
     readonly secretsVersion: string;
 }

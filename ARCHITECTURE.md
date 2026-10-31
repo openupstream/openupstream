@@ -466,7 +466,9 @@ digest (#55).
   reserved and no Service takes another's CPU. Pods mount no
   ServiceAccount token, read `project-secrets` with `envFrom` and do not
   start before it exists; a version of the Project's Secrets on the pod
-  template rolls the Service when they change.
+  template rolls the Service when they change. The control plane records
+  that version only after it wrote the new values, so pods never restart
+  into the old ones.
 
 ## Routing and domains
 

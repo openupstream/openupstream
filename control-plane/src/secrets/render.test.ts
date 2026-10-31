@@ -120,3 +120,25 @@ test("the registry credentials Secret has an entry per Service's repository, as 
         '.dockerconfigjson': Buffer.from('{"auths":{}}').toString('base64'),
     });
 });
+
+test('the version the Services roll on moves only once the values are written', async () => {
+    const projectId = await createProject();
+    const version = async () =>
+        (await db.pool.query<{ secrets_version: string | null }>('select secrets_version from projects where id = $1', [projectId])).rows[0]
+            ?.secrets_version;
+    assert.ok((await putSecret(db.pool, kek, projectId, { name: 'A', value: '1' })).ok);
+    const missing = fakeKube([], [`project-${projectId}`]);
+    assert.deepEqual(await syncProjectSecrets({ pool: db.pool, kube: missing.kube, kek }, projectId), { ok: true, value: 'no-namespace' });
+    assert.equal(await version(), null);
+    const failing = fakeKube([`project-${projectId}`]);
+    assert.equal((await syncProjectSecrets({ pool: db.pool, kube: failing.kube, kek }, projectId)).ok, false);
+    assert.equal(await version(), null);
+    const { kube } = fakeKube();
+    assert.ok((await syncProjectSecrets({ pool: db.pool, kube, kek }, projectId)).ok);
+    const first = await version();
+    assert.ok(first);
+    assert.ok((await putSecret(db.pool, kek, projectId, { name: 'A', value: '2' })).ok);
+    assert.equal(await version(), first);
+    assert.ok((await syncProjectSecrets({ pool: db.pool, kube, kek }, projectId)).ok);
+    assert.notEqual(await version(), first);
+});

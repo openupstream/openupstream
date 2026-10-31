@@ -35,12 +35,26 @@ export const PRUNED_KINDS = [
 ] as const;
 
 /**
- * Where a customer's container may not connect: loopback, private, shared
- * and link-local ranges, which hold the cluster's pod and service networks,
- * the nodes' private addresses and cloud metadata endpoints.
+ * Where a customer's container may not connect: loopback, private, shared,
+ * link-local, multicast and reserved ranges, which hold the cluster's pod
+ * and service networks, the nodes' private addresses and cloud metadata
+ * endpoints. The same ranges the control plane refuses to reach a registry
+ * at (control-plane/src/registry.ts).
  */
-export const EGRESS_EXCEPT_V4 = ['10.0.0.0/8', '100.64.0.0/10', '127.0.0.0/8', '169.254.0.0/16', '172.16.0.0/12', '192.168.0.0/16'];
-export const EGRESS_EXCEPT_V6 = ['::1/128', 'fc00::/7', 'fe80::/10'];
+export const EGRESS_EXCEPT_V4 = [
+    '0.0.0.0/8',
+    '10.0.0.0/8',
+    '100.64.0.0/10',
+    '127.0.0.0/8',
+    '169.254.0.0/16',
+    '172.16.0.0/12',
+    '192.0.0.0/24',
+    '192.168.0.0/16',
+    '198.18.0.0/15',
+    '224.0.0.0/4',
+    '240.0.0.0/4',
+];
+export const EGRESS_EXCEPT_V6 = ['::/127', 'fc00::/7', 'fe80::/10', 'ff00::/8', '64:ff9b::/96'];
 
 const labels = (projectId: string) => ({
     [LABELS.projectId]: projectId,

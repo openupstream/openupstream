@@ -911,8 +911,12 @@ describe('Services', () => {
         assert.equal(api?.site, 'hetzner-fsn1');
         const before = api?.secretsVersion;
         assert.equal((await call('PUT', `/v1/projects/${projectId}/secrets/TOKEN`, 'alice', { value: 'x' })).status, 201);
-        const after = (await listServiceRows(db.pool)).find((row) => row.service.id === service.id);
-        assert.notEqual(after?.secretsVersion, before);
+        // The version moves once the new values are in the cluster, which the API writes right after answering.
+        const versionNow = async () => (await listServiceRows(db.pool)).find((row) => row.service.id === service.id)?.secretsVersion;
+        for (let attempt = 0; attempt < 50 && (await versionNow()) === before; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        assert.notEqual(await versionNow(), before);
     });
 
     test('a single replica runs where the Project\'s oldest Database is, unless homeSite says otherwise', async () => {
