@@ -39,7 +39,8 @@ npm run migrate:create -w control-plane add-something
 with the environment `src/config.ts` lists (`DATABASE_URL`, the `AUTH_*`
 and `BACKUP_*` settings and the backup credentials; Garage's admin API and
 S3 API inside the cluster, `GARAGE_ADMIN_URL` and `GARAGE_S3_URL`, with
-`GARAGE_ADMIN_TOKEN`; optionally `CLI_CLIENT_ID`, the client ID of `oup`
+`GARAGE_ADMIN_TOKEN`; the key-encryption key for Secrets, `SECRETS_KEK`
+(32 bytes, base64) with its id `SECRETS_KEK_ID`; optionally `CLI_CLIENT_ID`, the client ID of `oup`
 in madAuth (`infra/madauth/register-cli.sh`); `CUSTOMER_DOMAIN`, under which Buckets are reached
 at `<bucket>.s3.<CUSTOMER_DOMAIN>`; `PLATFORM_DOMAIN`, our own hostnames,
 which like `CUSTOMER_DOMAIN` cannot be claimed as custom domains; optionally
@@ -93,6 +94,9 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `GET /v1/projects/{id}/domains/{id}/routes` | the Domain's Routes, longest prefix first |
 | `POST /v1/projects/{id}/domains/{id}/routes` | `{pathPrefix, bucketId, spaFallback?}` → 201: the Bucket is served below the prefix (stripped) within one Routes operator pass; 400 for a Bucket not in the Project; 409 if the prefix is taken, or if the Bucket's other Routes have another `spaFallback`; 503 if Garage cannot be reached |
 | `DELETE /v1/projects/{id}/domains/{id}/routes/{id}` | 204; the Bucket's last Route also stops Garage serving it |
+| `GET /v1/projects/{id}/secrets` | the Project's Secrets, names and times only |
+| `PUT /v1/projects/{id}/secrets/{name}` | `{value}` → 201 for a new Secret, 200 for a new value; written into the Project's Kubernetes Secret at once (or by the next secrets pass, before the Project has a namespace). The name is an environment variable name; 400 for a value over 64 KiB, or if the Project's values together would pass 512 KiB |
+| `DELETE /v1/projects/{id}/secrets/{name}` | 204 |
 
 A Bucket name is a hostname label of 3 to 63 characters. Creating one
 creates its Garage bucket (the name as its global alias) and a key that may
@@ -166,6 +170,14 @@ create TokenReviews.
 `src/secrets/store.ts` stores and reads Secrets with it. The key-encryption
 key is 32 random bytes, base64 encoded, with an id
 (`parseKeyEncryptionKey`); the wrapped data keys record that id.
+
+`src/secrets/render.ts` writes a Project's values into the Kubernetes
+Secret `project-secrets` in its namespace, with server-side apply under the
+field manager `openupstream-control-plane`: the API does so after every
+change, and the secrets pass every `CLEANUP_INTERVAL_SECONDS` for every
+live Project that has a data key, on one replica at a time (its own
+advisory lock). A Project without a namespace yet is skipped until an
+operator has created it.
 
 ## Tests
 

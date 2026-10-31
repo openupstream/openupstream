@@ -18,6 +18,12 @@ export const clusterName = (database: Pick<Database, 'id'>): string => `db-${dat
 /** Cannot share the Cluster's name, nor `<cluster>-rw`, which the Cluster's own Service takes. */
 export const poolerName = (database: Pick<Database, 'id'>): string => `${clusterName(database)}-pooler`;
 
+/**
+ * The Kubernetes Secret in a Project's namespace that holds all its Secrets'
+ * values; the control plane writes it, Services read it with `envFrom`.
+ */
+export const PROJECT_SECRETS = 'project-secrets';
+
 /** The folder under the backup bucket that holds one Database's base backups and WAL. */
 export const backupPrefix = (projectId: Id, databaseId: Id): string =>
     `${projectNamespace(projectId)}/${clusterName({ id: databaseId })}/`;

@@ -15,6 +15,8 @@ const env = {
     GARAGE_S3_URL: 'http://garage.garage.svc.cluster.local:3900',
     CUSTOMER_DOMAIN: 'openupstream.app',
     PLATFORM_DOMAIN: 'openupstream.com',
+    SECRETS_KEK_ID: 'kek-2026-10',
+    SECRETS_KEK: Buffer.alloc(32, 7).toString('base64'),
 };
 
 test('a complete environment, with defaults for the rest', () => {
@@ -78,6 +80,8 @@ test('every problem is reported at once', () => {
         'GARAGE_ADMIN_URL is not set',
         'GARAGE_S3_URL is not set',
         'GARAGE_ADMIN_TOKEN is not set',
+        'SECRETS_KEK_ID is not set',
+        'SECRETS_KEK is not set',
         'CUSTOMER_DOMAIN is not set',
         'PLATFORM_DOMAIN is not set',
         'PORT and INTERNAL_PORT must be port numbers',
@@ -90,4 +94,13 @@ test("an inline JWKS replaces madAuth's; MADAUTH_URL must be a URL", () => {
     assert.equal(inline.value.auth.jwks, '{"keys":[]}');
     const url = configFrom({ ...env, MADAUTH_URL: 'not a url' });
     assert.deepEqual(url.ok ? [] : url.error, ['MADAUTH_URL must be a URL']);
+});
+
+test('the key-encryption key with its id; a malformed key is reported', () => {
+    const config = configFrom(env);
+    assert.ok(config.ok);
+    assert.equal(config.value.kek.id, 'kek-2026-10');
+    assert.equal(config.value.kek.key.length, 32);
+    const bad = configFrom({ ...env, SECRETS_KEK: 'too short' });
+    assert.deepEqual(bad.ok ? [] : bad.error, ['SECRETS_KEK: the key-encryption key must be 32 bytes in standard base64']);
 });

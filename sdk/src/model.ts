@@ -170,6 +170,17 @@ export interface Service {
     createdAt: Timestamp;
 }
 
+/** A Secret's name is an environment variable name (the schema checks the same). */
+export const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,254}$/;
+
+/**
+ * At most this many bytes (UTF-8) per value, and all of a Project's values
+ * together at most SECRETS_MAX_TOTAL_BYTES: they go into one Kubernetes
+ * Secret (1 MiB at most) and into every container's environment.
+ */
+export const SECRET_VALUE_MAX_BYTES = 64 * 1024;
+export const SECRETS_MAX_TOTAL_BYTES = 512 * 1024;
+
 /**
  * A Secret's value is write-only: the API accepts it and hands it to the
  * Project's Services and jobs as an environment variable, but never returns it.

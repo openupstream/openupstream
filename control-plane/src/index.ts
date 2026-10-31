@@ -4,7 +4,8 @@
  * Owns accounts, projects, databases, buckets, services, the routing table,
  * secrets, API keys and usage events. Provisions by writing rows that the
  * operators reconcile into Kubernetes objects; carries out deletes itself
- * (src/cleanup.ts).
+ * (src/cleanup.ts) and renders the Projects' Secrets, whose key only it
+ * holds (src/secrets/render.ts).
  *
  * Two HTTP servers: the public API on PORT (src/api) and the internal API
  * for the operators on INTERNAL_PORT (src/internal). At startup it applies
@@ -20,7 +21,7 @@ import { createApi } from './api/app.js';
 import { accessTokenVerifier, apiKeyVerifier, keysFrom, madauthAuthenticator, sessionVerifier } from './api/auth.js';
 import { getAccountRecord, liftHold, placeHold } from './accounts/store.js';
 import { s3BackupStore } from './backups.js';
-import { type CleanupDeps, cleanupPass } from './cleanup.js';
+import { cleanupPass } from './cleanup.js';
 import { configFrom } from './config.js';
 import { listDatabaseRows } from './databases/rows.js';
 import { txtLookup } from './domains/dns.js';
@@ -32,41 +33,52 @@ import { createInternalServer } from './internal/server.js';
 import { controlPlaneKube } from './kube.js';
 import { seedPlatform } from './platform.js';
 import { listDomainRoutings } from './routes/store.js';
+import { secretsPass } from './secrets/render.js';
 
 const log = (entry: Record<string, unknown>): void =>
     console.log(JSON.stringify({ time: new Date().toISOString(), ...entry }));
 
-/** Any number will do, as long as nothing else in this database uses it. */
+/** Any numbers will do, as long as nothing else in this database uses them. */
 const CLEANUP_LOCK = 7_310_001;
+const SECRETS_LOCK = 7_310_002;
 
 /**
- * Both replicas run the loop; a session advisory lock lets only one of them
- * do a pass at a time. A failed pass is logged and the next one retries.
+ * Runs `pass` every interval until stopped. Both replicas run the loop; a
+ * session advisory lock lets only one of them do a pass at a time. A failed
+ * pass is logged and the next one retries.
  */
-async function runCleanup(deps: CleanupDeps, intervalMs: number, signal: AbortSignal): Promise<void> {
+async function runExclusively(
+    name: string,
+    pool: pg.Pool,
+    lock: number,
+    pass: () => Promise<void>,
+    intervalMs: number,
+    signal: AbortSignal,
+    log: (entry: Record<string, unknown>) => void,
+): Promise<void> {
     while (!signal.aborted) {
-        const connected = await deps.pool.connect().then(
+        const connected = await pool.connect().then(
             (client) => ({ ok: true as const, client }),
             (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }),
         );
         if (!connected.ok) {
             // E.g. our Database is failing over: wait for the next pass.
-            deps.log({ msg: 'cleanup pass skipped: no database connection', error: connected.error });
+            log({ msg: `${name} pass skipped: no database connection`, error: connected.error });
             await sleep(intervalMs, undefined, { signal }).catch(() => undefined);
             continue;
         }
         const { client } = connected;
-        const pass = client
-            .query<{ locked: boolean }>('select pg_try_advisory_lock($1) as locked', [CLEANUP_LOCK])
+        const attempt = client
+            .query<{ locked: boolean }>('select pg_try_advisory_lock($1) as locked', [lock])
             .then(async ({ rows }) => {
                 if (rows[0]?.locked === true) {
-                    await cleanupPass(deps).finally(() => client.query('select pg_advisory_unlock($1)', [CLEANUP_LOCK]));
+                    await pass().finally(() => client.query('select pg_advisory_unlock($1)', [lock]));
                 }
             });
-        await pass.then(
+        await attempt.then(
             () => client.release(),
             (error: unknown) => {
-                deps.log({ msg: 'cleanup pass failed', error: error instanceof Error ? error.message : String(error) });
+                log({ msg: `${name} pass failed`, error: error instanceof Error ? error.message : String(error) });
                 // The connection may hold the lock in an unknown state; do not reuse it.
                 client.release(true);
             },
@@ -119,6 +131,7 @@ async function main(): Promise<void> {
         pool,
         kube,
         storage,
+        kek: config.value.kek,
         customerDomain: config.value.customerDomain,
         platformDomain: config.value.platformDomain,
         lookupTxt: txtLookup(),
@@ -147,18 +160,13 @@ async function main(): Promise<void> {
         server.close();
         internal.close();
     });
-    await runCleanup(
-        {
-            pool,
-            kube,
-            backups: s3BackupStore(backup),
-            storage,
-            retention: backup.retention,
-            log,
-        },
-        config.value.cleanupIntervalMs,
-        stop.signal,
-    );
+    const cleanupDeps = { pool, kube, backups: s3BackupStore(backup), storage, retention: backup.retention, log };
+    const secretsDeps = { pool, kube, kek: config.value.kek, log };
+    const interval = config.value.cleanupIntervalMs;
+    await Promise.all([
+        runExclusively('cleanup', pool, CLEANUP_LOCK, () => cleanupPass(cleanupDeps), interval, stop.signal, log),
+        runExclusively('secrets', pool, SECRETS_LOCK, () => secretsPass(secretsDeps), interval, stop.signal, log),
+    ]);
     await pool.end();
 }
 

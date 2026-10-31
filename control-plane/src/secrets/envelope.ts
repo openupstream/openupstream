@@ -97,6 +97,9 @@ export function rewrapDataKey(
     return dataKey.ok ? ok(wrapDataKey(to, dataKey.value, projectId)) : dataKey;
 }
 
+/** How many bytes a sealed value is longer than its plaintext: format version, nonce and tag. */
+export const CIPHERTEXT_OVERHEAD_BYTES = 1 + NONCE_BYTES + TAG_BYTES;
+
 export function encryptSecretValue(dataKey: DataKey, location: SecretLocation, value: string): Buffer {
     return seal(dataKey.key, Buffer.from(value, 'utf8'), secretAad(location));
 }

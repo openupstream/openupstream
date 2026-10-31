@@ -25,6 +25,7 @@ const fakes = () => {
             removed.push(`${ref.kind} ${ref.namespace === undefined ? '' : `${ref.namespace}/`}${ref.name}`);
             return ok(undefined);
         },
+        applySecret: async () => ok('applied'),
     };
     const backups: BackupStore = {
         deletePrefix: async (prefix) => {

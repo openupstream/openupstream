@@ -1,6 +1,6 @@
 /**
  * The public API (ARCHITECTURE.md, "Control plane"): the caller's Accounts,
- * and the Projects, Databases, Buckets, Domains and routing table in them. Every route under /v1 except the
+ * and the Projects, Databases, Buckets, Domains, routing table and Secrets in them. Every route under /v1 except the
  * health check needs a madAuth session token or API key (./auth.ts); an
  * API key needs `openupstream:read` for GET and `openupstream:write` for
  * anything else. Another Account's Project answers 404, like one that does
@@ -14,6 +14,9 @@ import {
     DNS_LABEL,
     HOSTNAME,
     PATH_PREFIX,
+    SECRET_NAME,
+    SECRET_VALUE_MAX_BYTES,
+    SECRETS_MAX_TOTAL_BYTES,
     UUID,
     type Bucket,
     type BucketDetails,
@@ -37,6 +40,9 @@ import { type ControlPlaneKube, stateOf } from '../kube.js';
 import { createProject, deleteProject, getProject, listProjects } from '../projects/store.js';
 import { type Result, ok } from '../result.js';
 import { createRoute, deleteRoute, listRoutes } from '../routes/store.js';
+import type { KeyEncryptionKey } from '../secrets/envelope.js';
+import { syncProjectSecrets } from '../secrets/render.js';
+import { deleteSecret, listSecrets, putSecret } from '../secrets/store.js';
 import { type Authenticate, type Identity, accountsOf } from './auth.js';
 
 export interface ApiDeps {
@@ -44,6 +50,8 @@ export interface ApiDeps {
     readonly authenticate: Authenticate;
     readonly kube: ControlPlaneKube;
     readonly storage: ObjectStorage;
+    /** Wraps the Projects' data keys; Secrets are encrypted with those. */
+    readonly kek: KeyEncryptionKey;
     /** Where Buckets are reached: `<bucket>.s3.<customerDomain>` (decision 68). */
     readonly customerDomain: string;
     /** Our own hostnames (decision 67); neither it nor the customer domain can be claimed as a custom domain. */
@@ -89,6 +97,12 @@ const domainInput = z.strictObject({
         .string()
         .transform((hostname) => hostname.toLowerCase().replace(/\.$/, ''))
         .pipe(z.string().regex(HOSTNAME, 'a hostname such as www.example.com: lowercase labels of letters, digits and hyphens')),
+});
+
+const secretValueInput = z.strictObject({
+    value: z
+        .string()
+        .refine((value) => Buffer.byteLength(value, 'utf8') <= SECRET_VALUE_MAX_BYTES, `at most ${SECRET_VALUE_MAX_BYTES} bytes`),
 });
 
 const routeInput = z.strictObject({
@@ -479,6 +493,65 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (deleted.websiteError !== undefined) {
             deps.log?.({ msg: 'cannot stop serving a Bucket that has no Route left', route: routeId, error: deleted.websiteError });
         }
+        return c.body(null, 204);
+    });
+
+    /**
+     * Writes the Project's Kubernetes Secret now, so a change reaches its
+     * Services at once. A failure is only logged: the secrets pass writes it
+     * again within one interval, and the change itself is stored.
+     */
+    const syncSecrets = async (projectId: string) => {
+        const synced = await syncProjectSecrets({ pool, kube, kek: deps.kek }, projectId);
+        if (!synced.ok) {
+            deps.log?.({ msg: 'cannot write the Secrets of a Project', projectId, error: synced.error });
+        }
+    };
+
+    app.get('/v1/projects/:projectId/secrets', async (c) => {
+        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
+        return project === undefined ? c.json(notFound, 404) : c.json(await listSecrets(pool, project.id));
+    });
+
+    app.put('/v1/projects/:projectId/secrets/:name', async (c) => {
+        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
+        if (project === undefined) {
+            return c.json(notFound, 404);
+        }
+        const name = c.req.param('name');
+        if (!SECRET_NAME.test(name)) {
+            return c.json({ error: 'a Secret name is an environment variable name: letters, digits and _, not starting with a digit' }, 400);
+        }
+        const input = secretValueInput.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const stored = await putSecret(pool, deps.kek, project.id, { name, value: input.data.value });
+        if (!stored.ok) {
+            switch (stored.error.kind) {
+                case 'too-large':
+                    return c.json({ error: `the Project's Secrets would take ${stored.error.bytes} bytes, more than ${SECRETS_MAX_TOTAL_BYTES}` }, 400);
+                case 'project-not-found':
+                    return c.json(notFound, 404);
+                case 'invalid-name':
+                case 'envelope':
+                    throw new Error(`cannot store the Secret: ${stored.error.kind}`);
+            }
+        }
+        await syncSecrets(project.id);
+        const created = stored.value.createdAt === stored.value.updatedAt;
+        if (created) {
+            c.header('location', `/v1/projects/${project.id}/secrets/${name}`);
+        }
+        return c.json(stored.value, created ? 201 : 200);
+    });
+
+    app.delete('/v1/projects/:projectId/secrets/:name', async (c) => {
+        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
+        if (project === undefined || !(await deleteSecret(pool, project.id, c.req.param('name')))) {
+            return c.json(notFound, 404);
+        }
+        await syncSecrets(project.id);
         return c.body(null, 204);
     });
 

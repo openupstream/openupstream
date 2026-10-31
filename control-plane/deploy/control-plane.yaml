@@ -9,8 +9,10 @@
 # MADAUTH_URL, BACKUP_BUCKET, BACKUP_RETENTION, GARAGE_ADMIN_URL,
 # GARAGE_S3_URL, CUSTOMER_DOMAIN, PLATFORM_DOMAIN; optionally NEW_ACCOUNT_HOLDS and
 # BILLING_CALLERS), the backup credentials Secret backup-s3, which the
-# Databases operator copies into this namespace, and the Secret
-# garage-admin with Garage's admin token (infra/dev-cluster/garage.sh).
+# Databases operator copies into this namespace, the Secret
+# garage-admin with Garage's admin token (infra/dev-cluster/garage.sh), and
+# the Secret secrets-kek with the key-encryption key for Secrets
+# (SECRETS_KEK_ID, SECRETS_KEK; infra/dev-cluster/platform.sh creates it once).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -32,7 +34,8 @@ subjects:
     namespace: project-00000000-0000-4000-8000-000000000002
 ---
 # Reads a Database's state for the API; deletes what the cleanup removes
-# (ARCHITECTURE.md, decisions 48 and 58). Creating is the operators' job.
+# (ARCHITECTURE.md, decisions 48 and 58); writes the Projects' Secrets.
+# Creating everything else is the operators' job.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -50,6 +53,12 @@ rules:
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [delete]
+  # Every Project's Secret project-secrets, rendered from the encrypted store
+  # (decision 91). Cluster-wide, since Project namespaces are created at run
+  # time; server-side apply needs create and patch.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -106,6 +115,7 @@ spec:
             - configMapRef: {name: control-plane-config}
             - secretRef: {name: backup-s3}
             - secretRef: {name: garage-admin}
+            - secretRef: {name: secrets-kek}
           ports:
             - {name: http, containerPort: 8080}
             - {name: internal, containerPort: 8081}

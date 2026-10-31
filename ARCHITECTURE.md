@@ -239,7 +239,8 @@ a billing service nothing is held, which is what someone who runs
 openupstream themselves gets by default (Open question 16).
 
 The public API (Hono, zod validation, `control-plane/src/api`) serves
-Projects and their Databases in the caller's Accounts; another Account's
+Projects and their Databases, Buckets, Domains, Routes and Secrets in the
+caller's Accounts; another Account's
 Project answers 404 (#61). A Database's state (`provisioning`, `ready`,
 `degraded`, `unknown`) is read live from its Cluster. Its connection details
 (the Pooler's in-cluster address, database and user `app`) are returned,
@@ -267,7 +268,6 @@ Thin reconcilers for the things no off-the-shelf operator does:
   alone holds Garage's admin token
 - Database → CloudNativePG `Cluster` (two instances, one per compute Site),
   PgBouncer `Pooler`, backup schedule
-- Secrets → a Kubernetes `Secret` in the Project's namespace
 
 The step from a control plane row to Kubernetes objects is a pure function
 that returns the objects or a list of errors; the reconcile loop around it
@@ -505,9 +505,18 @@ digest (#55).
   rotated by rewrapping the data keys without touching the values.
 - The key-encryption key is a Kubernetes Secret in the control plane's
   namespace; k3s secrets encryption at rest is on.
-- The Secrets operator renders a Kubernetes `Secret` into the Project's
-  namespace; Services and jobs read it via `envFrom`. Changing a Secret rolls
-  the Services that use it.
+- The control plane renders all of a Project's Secrets into one Kubernetes
+  `Secret`, `project-secrets`, in the Project's namespace (#91): right after
+  every change through the API, and again every 30 s on one replica (an
+  advisory lock, like the cleanup), so a write that failed, or that came
+  before an operator created the namespace, arrives within one pass. It
+  alone holds the key-encryption key, so no decrypted value crosses the
+  internal API. Services and jobs read the Secret via `envFrom`. Changing a
+  Secret rolls the Services that use it.
+- The API takes a value with `PUT …/secrets/{name}` (an environment
+  variable name) and never returns it; a value is at most 64 KiB and a
+  Project's values together at most 512 KiB, since they share one
+  Kubernetes Secret and every container's environment.
 - The envelope protects copies of the control plane's Database that leave the
   cluster (backups). It does not protect against someone with cluster-admin;
   that is accepted.
@@ -688,6 +697,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 85 | Custom domains: a claim gets a random token, published by the Account as TXT at `_openupstream.<domain>` and looked up when it calls verify, once, through the cluster's resolver; hostnames under the customer and platform domains, or verified by another Project, cannot be claimed; the Routes operator gives a verified custom domain with Routes a cert-manager Certificate (HTTP-01, selected by label on the existing ClusterIssuers) and deletes it with the Domain, its Secret garbage-collected through cert-manager's owner references | the control plane polling pending claims; re-checking the TXT record periodically; a separate HTTP-01 ClusterIssuer; DNS-01 by CNAME-delegating `_acme-challenge` to us | verification while the request waits, like Buckets, gives the Account its answer at once; a removed record does not take a site down, the claim is what was proven; one issuer per environment keeps the platform's and customers' certificates on the same account; HTTP-01 needs nothing from the customer beyond the CNAME the traffic needs anyway. Traefik's Ingress provider is enabled, limited to cert-manager's solver Ingresses, and its port-80 redirect drops to the lowest priority |
 | 87 | `oup login` uses madAuth's device authorization grant (RFC 8628, madAuth 0.7) as the public client `oup CLI`, asking for `openid email offline_access`; the control plane accepts madAuth access tokens (`at+jwt`, `aud` = `CLI_CLIENT_ID`) with a session's rights and tells the CLI the issuer and client ID at `GET /v1/login`; the refresh token is kept in `~/.config/openupstream/credentials.json` (mode 600) and each new one stored before use; `OUP_API_KEY` for CI | authorization code with PKCE and a loopback redirect; both flows; e-mail and password in the terminal turned into an API key; pasting an API key | the flow RFC 8628 wrote for command-line tools, as `gh auth login` and `az login` use: it works over SSH, in containers and on headless machines, with every sign-in method, passkeys included; `verification_uri_complete` makes it one click when a browser is at hand, so a loopback flow would add code for no gain; a password in the terminal would leave out passkey users. madAuth refuses clients without `deviceFlow`, and only an admin with a fresh sign-in registers one |
 | 88 | `oup site deploy` makes the Bucket mirror the directory: changed files only (MD5 against the ETag), `index.html` files after the rest, then stale objects deleted (`--keep` to leave them); cache headers and content types from the file name | upload only, never delete | a deploy should leave exactly the build behind, or deleted pages stay reachable; uploading the index last keeps a client from loading an index whose assets are not there yet; hashed assets of the previous build go with it, so a page open from before the deploy may miss a lazily loaded chunk; `--keep` is for sites that need that |
+| 91 | The control plane writes the Kubernetes Secret `project-secrets` per Project itself, after each change and in a 30 s pass; no Secrets operator. The public API: `GET …/secrets` (names), `PUT …/secrets/{name}` `{value}`, `DELETE …/secrets/{name}`; every Service of the Project gets all of them | a Secrets operator fed decrypted values by an internal API route (the earlier plan of decision 20); per-Service selection of Secrets | the control plane alone holds the key-encryption key, so plaintext never travels between processes and no operator can read every Project's Secrets; it needs `create` and `patch` on Secrets cluster-wide, which a Secrets operator would have needed as well. Project-wide Secrets match how they are described to customers; selecting per Service can come later without changing the API |
 
 ## Open questions
 
@@ -816,7 +826,9 @@ Decisions table once it is settled.
    index last and deleted the old bundle, and the served headers matched.
    Left: the approval page
    for `oup login` at madAuth's `loginUrl`, the production DNS zones.
-3. Containers, Service mode.
+3. Containers, Service mode. Done so far: Secrets through the API, written
+   into each Project's namespace by the control plane (#91), not yet tested
+   on the dev cluster.
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
    staying writable while a whole Site is switched off.

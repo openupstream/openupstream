@@ -1,10 +1,11 @@
 /**
  * What the control plane asks of Kubernetes: a Database's state for the
- * API, and the deletes of the cleanup (decision 48: deleting is the control
- * plane's explicit step, never the operator's). Creating and updating is the
- * operators' job.
+ * API, the deletes of the cleanup (decision 48: deleting is the control
+ * plane's explicit step, never the operator's), and the Secrets it renders
+ * from its encrypted store (decision 91), since it alone holds the
+ * key-encryption key. Every other object is the operators' to create.
  */
-import { ApiException, type KubeConfig, KubernetesObjectApi } from '@kubernetes/client-node';
+import { ApiException, type KubeConfig, KubernetesObjectApi, PatchStrategy } from '@kubernetes/client-node';
 import type { DatabaseState } from '@openupstream/sdk';
 import { type Result, err, ok } from './result.js';
 
@@ -22,11 +23,28 @@ export interface ClusterStatus {
     readonly ready: boolean;
 }
 
+/** The control plane's field manager for server-side apply; the operators have their own. */
+export const FIELD_MANAGER = 'openupstream-control-plane';
+
+/** A Kubernetes Secret as the control plane renders it; `data` values are base64. */
+export interface SecretManifest {
+    readonly apiVersion: 'v1';
+    readonly kind: 'Secret';
+    readonly type: string;
+    readonly metadata: { readonly name: string; readonly namespace: string; readonly labels: Readonly<Record<string, string>> };
+    readonly data: Readonly<Record<string, string>>;
+}
+
 export interface ControlPlaneKube {
     /** undefined when the Cluster does not exist (yet). */
     readCluster(namespace: string, name: string): Promise<Result<ClusterStatus | undefined, string>>;
     /** Deletes an object; one that is already gone counts as deleted. */
     remove(ref: ObjectRef): Promise<Result<void, string>>;
+    /**
+     * Server-side apply of a Secret. `no-namespace` when its namespace does
+     * not exist yet: the operators create it with the Project's first object.
+     */
+    applySecret(secret: SecretManifest): Promise<Result<'applied' | 'no-namespace', string>>;
 }
 
 /** No Cluster yet, or no instance up: provisioning; all up: ready; some: degraded. */
@@ -94,6 +112,17 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
                 timeoutMs,
             );
             return result.ok || result.error.status === NOT_FOUND ? ok(undefined) : err(result.error.message);
+        },
+        applySecret: async (secret) => {
+            const result = await within(
+                api.patch(secret, undefined, undefined, FIELD_MANAGER, true, PatchStrategy.ServerSideApply),
+                timeoutMs,
+            );
+            if (result.ok) {
+                return ok('applied');
+            }
+            // Applying into a missing namespace answers 404: there is nothing else it could be missing.
+            return result.error.status === NOT_FOUND ? ok('no-namespace') : err(result.error.message);
         },
     };
 }
