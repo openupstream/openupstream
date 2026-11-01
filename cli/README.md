@@ -7,6 +7,8 @@ npm i -g @openupstream/cli
 oup login
 oup link shop
 oup service deploy api --image ghcr.io/acme/api:v3 --port 8080
+oup job deploy nightly --image ghcr.io/acme/api:v3 --schedule '0 3 * * *' --time-zone Europe/Berlin -- node dist/nightly.js
+oup job deploy migrate --image ghcr.io/acme/api:v3 -- npm run migrate && oup job run migrate
 printf %s "$STRIPE_KEY" | oup secret set STRIPE_KEY
 oup site deploy dist --bucket my-site
 ```
@@ -37,6 +39,26 @@ oup site deploy dist --bucket my-site
   password comes from stdin.
 - `oup service list`, `oup service show <name>` (JSON),
   `oup service delete <name>` (refused while a Route serves it).
+- `oup job deploy <name> --image <ref> [--schedule <cron> | --no-schedule]
+  [--time-zone <IANA name>] [--timeout <seconds>] [--memory <MB>]
+  [--cpu <millicores>] [--site hetzner-fsn1|ovh-lim] [--registry-user <user>
+  --registry-password-stdin] [--no-wait] [-- <command> <arg>…]`: brings the
+  Job to what the flags say, as `oup service deploy` does for a Service
+  (ARCHITECTURE.md, decision 95). What follows `--` replaces the image's
+  entrypoint; without it the Job keeps its command (the image's on
+  creation). A Job with `--schedule` is a Cron job; `--no-schedule` makes it
+  run only when started. Memory and CPU default to 256 MB and 250
+  millicores, the timeout to an hour. Then it waits until the Job is ready
+  to run (up to 2 minutes), unless `--no-wait`.
+- `oup job run <name> [--env NAME=value]… [--no-wait] [-- <arg>…]`: starts a
+  One-off job, with the args after `--` instead of the Job's and the
+  variables added to its environment, and waits until it has finished:
+  exit 0 when it succeeded, 1 when it failed or timed out, so a CI step
+  (a migration) fails with it. `--no-wait` prints the run's id and returns.
+- `oup job list`, `oup job show <name>` (JSON), `oup job runs <name>` (the
+  last day's runs, scheduled and started, newest first), `oup job stop
+  <name> <run>` (stops and removes a run), `oup job delete <name>` (and
+  its runs).
 - `oup secret list` (names only), `oup secret set <NAME>`, `oup secret
   delete <NAME>`. The value comes from stdin, never from an argument, which
   shells keep in their history: piped (one trailing line break is dropped,
@@ -56,4 +78,6 @@ In CI, set `OUP_API_KEY` to a madAuth API key instead of signing in, and
 `src/oidc.ts` is the device grant and refresh, `src/session.ts` the token
 for each call, `src/deploy.ts` the site deploy (`planDeploy` is pure),
 `src/project.ts` the linked Project, `src/services.ts` the Service deploy
-(`planServiceDeploy` is pure) and `src/stdin.ts` reading secret values.
+(`planServiceDeploy` is pure), `src/jobs.ts` the Job deploy and runs
+(`planJobDeploy` is pure), `src/wait.ts` the polling both wait with and
+`src/stdin.ts` reading secret values.

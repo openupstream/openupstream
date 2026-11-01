@@ -10,6 +10,7 @@
  * the defaults below.
  */
 import type { RegistryAuth, ServiceDetails, ServiceInput, ServicePatch, ServiceState, Site } from '@openupstream/sdk';
+import { waitUntil } from './wait.js';
 
 /** What a new Service gets for the flags left out. */
 export const DEFAULTS = { replicas: 1, memoryMb: 256, cpuMillicores: 250 } as const;
@@ -84,20 +85,6 @@ export async function waitUntilRunning(
     read: () => Promise<{ readonly ok: true; readonly value: ServiceDetails } | { readonly ok: false; readonly error: { readonly message: string } }>,
     options: { readonly timeoutMs: number; readonly intervalMs: number; readonly report: (state: ServiceState) => void },
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: string }> {
-    const deadline = Date.now() + options.timeoutMs;
-    let reported: ServiceState | undefined;
-    for (;;) {
-        const service = await read();
-        if (service.ok && service.value.state !== reported) {
-            reported = service.value.state;
-            options.report(reported);
-        }
-        if (service.ok && service.value.state === 'running') {
-            return { ok: true };
-        }
-        if (Date.now() >= deadline) {
-            return { ok: false, error: service.ok ? `still ${service.value.state} after ${options.timeoutMs / 1000} s` : service.error.message };
-        }
-        await new Promise((resolve) => setTimeout(resolve, options.intervalMs));
-    }
+    const running = await waitUntil(read, (service) => service.state === 'running', options);
+    return running.ok ? { ok: true } : running;
 }
