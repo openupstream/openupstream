@@ -873,7 +873,8 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 96 | `oup job` is one group for Jobs and their runs: `oup job deploy` is idempotent like `oup service deploy` (the command after `--` or `--no-command`, `--schedule` or `--no-schedule`, waits until ready); `oup job run` starts a One-off job (args after `--`, `--env NAME=value`) and waits for its outcome, exiting 1 when it failed, unless `--no-wait`; `oup job runs`, `stop`, `list`, `show`, `delete` | `oup cron` and `oup run` as two commands (the earlier plan); `oup job run` returning at once with `--wait` to opt in | one noun, as in the API and the glossary, for a Job that is scheduled and started by hand alike; a CI step that runs a migration fails when the migration does, without a flag to remember |
 | 97 | Every Service and Job gets `DATABASE_URL_<NAME>` per live Database of its Project and the oldest one's as `DATABASE_URL`, built by Kubernetes from a `secretKeyRef` to CloudNativePG's `db-<id>-app` Secret; the Databases are part of the spec version | binding Databases to Services and Jobs explicitly (as Render and Railway reference them); the user copying a URL into a Secret (as `fly postgres attach` writes one); the control plane writing the URL into `project-secrets` | Heroku's model: no API or CLI field, nothing to bind before the first deploy, and the right default for one Database per Project; the password never leaves the namespace or passes through the control plane, which never sees it; a Project's pods can already reach all its Databases (decision 89), so a binding would add no isolation. Explicit binding can come later as a filter |
 | 98 | A Service's `port` is optional: without one it is a worker, with no Kubernetes Service and no readiness probe, and no Route may serve it (refused on the Route, and a trigger refuses removing a routed Service's port); `oup service deploy` needs `--no-port` for one | workers as a mode of their own; keeping the port required and having workers serve a health endpoint | Render's background workers, Heroku's worker dynos and Fly processes without services work the same way; ProjectMatch's SQS consumers become such workers; a fake listener would make readiness mean nothing; `--no-port` keeps a forgotten `--port` from silently making a worker |
-| 99 | The demo apps (#30) are one npm workspace, `examples/`, a folder per app on plain `node:http` and `pg`, built by the Images workflow from one Dockerfile (`APP` build argument) into `ghcr.io/openupstream/example-<app>`, public | a repository of their own; one image for all apps; a web framework | they change with the platform in the same PR and are built for the commit under test; the workspace puts their tests under the repo's CI; one image per app keeps each deploy line the customer's (`oup service deploy notes --image …/example-notes`); a framework would hide what the platform needs from a container |
+| 99 | The demo apps (#30) are one npm workspace, `examples/`, a folder per app on plain `node:http` and `pg` (and the AWS SDK's S3 client for a Bucket, decision 100), built by the Images workflow from one Dockerfile (`APP` build argument) into `ghcr.io/openupstream/example-<app>`, public | a repository of their own; one image for all apps; a web framework | they change with the platform in the same PR and are built for the commit under test; the workspace puts their tests under the repo's CI; one image per app keeps each deploy line the customer's (`oup service deploy notes --image …/example-notes`); a framework would hide what the platform needs from a container |
+| 100 | The demo app `spa-api` is a single-page app in one Bucket at `/` with SPA fallback and a Service at `/api` on the same hostname that keeps uploaded files (up to 1 MiB) in a second Bucket over S3, with the AWS SDK's S3 client. The Service reads the Bucket's access from four Secrets (`BUCKET_ENDPOINT`, `BUCKET_REGION`, `BUCKET_ACCESS_KEY_ID`, `BUCKET_SECRET_ACCESS_KEY`) copied from what the API shows for the Bucket; downloads are `attachment` with CSP `sandbox`, so an uploaded page never runs on the app's origin | a stateless API; the browser uploading straight to the Bucket with presigned URLs | step 2 is object storage as well as static sites, and ProjectMatch's five S3 buckets are reached from its code; proxying through the Service needs no CORS on Garage; copying the key by hand is what a customer does today and shows what binding Buckets like Databases (decision 97) would save (Open question 19) |
 
 ## Open questions
 
@@ -985,6 +986,15 @@ Decisions table once it is settled.
       how many days an Account is suspended.
     - Which lexoffice tax types cover EU business customers (reverse charge)
       and EU consumers (OSS).
+19. **Bucket access for Services and Jobs.** A Service that uses a Bucket
+    gets its endpoint and key only by the Account copying them into Secrets
+    (`spa-api` does, decision 100), while Databases are bound without a
+    step (decision 97). Options: the same automatic binding
+    (`BUCKET_<NAME>_…` for every Bucket of the Project, read from Garage by
+    the control plane), an explicit binding per Service, or keeping the
+    copy. A binding would put Bucket secrets into `project-secrets` or a
+    Secret of their own, which the control plane must keep in step when a
+    Bucket's key is replaced.
 
 ## Build order
 
@@ -1083,7 +1093,12 @@ Decisions table once it is settled.
    moment while its pod was stopped at the deadline (fixed: the outcome
    counts from `FailureTarget` and `SuccessCriteriaMet`).
 5. Demo apps run end to end on the platform (#30), including `notes`
-   staying writable while a whole Site is switched off.
+   staying writable while a whole Site is switched off. Code done: `notes`
+   (decision 99) and `spa-api` (decision 100), the latter tested locally
+   against Garage 2.4.1 behind a stand-in for its two Routes: files
+   stored, listed, downloaded and deleted, a missing file a 404, and a 503
+   at once with the process still healthy while Garage was stopped. Left:
+   `worker`, Umami, and the runs on the dev cluster.
 
 ### After v1: ProjectMatch
 

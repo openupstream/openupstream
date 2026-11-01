@@ -7,8 +7,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 export const log = (entry: Record<string, unknown>): void => console.log(JSON.stringify({ time: new Date().toISOString(), ...entry }));
 
-/** The body as text, or undefined when it is longer than `limit` bytes. */
-export async function readBody(request: IncomingMessage, limit: number): Promise<string | undefined> {
+/** The body, or undefined when it is longer than `limit` bytes. */
+export async function readBytes(request: IncomingMessage, limit: number): Promise<Buffer | undefined> {
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of request) {
@@ -18,8 +18,12 @@ export async function readBody(request: IncomingMessage, limit: number): Promise
         }
         chunks.push(chunk as Buffer);
     }
-    return Buffer.concat(chunks).toString('utf8');
+    return Buffer.concat(chunks);
 }
+
+/** The body as text, or undefined when it is longer than `limit` bytes. */
+export const readBody = async (request: IncomingMessage, limit: number): Promise<string | undefined> =>
+    (await readBytes(request, limit))?.toString('utf8');
 
 export function send(response: ServerResponse, status: number, body: string, contentType = 'text/plain; charset=utf-8'): void {
     response.writeHead(status, { 'content-type': contentType, 'cache-control': 'no-store' });
