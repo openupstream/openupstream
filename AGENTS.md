@@ -18,9 +18,11 @@ CONTRIBUTING.md. The repository layout is in README.md.
 - **Always offer a choice to get a deeper explanation** instead of forcing
   the user to pick an answer or type one. In Claude Code, ask such questions
   with AskUserQuestion and make "Explain in more detail" one of its options
-  (it allows four, so offer at most three answers; the next-step box has
-  only two buttons, too few for this). When they choose it, explain, then
-  ask the same question again.
+  (the next-step box has only two buttons, too few for this). It allows four
+  options; when all four are real answers, keep them, leave out the explain
+  option and say in the question that the user can type "explain" as their
+  own answer. When they ask for it, explain, then ask the same question
+  again.
 - **When it helps the decision, first research how similar products or
   libraries solve it** (other cloud providers, Kubernetes operators,
   established open-source projects) and add a short summary to the
