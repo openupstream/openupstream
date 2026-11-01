@@ -880,12 +880,13 @@ Decisions table once it is settled.
      failover to a second front at another provider, so DNS failover stays,
      only for that rare case. And bunny.net remains the single DNS
      provider; options: a second provider with its own health checks (e.g.
-     Gcore, checks every 10 s on paid plans) listed alongside bunny.net, or
+     Gcore, every 10 s only on its top tier, 60 s below) listed alongside bunny.net, or
      an own health watcher outside the Sites writing records to two plain
      DNS providers (the alternative decision 32 turned down).
    - **Considered and set aside:** anycast with an own /24 and ASN (about
-     €150/month plus BGP from providers that offer it; Hetzner, OVHcloud
-     and netcup do not for our server types); AWS Global Accelerator
+     €150/month plus BGP from providers that offer it; as far as we know,
+     not yet checked with them, Hetzner, OVHcloud and netcup do not for our
+     server types); AWS Global Accelerator
      (anycast, but endpoints only in AWS) and Cloudflare Spectrum (US
      company in the path); a CDN, which terminates TLS for every customer
      domain (decision 34); hardware load balancers (own hardware, a
