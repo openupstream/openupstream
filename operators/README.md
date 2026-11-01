@@ -38,10 +38,21 @@ Traefik already implements is configured, not reimplemented.
   pinned by digest under the `gvisor` RuntimeClass and a Kubernetes Service.
   `reconcileServices` applies them and deletes the objects labelled
   `openupstream.io/component=services` that are no longer wanted.
-- `src/owned.ts`: the apply-then-prune pass the Routes and Services
+- `src/jobs/`: the Jobs operator (ARCHITECTURE.md, decision 95,
+  ADR-0003). `planJobs` (pure) turns the Jobs into, per Project, its
+  namespace, its NetworkPolicy and `job-egress` (the egress of a Service's
+  pods); per Job, a CronJob `job-<id>`, suspended when the Job has no
+  schedule, whose jobTemplate runs the image pinned by digest under gVisor
+  once (`backoffLimit: 0`), stops it at the Job's timeout and keeps the
+  finished run a day. It carries the Job's spec version, which the control
+  plane checks before it copies the template into a One-off job.
+  `reconcileJobs` applies them and deletes the CronJobs and NetworkPolicies
+  labelled `openupstream.io/component=jobs` that are no longer wanted; their
+  runs go with them, by Kubernetes' garbage collection.
+- `src/owned.ts`: the apply-then-prune pass the Routes, Services and Jobs
   operators share.
 - `src/main.ts`: the image's entry point; `OPERATOR` (`databases`, the
-  default, `routes` or `services`) picks which operator the process runs,
+  default, `routes`, `services` or `jobs`) picks which operator the process runs,
   each in its own Deployment with its own ServiceAccount.
 - `src/databases/loop.ts`: the Databases operator's pass, and `runPasses`,
   the loop both use. A pass every 30 s with the rows from
@@ -57,7 +68,8 @@ Traefik already implements is configured, not reimplemented.
   (ingress only from the Project's own pods, Traefik and CloudNativePG's
   operator; ARCHITECTURE.md, decision 89), which every operator applies
   identically under one field manager before anything goes into the
-  namespace, labels, the Site zone label and the third Site's taint.
+  namespace, labels, the Site zone label and the third Site's taint, and
+  the egress policy of customer pods (`customerEgressPolicy`).
 - `deploy/`: each operator's ServiceAccount, RBAC and Deployment. The image
   is built by `Dockerfile` (GitHub Actions pushes it to
   `ghcr.io/openupstream/operators`); `infra/dev-cluster/platform.sh` deploys

@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { ServiceRow } from '@openupstream/sdk';
-import type { Kube, KubeObject, ObjectRef } from '../kube.js';
+import type { KubeObject } from '../kube.js';
 import { err, ok } from '../result.js';
+import { fakeKube } from '../testing/kube.js';
 import { servicesPass } from './loop.js';
 import { planServices } from './manifests.js';
 import { reconcileServices } from './reconcile.js';
@@ -109,24 +110,6 @@ test('new Secrets roll the Service: the version is on the pod template', () => {
     assert.notDeepEqual(before.metadata.annotations, after.metadata.annotations);
 });
 
-/** A cluster holding `existing` objects of ours; records applies and removes. */
-const fakeKube = (existing: ObjectRef[]) => {
-    const applied: string[] = [];
-    const removed: string[] = [];
-    const kube: Kube = {
-        apply: async (object) => {
-            applied.push(`${object.kind} ${object.metadata.name}`);
-            return ok(undefined);
-        },
-        readSecret: async () => ok(undefined),
-        list: async (apiVersion, kind) => ok(existing.filter((ref) => ref.apiVersion === apiVersion && ref.kind === kind)),
-        remove: async (ref) => {
-            removed.push(`${ref.kind} ${ref.name}`);
-            return ok(undefined);
-        },
-    };
-    return { kube, applied, removed };
-};
 
 test("a deleted Service's Deployment goes before its Service; the shared NetworkPolicy is never listed for pruning", async () => {
     const gone = 'svc-99999999-9999-4999-8999-999999999999';

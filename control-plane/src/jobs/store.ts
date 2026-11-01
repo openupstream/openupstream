@@ -204,21 +204,18 @@ interface OperatorRow extends Row {
     account_id: string;
     project_created_at: Date;
     site: Site;
-    secrets_version: string;
 }
 
 /**
  * Every Job of a live Project (or of one Project), as the Jobs operator
  * needs it, and as the API compares it with the CronJob: the pinned image,
- * where its runs go (as for a single-replica Service), and the version of
- * the Project's Secrets that is in the cluster (secrets/render.ts).
+ * and where its runs go (as for a single-replica Service).
  */
 export async function listJobRows(pool: pg.Pool, projectId?: string): Promise<JobRow[]> {
     const { rows } = await pool.query<OperatorRow>(
         `select ${columns('j.')},
                 p.name as project_name, p.account_id, p.created_at as project_created_at,
-                ${siteOf('j')} as site,
-                coalesce(p.secrets_version, '') as secrets_version
+                ${siteOf('j')} as site
          from jobs j join projects p on p.id = j.project_id
          where p.deleted_at is null and ($1::uuid is null or j.project_id = $1)
          order by j.project_id, j.created_at, j.id`,
@@ -249,7 +246,6 @@ export async function listJobRows(pool: pg.Pool, projectId?: string): Promise<Jo
                 },
                 pinnedImage: pinnedImage(image.value, job.imageDigest),
                 site: row.site,
-                secretsVersion: row.secrets_version,
             },
         ];
     });

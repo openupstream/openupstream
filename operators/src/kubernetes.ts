@@ -119,3 +119,55 @@ export { projectNamespace } from '@openupstream/sdk';
 export const requireComputeSite = () => ({
     nodeSelectorTerms: [{ matchExpressions: [{ key: ZONE_LABEL, operator: 'In', values: [...COMPUTE_SITES] }] }],
 });
+
+/** Which operator's objects, and which kind of customer pod, an object is: `services`, `jobs`, `routes`. */
+export const COMPONENT_LABEL = 'openupstream.io/component';
+
+/**
+ * Where a customer's container may not connect: loopback, private, shared,
+ * link-local, multicast and reserved ranges, which hold the cluster's pod
+ * and service networks, the nodes' private addresses and cloud metadata
+ * endpoints. The same ranges the control plane refuses to reach a registry
+ * at (control-plane/src/registry.ts).
+ */
+export const EGRESS_EXCEPT_V4 = [
+    '0.0.0.0/8',
+    '10.0.0.0/8',
+    '100.64.0.0/10',
+    '127.0.0.0/8',
+    '169.254.0.0/16',
+    '172.16.0.0/12',
+    '192.0.0.0/24',
+    '192.168.0.0/16',
+    '198.18.0.0/15',
+    '224.0.0.0/4',
+    '240.0.0.0/4',
+];
+export const EGRESS_EXCEPT_V6 = ['::/127', 'fc00::/7', 'fe80::/10', 'ff00::/8', '64:ff9b::/96'];
+
+/**
+ * Where the customer's containers of one kind (`component`, a Service's or
+ * a Job's) may connect: DNS, their own namespace (their Databases' Poolers)
+ * and the internet, but nothing else inside the cluster or in a private
+ * network (decision 93).
+ */
+export const customerEgressPolicy = (projectId: Id, name: string, component: string, labels: Readonly<Record<string, string>>) => ({
+    apiVersion: 'networking.k8s.io/v1',
+    kind: 'NetworkPolicy',
+    metadata: { name, namespace: namespaceOf(projectId), labels },
+    spec: {
+        podSelector: { matchLabels: { [COMPONENT_LABEL]: component } },
+        policyTypes: ['Egress'],
+        egress: [
+            {
+                to: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } }, podSelector: { matchLabels: { 'k8s-app': 'kube-dns' } } }],
+                ports: [
+                    { port: 53, protocol: 'UDP' },
+                    { port: 53, protocol: 'TCP' },
+                ],
+            },
+            { to: [{ podSelector: {} }] },
+            { to: [{ ipBlock: { cidr: '0.0.0.0/0', except: EGRESS_EXCEPT_V4 } }, { ipBlock: { cidr: '::/0', except: EGRESS_EXCEPT_V6 } }] },
+        ],
+    },
+});

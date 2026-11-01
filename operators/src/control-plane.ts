@@ -7,8 +7,10 @@ import {
     type DatabaseRow,
     type DomainRouting,
     INTERNAL_DATABASES_PATH,
+    INTERNAL_JOBS_PATH,
     INTERNAL_ROUTES_PATH,
     INTERNAL_SERVICES_PATH,
+    type JobRow,
     type ServiceRow,
 } from '@openupstream/sdk';
 import { type Result, err, ok } from './result.js';
@@ -96,6 +98,35 @@ export const parseServiceRows = (body: unknown): Result<ServiceRow[], FetchRowsE
 
 export type FetchServices = () => Promise<Result<ServiceRow[], FetchRowsError>>;
 
+const isArgList = (value: unknown): boolean => value === null || (Array.isArray(value) && value.every((arg) => typeof arg === 'string'));
+
+/** Only the shape the Jobs operator relies on; the control plane checked the values when it stored them. */
+const isJobRow = (value: unknown): value is JobRow =>
+    isObject(value) &&
+    isObject(value['project']) &&
+    typeof value['project']['id'] === 'string' &&
+    typeof value['project']['name'] === 'string' &&
+    isObject(value['job']) &&
+    typeof value['job']['id'] === 'string' &&
+    typeof value['job']['name'] === 'string' &&
+    isArgList(value['job']['command']) &&
+    isArgList(value['job']['args']) &&
+    typeof value['job']['memoryMb'] === 'number' &&
+    typeof value['job']['cpuMillicores'] === 'number' &&
+    typeof value['job']['timeoutSeconds'] === 'number' &&
+    (value['job']['schedule'] === null || typeof value['job']['schedule'] === 'string') &&
+    (value['job']['timeZone'] === null || typeof value['job']['timeZone'] === 'string') &&
+    typeof value['pinnedImage'] === 'string' &&
+    /@sha256:[0-9a-f]{64}$/.test(value['pinnedImage']) &&
+    (value['site'] === 'hetzner-fsn1' || value['site'] === 'ovh-lim');
+
+export const parseJobRows = (body: unknown): Result<JobRow[], FetchRowsError> =>
+    Array.isArray(body) && body.every(isJobRow)
+        ? ok(body)
+        : err({ kind: 'malformed', message: 'expected an array of { project, job, pinnedImage, site }' });
+
+export type FetchJobs = () => Promise<Result<JobRow[], FetchRowsError>>;
+
 /**
  * `token` is read on every call: projected ServiceAccount tokens are
  * rotated by the kubelet.
@@ -110,6 +141,10 @@ export function controlPlaneRoutings(baseUrl: string, token: () => Promise<strin
 
 export function controlPlaneServices(baseUrl: string, token: () => Promise<string>): FetchServices {
     return fetchInternal(baseUrl, INTERNAL_SERVICES_PATH, token, parseServiceRows);
+}
+
+export function controlPlaneJobs(baseUrl: string, token: () => Promise<string>): FetchJobs {
+    return fetchInternal(baseUrl, INTERNAL_JOBS_PATH, token, parseJobRows);
 }
 
 function fetchInternal<T>(

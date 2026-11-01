@@ -71,7 +71,6 @@ const jobRows: JobRow[] = [
         },
         pinnedImage: `docker.io/library/nginx@sha256:${'a'.repeat(64)}`,
         site: 'hetzner-fsn1',
-        secretsVersion: 'd41d8cd98f00b204e9800998ecf8427e',
     },
 ];
 const accountId = '0b7c3f1e-2d4a-4c8b-9e6f-1a2b3c4d5e6f';

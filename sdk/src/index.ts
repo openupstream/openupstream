@@ -27,6 +27,8 @@ import type {
     JobDetails,
     JobInput,
     JobPatch,
+    JobRun,
+    JobRunInput,
     Project,
     ProjectInput,
     Route,
@@ -229,6 +231,31 @@ export class OpenUpstreamClient {
     /** Deletes the Job; its runs, running ones included, are stopped and removed. */
     deleteJob(projectId: Id, jobId: Id): Promise<ApiResult<void>> {
         return this.#call('DELETE', `/v1/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}`);
+    }
+
+    /** Starts a One-off job from the Job's current template; 409 while the Job is still deploying. */
+    startJobRun(projectId: Id, jobId: Id, input: JobRunInput = {}): Promise<ApiResult<JobRun>> {
+        return this.#call('POST', `/v1/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}/runs`, input);
+    }
+
+    /** The Job's runs, newest first, scheduled and started alike. */
+    listJobRuns(projectId: Id, jobId: Id): Promise<ApiResult<JobRun[]>> {
+        return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}/runs`);
+    }
+
+    getJobRun(projectId: Id, jobId: Id, runId: string): Promise<ApiResult<JobRun>> {
+        return this.#call(
+            'GET',
+            `/v1/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}/runs/${encodeURIComponent(runId)}`,
+        );
+    }
+
+    /** Stops the run if it is still going, and removes it. */
+    deleteJobRun(projectId: Id, jobId: Id, runId: string): Promise<ApiResult<void>> {
+        return this.#call(
+            'DELETE',
+            `/v1/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}/runs/${encodeURIComponent(runId)}`,
+        );
     }
 
     /** The Project's Secrets, names only: a value is never returned. */

@@ -25,9 +25,18 @@ import {
     serviceSpecVersion,
 } from '@openupstream/sdk';
 import type { KubeObject } from '../kube.js';
-import { LABELS, MANAGED_BY, ZONE_LABEL, projectNamespace, projectObjectsFor, requireComputeSite } from '../kubernetes.js';
+import {
+    COMPONENT_LABEL,
+    LABELS,
+    MANAGED_BY,
+    ZONE_LABEL,
+    customerEgressPolicy,
+    projectNamespace,
+    projectObjectsFor,
+    requireComputeSite,
+} from '../kubernetes.js';
 
-export const COMPONENT_LABEL = 'openupstream.io/component';
+export { COMPONENT_LABEL } from '../kubernetes.js';
 export const SERVICES_COMPONENT = 'services';
 export const SERVICE_ID_LABEL = 'openupstream.io/service-id';
 export const SERVICE_NAME_LABEL = 'openupstream.io/service-name';
@@ -41,53 +50,10 @@ export const PRUNED_KINDS = [
     { apiVersion: 'networking.k8s.io/v1', kind: 'NetworkPolicy' },
 ] as const;
 
-/**
- * Where a customer's container may not connect: loopback, private, shared,
- * link-local, multicast and reserved ranges, which hold the cluster's pod
- * and service networks, the nodes' private addresses and cloud metadata
- * endpoints. The same ranges the control plane refuses to reach a registry
- * at (control-plane/src/registry.ts).
- */
-export const EGRESS_EXCEPT_V4 = [
-    '0.0.0.0/8',
-    '10.0.0.0/8',
-    '100.64.0.0/10',
-    '127.0.0.0/8',
-    '169.254.0.0/16',
-    '172.16.0.0/12',
-    '192.0.0.0/24',
-    '192.168.0.0/16',
-    '198.18.0.0/15',
-    '224.0.0.0/4',
-    '240.0.0.0/4',
-];
-export const EGRESS_EXCEPT_V6 = ['::/127', 'fc00::/7', 'fe80::/10', 'ff00::/8', '64:ff9b::/96'];
-
 const labels = (projectId: string) => ({
     [LABELS.projectId]: projectId,
     [LABELS.managedBy]: MANAGED_BY,
     [COMPONENT_LABEL]: SERVICES_COMPONENT,
-});
-
-const egressPolicy = (projectId: string): KubeObject => ({
-    apiVersion: 'networking.k8s.io/v1',
-    kind: 'NetworkPolicy',
-    metadata: { name: 'service-egress', namespace: projectNamespace(projectId), labels: labels(projectId) },
-    spec: {
-        podSelector: { matchLabels: { [COMPONENT_LABEL]: SERVICES_COMPONENT } },
-        policyTypes: ['Egress'],
-        egress: [
-            {
-                to: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'kube-system' } }, podSelector: { matchLabels: { 'k8s-app': 'kube-dns' } } }],
-                ports: [
-                    { port: 53, protocol: 'UDP' },
-                    { port: 53, protocol: 'TCP' },
-                ],
-            },
-            { to: [{ podSelector: {} }] },
-            { to: [{ ipBlock: { cidr: '0.0.0.0/0', except: EGRESS_EXCEPT_V4 } }, { ipBlock: { cidr: '::/0', except: EGRESS_EXCEPT_V6 } }] },
-        ],
-    },
 });
 
 /** A single replica prefers its Site; more are spread over both compute Sites. */
@@ -182,7 +148,10 @@ const kubernetesService = (row: ServiceRow): KubeObject => ({
 export function planServices(rows: readonly ServiceRow[]): KubeObject[] {
     const projects = [...new Map(rows.map((row) => [row.project.id, row.project])).values()];
     return [
-        ...projects.flatMap((project) => [...projectObjectsFor(project), egressPolicy(project.id)]),
+        ...projects.flatMap((project) => [
+            ...projectObjectsFor(project),
+            customerEgressPolicy(project.id, 'service-egress', SERVICES_COMPONENT, labels(project.id)),
+        ]),
         ...rows.flatMap((row) => [deployment(row), kubernetesService(row)]),
     ];
 }

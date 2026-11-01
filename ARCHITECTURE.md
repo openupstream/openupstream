@@ -517,7 +517,8 @@ digest (#55).
 - `POST …/jobs/{id}/runs`, with optional `args` and `env`, starts a
   One-off job from any Job while the request waits: the control plane
   copies the `jobTemplate` of the Job's CronJob into a Kubernetes Job, owned
-  by the CronJob, with the run's arguments. An Account with a Hold starts
+  by the CronJob but not controlled by it, with the run's arguments, so the
+  CronJob's history limits and overlap rule count only scheduled runs. An Account with a Hold starts
   none (402). Runs are read live from Kubernetes, scheduled and started
   alike; there is no run history in the control plane.
 - The Jobs operator applies one CronJob `job-<id>` per Job, suspended when
@@ -530,7 +531,10 @@ digest (#55).
   retried (`backoffLimit: 0`), a Cron job never overlaps its previous run
   (the due one is skipped), every run is stopped at its Job's timeout, and
   a finished run stays 24 hours, so its logs can be read; a Cron job keeps
-  at most its last 3 successful and 3 failed runs. Deleting a Job deletes
+  at most its last 3 successful and 3 failed scheduled runs. A scheduled
+  run more than 5 minutes late is skipped, so a Cron job does not catch up
+  on what it missed. The Secrets are not part of the spec version: a run's
+  pod reads them when it starts. Deleting a Job deletes
   its CronJob, and Kubernetes its runs.
 
 ## Routing and domains

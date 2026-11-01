@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { INTERNAL_DATABASES_PATH, PLATFORM } from '@openupstream/sdk';
-import { controlPlaneRows, parseRoutings, parseRows, parseServiceRows } from './control-plane.js';
+import { controlPlaneRows, parseJobRows, parseRoutings, parseRows, parseServiceRows } from './control-plane.js';
 
 const rows = [{ project: PLATFORM.project, database: PLATFORM.database }];
 
@@ -95,4 +95,29 @@ test('Services from the control plane: only rows with an image pinned by digest 
     assert.ok(parseServiceRows([row]).ok);
     assert.equal(parseServiceRows([{ ...row, pinnedImage: 'docker.io/library/nginx:latest' }]).ok, false);
     assert.equal(parseServiceRows([{ ...row, site: 'netcup-nbg' }]).ok, false);
+});
+
+test('Jobs from the control plane: only rows with an image pinned by digest, a compute Site and lists of strings', () => {
+    const row = {
+        project: { id: 'p', accountId: 'a', name: 'shop', createdAt: '2026-10-31T00:00:00Z' },
+        job: {
+            id: 'j',
+            name: 'nightly',
+            image: 'nginx',
+            imageDigest: `sha256:${'a'.repeat(64)}`,
+            command: ['sh', '-c', 'date'],
+            args: null,
+            memoryMb: 128,
+            cpuMillicores: 100,
+            timeoutSeconds: 60,
+            schedule: null,
+            timeZone: null,
+        },
+        pinnedImage: `docker.io/library/nginx@sha256:${'a'.repeat(64)}`,
+        site: 'hetzner-fsn1',
+    };
+    assert.ok(parseJobRows([row]).ok);
+    assert.equal(parseJobRows([{ ...row, pinnedImage: 'docker.io/library/nginx:latest' }]).ok, false);
+    assert.equal(parseJobRows([{ ...row, job: { ...row.job, command: [1] } }]).ok, false);
+    assert.equal(parseJobRows([{ ...row, job: { ...row.job, schedule: 5 } }]).ok, false);
 });

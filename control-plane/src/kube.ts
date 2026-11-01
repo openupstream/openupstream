@@ -49,10 +49,14 @@ export const serviceStateOf = (status: DeploymentStatus | undefined, wantedVersi
     return status.availableReplicas >= status.replicas ? 'running' : 'degraded';
 };
 
-/** The fields of a Job's CronJob that decide its state. */
+/** The fields of a Job's CronJob that decide its state, and what a One-off job is copied from. */
 export interface CronJobStatus {
     /** What the Jobs operator applied it from (jobSpecVersion); undefined before it set one. */
     readonly specVersion: string | undefined;
+    /** Owner of the runs started from it. */
+    readonly uid: string;
+    /** Its `spec.jobTemplate`, as Kubernetes returns it. */
+    readonly jobTemplate: unknown;
 }
 
 /** Ready once the CronJob carries the row's current spec (`wantedVersion`): runs then start from it. */
@@ -78,6 +82,12 @@ export interface ControlPlaneKube {
     readDeployment(namespace: string, name: string): Promise<Result<DeploymentStatus | undefined, string>>;
     /** undefined when the CronJob does not exist (yet). */
     readCronJob(namespace: string, name: string): Promise<Result<CronJobStatus | undefined, string>>;
+    /** Creates a Kubernetes Job (a run) and returns it as created; `exists` when one of that name does already. */
+    createJob(manifest: KubeJob): Promise<Result<KubeJob | 'exists', string>>;
+    /** The Kubernetes Jobs in the namespace that carry the labels in `selector`. */
+    listJobs(namespace: string, selector: string): Promise<Result<KubeJob[], string>>;
+    /** Stops and deletes a Kubernetes Job with its pod; `not-found` when there is none. */
+    deleteJob(namespace: string, name: string): Promise<Result<'deleted' | 'not-found', string>>;
     /** Deletes an object; one that is already gone counts as deleted. */
     remove(ref: ObjectRef): Promise<Result<void, string>>;
     /**
@@ -99,6 +109,7 @@ export const stateOf = (status: ClusterStatus | undefined): DatabaseState => {
 export const KUBE_CALL_TIMEOUT_MS = 10_000;
 
 const NOT_FOUND = 404;
+const CONFLICT = 409;
 
 const within = <T>(call: Promise<T>, timeoutMs: number): Promise<Result<T, { status: number; message: string }>> => {
     const timedOut = new Promise<Result<T, { status: number; message: string }>>((resolve) => {
@@ -135,7 +146,30 @@ interface DeploymentObject {
 interface CronJobObject {
     apiVersion: string;
     kind: string;
-    metadata: { name: string; namespace: string; annotations?: Record<string, string> };
+    metadata: { name: string; namespace: string; uid?: string; annotations?: Record<string, string> };
+    spec?: { jobTemplate?: unknown };
+}
+
+/** A Kubernetes Job, a run of a Job: the fields the control plane writes and reads. */
+export interface KubeJob {
+    apiVersion: 'batch/v1';
+    kind: 'Job';
+    metadata: {
+        name: string;
+        namespace: string;
+        labels?: Record<string, string>;
+        annotations?: Record<string, string>;
+        creationTimestamp?: Date;
+        ownerReferences?: { apiVersion: string; kind: string; name: string; uid: string; controller?: boolean; blockOwnerDeletion?: boolean }[];
+    };
+    spec?: unknown;
+    status?: {
+        active?: number;
+        ready?: number;
+        startTime?: Date;
+        completionTime?: Date;
+        conditions?: { type: string; status: string; reason?: string; lastTransitionTime?: Date }[];
+    };
 }
 
 export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIMEOUT_MS } = {}): ControlPlaneKube {
@@ -182,7 +216,33 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
             if (!result.ok) {
                 return result.error.status === NOT_FOUND ? ok(undefined) : err(result.error.message);
             }
-            return ok({ specVersion: result.value.metadata.annotations?.[SPEC_VERSION_ANNOTATION] });
+            return ok({
+                specVersion: result.value.metadata.annotations?.[SPEC_VERSION_ANNOTATION],
+                uid: result.value.metadata.uid ?? '',
+                jobTemplate: result.value.spec?.jobTemplate,
+            });
+        },
+        createJob: async (manifest) => {
+            const result = await within(api.create(manifest), timeoutMs);
+            if (!result.ok) {
+                return result.error.status === CONFLICT ? ok('exists') : err(result.error.message);
+            }
+            return ok(result.value);
+        },
+        listJobs: async (namespace, selector) => {
+            const result = await within(api.list<KubeJob>('batch/v1', 'Job', namespace, undefined, undefined, undefined, undefined, selector), timeoutMs);
+            return result.ok ? ok(result.value.items) : err(result.error.message);
+        },
+        deleteJob: async (namespace, name) => {
+            // A Job deleted through the API orphans its pods unless told otherwise.
+            const result = await within(
+                api.delete({ apiVersion: 'batch/v1', kind: 'Job', metadata: { name, namespace } }, undefined, undefined, undefined, undefined, 'Background'),
+                timeoutMs,
+            );
+            if (!result.ok) {
+                return result.error.status === NOT_FOUND ? ok('not-found') : err(result.error.message);
+            }
+            return ok('deleted');
         },
         remove: async (ref) => {
             const result = await within(
