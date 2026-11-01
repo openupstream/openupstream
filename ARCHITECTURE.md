@@ -510,12 +510,16 @@ digest (#55).
   (#97): `DATABASE_URL_<NAME>` (the name upper-cased, `-` as `_`) and the
   oldest Database's also as `DATABASE_URL`, pointing at its Pooler. The
   operator writes only a `secretKeyRef` to CloudNativePG's `db-<id>-app`
-  Secret and a `$(VAR)` reference in the URL, so the password stays in the
-  Project's namespace; a pod waits for that Secret, so a Service created
-  with its Database starts once the Database is up. A Database added or
-  deleted changes the Service's and Job's spec version, so the Service
-  rolls and the Job is `deploying` until it has the new URLs. These
-  variables win over a Project Secret of the same name.
+  Secret (as `OUP_DATABASE_PASSWORD_<NAME>`, also in the environment) and
+  a `$(VAR)` reference in the URL, so the password stays in the Project's
+  namespace. A pod waits for that Secret, so a Service created with its
+  Database starts once the Database is up. A Database added or deleted
+  changes the Service's and Job's spec version: the Service rolls and is
+  `deploying` until the new Database is up (its old pods keep serving
+  meanwhile; a Database that never comes up holds the rollout until it is
+  deleted), and the Job is `deploying` until its CronJob has the new URLs;
+  a run started before the new Database is up waits for it, within its
+  timeout. These variables win over a Project Secret of the same name.
 - A Job (#95, [ADR-0003](docs/adr/0003-jobs.md)) is a row like a Service:
   `POST …/jobs` with its image, optional `command` (the entrypoint) and
   `args`, memory, CPU, a timeout (default 1 h, at most 24 h) and an
