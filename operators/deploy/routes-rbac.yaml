@@ -1,5 +1,5 @@
 # What the Routes reconcile pass (src/routes/reconcile.ts) may do: apply a
-# Project's namespace and the Traefik objects, ExternalName Service and
+# Project's namespace and NetworkPolicy, and the Traefik objects, ExternalName Service and
 # custom domains' Certificates for its routing table, and delete those of
 # its objects that are no longer wanted (ARCHITECTURE.md, decisions 84 and
 # 85). Server-side apply is a PATCH that
@@ -23,11 +23,14 @@ rules:
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [create, patch]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [create, patch]
   - apiGroups: [""]
     resources: [services]
     verbs: [create, patch, list, delete]
   - apiGroups: [traefik.io]
-    resources: [ingressroutes, middlewares]
+    resources: [ingressroutes, middlewares, serverstransports]
     verbs: [create, patch, list, delete]
   - apiGroups: [cert-manager.io]
     resources: [certificates]

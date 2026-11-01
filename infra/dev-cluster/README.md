@@ -35,9 +35,10 @@ export KUBECONFIG=$PWD/.state/kubeconfig
 ```
 
 `up.sh` creates the VMs, a firewall (SSH and the Kubernetes API only from
-your IP, HTTP and HTTPS from everywhere, everything between the nodes) and
+your IP, HTTP and HTTPS from everywhere, everything between the nodes),
+gVisor on the two compute nodes (`infra/gvisor`), and
 k3s with embedded etcd and
-flannel `wireguard-native`. `operators.sh` installs cert-manager, whose
+flannel `wireguard-native`, then the RuntimeClass `gvisor`. `operators.sh` installs cert-manager, whose
 Certificates own their Secrets (so a custom domain's key goes with its
 Certificate), CloudNativePG and the Barman Cloud Plugin at the versions in
 `operators/crds`, spreads CoreDNS and the CloudNativePG operator over the
@@ -73,7 +74,7 @@ nodes. Then:
 It creates the platform Project's Databases (the control plane's and
 madAuth's), runs madAuth with its sidecar, the control plane, the public
 routes with their certificate (Let's Encrypt staging: clients need `-k`)
-and the Databases and Routes operators, with the GHCR images of the current commit
+and the Databases, Routes and Services operators, with the GHCR images of the current commit
 pinned by digest (`IMAGE_TAG` to choose others; the commit must be pushed
 and its Images workflow done). The DatabaseConfig is `database-config.json`.
 madAuth sends real e-mails through SES; `MAIL=log ./platform.sh` writes
@@ -112,6 +113,16 @@ curl -k -c jar -X POST -H 'Origin: https://dev.openupstream.com' -H 'content-typ
 Then `POST https://api.dev.openupstream.com/v1/accounts` with that token
 creates your Account; API keys come from `POST /auth/api-keys/create` with
 the same cookie (scopes `openupstream:read` or `openupstream:write`).
+
+For `oup login`, run `platform.sh` with `INITIAL_ADMIN_EMAIL` set, sign up
+with that address as above, register the CLI with
+`CURL_OPTIONS=-k ../madauth/register-cli.sh https://dev.openupstream.com`,
+and run `platform.sh` again with the printed `CLI_CLIENT_ID` (and
+`INITIAL_ADMIN_EMAIL` still set); it rolls out the control plane and
+madAuth whenever their ConfigMap changed. Until the
+approval page exists, approve a code with the session cookie:
+`POST /auth/device/lookup` and then `POST /auth/device/approve`, each with
+`{"code": "<code>"}`.
 
 Without the control plane, one pass from this machine, from `operators/`:
 

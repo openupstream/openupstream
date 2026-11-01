@@ -18,6 +18,7 @@ import type {
     Bucket,
     BucketDetails,
     BucketInput,
+    CliLogin,
     CustomDomainInput,
     DatabaseDetails,
     DatabaseInput,
@@ -27,12 +28,24 @@ import type {
     ProjectInput,
     Route,
     RouteInput,
+    Secret,
+    SecretInput,
+    ServiceDetails,
+    ServiceInput,
+    ServicePatch,
 } from './model.js';
+
+export const DEFAULT_API_URL = 'https://api.openupstream.com';
 
 export interface ClientOptions {
     baseUrl?: string;
-    /** A madAuth session token, or one of the user's madAuth API keys (`madauth_…`). */
+    /** A madAuth session token, an access token of `oup`, or one of the user's madAuth API keys (`madauth_…`). */
     token: string;
+}
+
+/** Where the CLI signs in; asked before there is a token. 404 when the platform has no CLI client. */
+export async function cliLogin(baseUrl: string = DEFAULT_API_URL): Promise<ApiResult<CliLogin>> {
+    return new OpenUpstreamClient({ baseUrl, token: '' }).cliLogin();
 }
 
 /** What went wrong, as the API said it: the HTTP status and its message. 0: the API was not reached. */
@@ -48,13 +61,17 @@ export class OpenUpstreamClient {
     readonly #token: string;
 
     constructor(options: ClientOptions) {
-        this.baseUrl = options.baseUrl ?? 'https://api.openupstream.com';
+        this.baseUrl = options.baseUrl ?? DEFAULT_API_URL;
         this.#token = options.token;
     }
 
     async health(): Promise<{ ok: boolean }> {
         const res = await fetch(`${this.baseUrl}/v1/health`);
         return { ok: res.ok };
+    }
+
+    cliLogin(): Promise<ApiResult<CliLogin>> {
+        return this.#call('GET', '/v1/login');
     }
 
     /** The Accounts the caller is a Member of. */
@@ -153,6 +170,50 @@ export class OpenUpstreamClient {
             'DELETE',
             `/v1/projects/${encodeURIComponent(projectId)}/domains/${encodeURIComponent(domainId)}/routes/${encodeURIComponent(routeId)}`,
         );
+    }
+
+    listServices(projectId: Id): Promise<ApiResult<ServiceDetails[]>> {
+        return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/services`);
+    }
+
+    /** Resolves the image's tag to a digest now and deploys it pinned; running within one operator pass. */
+    createService(projectId: Id, input: ServiceInput): Promise<ApiResult<ServiceDetails>> {
+        return this.#call('POST', `/v1/projects/${encodeURIComponent(projectId)}/services`, input);
+    }
+
+    getService(projectId: Id, serviceId: Id): Promise<ApiResult<ServiceDetails>> {
+        return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}`);
+    }
+
+    /** Changes the Service; a new image or new registry credentials resolve the tag again. */
+    updateService(projectId: Id, serviceId: Id, patch: ServicePatch): Promise<ApiResult<ServiceDetails>> {
+        return this.#call('PATCH', `/v1/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}`, patch);
+    }
+
+    /** Resolves the Service's tag again and deploys what it points at now. */
+    deployService(projectId: Id, serviceId: Id): Promise<ApiResult<ServiceDetails>> {
+        return this.#call('POST', `/v1/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}/deploy`);
+    }
+
+    /** Deletes the Service; refused while a Route serves it. */
+    deleteService(projectId: Id, serviceId: Id): Promise<ApiResult<void>> {
+        return this.#call('DELETE', `/v1/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}`);
+    }
+
+    /** The Project's Secrets, names only: a value is never returned. */
+    listSecrets(projectId: Id): Promise<ApiResult<Secret[]>> {
+        return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/secrets`);
+    }
+
+    /** Creates the Secret or replaces its value; the Project's Services get it in their environment. */
+    putSecret(projectId: Id, input: SecretInput): Promise<ApiResult<Secret>> {
+        return this.#call('PUT', `/v1/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(input.name)}`, {
+            value: input.value,
+        });
+    }
+
+    deleteSecret(projectId: Id, name: string): Promise<ApiResult<void>> {
+        return this.#call('DELETE', `/v1/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(name)}`);
     }
 
     async #call<T>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {

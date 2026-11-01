@@ -10,12 +10,18 @@ import {
     type Domain,
     type Project,
     type Route,
+    type Secret,
+    type ServiceDetails,
+    type ServiceRow,
 } from '@openupstream/sdk';
 import { getAccountRecord, liftHold, placeHold } from '../accounts/store.js';
 import { listDatabaseRows } from '../databases/rows.js';
 import { ensureDefaultDomains } from '../domains/store.js';
 import { listDomainRoutings } from '../routes/store.js';
-import { type ClusterStatus, type ControlPlaneKube } from '../kube.js';
+import { type ClusterStatus, type ControlPlaneKube, type DeploymentStatus, type SecretManifest } from '../kube.js';
+import type { RegistryDeps } from '../registry.js';
+import { listServiceRows } from '../services/store.js';
+import { parseKeyEncryptionKey } from '../secrets/envelope.js';
 import { err, ok } from '../result.js';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
 import { fakeStorage } from '../testing/storage.js';
@@ -48,16 +54,63 @@ const domainDeps = {
     customerDomain: 'openupstream.test',
     platformDomain: 'platform.test',
     lookupTxt: async (name: string) => (dnsDown ? err('ETIMEOUT') : ok(txt.get(name) ?? [])),
+    registry: fakeRegistry(),
+    kek: (() => {
+        const kek = parseKeyEncryptionKey('test-kek', Buffer.alloc(32, 1).toString('base64'));
+        assert.ok(kek.ok);
+        return kek.value;
+    })(),
 };
+/**
+ * The images the fake registry has, by `repository:tag`, and whether it is up.
+ * `acme/private` answers only with Basic credentials `ci:token`.
+ */
+const images = new Map<string, string>();
+let registryDown = false;
+function fakeRegistry(): RegistryDeps {
+    return {
+        lookup: async () => ['140.82.112.33'],
+        fetch: (async (input: URL | RequestInfo, init?: RequestInit) => {
+            if (registryDown) {
+                throw new Error('connect ECONNREFUSED');
+            }
+            const match = /^\/v2\/(.+)\/manifests\/(.+)$/.exec(new URL(String(input)).pathname);
+            const [, repository = '', reference = ''] = match ?? [];
+            const authorization = new Headers(init?.headers).get('authorization');
+            if (repository === 'acme/private' && authorization !== `Basic ${Buffer.from('ci:token').toString('base64')}`) {
+                return new Response(null, { status: 401, headers: { 'www-authenticate': 'Basic realm="registry"' } });
+            }
+            const digest = images.get(`${repository}:${reference}`);
+            return digest === undefined
+                ? new Response(null, { status: 404 })
+                : new Response(null, { status: 200, headers: { 'docker-content-digest': digest } });
+        }) as typeof fetch,
+    };
+}
+/** What the fake Kubernetes reports per Deployment name. */
+const deployments = new Map<string, DeploymentStatus>();
+
 /** What the fake Kubernetes reports per Cluster name; a string is an error. */
 const clusters = new Map<string, ClusterStatus | string>();
+
+/** The Secrets the fake Kubernetes received, latest last; namespaces in `missingNamespaces` do not exist. */
+const appliedSecrets: SecretManifest[] = [];
+const missingNamespaces = new Set<string>();
 
 const kube: ControlPlaneKube = {
     readCluster: async (_namespace, name) => {
         const status = clusters.get(name);
         return typeof status === 'string' ? err(status) : ok(status);
     },
+    readDeployment: async (_namespace, name) => ok(deployments.get(name)),
     remove: async () => ok(undefined),
+    applySecret: async (secret) => {
+        if (missingNamespaces.has(secret.metadata.namespace)) {
+            return ok('no-namespace');
+        }
+        appliedSecrets.push(secret);
+        return ok('applied');
+    },
 };
 
 /** A session token as madAuth issues it. */
@@ -113,6 +166,21 @@ const call = async (method: string, path: string, subject?: string, body?: unkno
 describe('authentication', () => {
     test('health needs no token', async () => {
         assert.equal((await api.request('/v1/health')).status, 200);
+    });
+
+    test("the CLI asks where to sign in without a token; 404 when no CLI client is registered", async () => {
+        assert.equal((await api.request('/v1/login')).status, 404);
+        const withCli = createApi({
+            pool: db.pool,
+            kube,
+            storage,
+            ...domainDeps,
+            cliLogin: { issuer: ISSUER, clientId: 'mc_cli' },
+            authenticate: async () => err({ kind: 'invalid', reason: 'none' }),
+        });
+        const response = await withCli.request('/v1/login');
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { issuer: ISSUER, clientId: 'mc_cli' });
     });
 
     test('no token, a forged token, another issuer, another token type or an expired token: 401', async () => {
@@ -486,8 +554,8 @@ describe('Routing', () => {
             hostname: domain.hostname,
             kind: 'default',
             routes: [
-                { id: routing?.routes[0]?.id, pathPrefix: '/docs', bucketName: 'alice-docs', spaFallback: false },
-                { id: routing?.routes[1]?.id, pathPrefix: '/', bucketName: 'alice-site', spaFallback: true },
+                { id: routing?.routes[0]?.id, pathPrefix: '/docs', kind: 'bucket', bucketName: 'alice-docs', spaFallback: false },
+                { id: routing?.routes[1]?.id, pathPrefix: '/', kind: 'bucket', bucketName: 'alice-site', spaFallback: true },
             ],
         });
     });
@@ -643,6 +711,246 @@ describe('Custom domains', () => {
     });
 });
 
+describe('Secrets', () => {
+    let projectId: string;
+    const path = (name = '') => `/v1/projects/${projectId}/secrets${name === '' ? '' : `/${name}`}`;
+    const latest = () => appliedSecrets.filter((secret) => secret.metadata.name === 'project-secrets').at(-1);
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    /** The API writes the Kubernetes Secret in the background: retries `check` for up to a second. */
+    const eventually = async (check: () => void) => {
+        for (let attempt = 0; ; attempt++) {
+            const failed = (() => {
+                try {
+                    check();
+                    return undefined;
+                } catch (error) {
+                    return error;
+                }
+            })();
+            if (failed === undefined) {
+                return;
+            }
+            if (attempt >= 50) {
+                throw failed;
+            }
+            await pause(20);
+        }
+    };
+    const decoded = (secret: SecretManifest | undefined) =>
+        Object.fromEntries(Object.entries(secret?.data ?? {}).map(([name, value]) => [name, Buffer.from(value, 'base64').toString('utf8')]));
+
+    before(async () => {
+        const response = await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'secret-tests' });
+        projectId = ((await response.json()) as Project).id;
+    });
+
+    test("created with PUT, and written into the Project's Kubernetes Secret at once", async () => {
+        const created = await call('PUT', path('API_TOKEN'), 'alice', { value: 's3cr3t ✓' });
+        assert.equal(created.status, 201);
+        const secret = (await created.json()) as Secret;
+        assert.equal(secret.name, 'API_TOKEN');
+        assert.ok(!('value' in secret));
+        await eventually(() => assert.deepEqual(decoded(latest()), { API_TOKEN: 's3cr3t ✓' }));
+        assert.equal(latest()?.metadata.name, 'project-secrets');
+        assert.equal(latest()?.metadata.namespace, `project-${projectId}`);
+    });
+
+    test('a second PUT replaces the value: 200; the list has names only', async () => {
+        assert.equal((await call('PUT', path('API_TOKEN'), 'alice', { value: 'rotated' })).status, 200);
+        assert.equal((await call('PUT', path('DATABASE_URL'), 'alice', { value: 'postgres://x' })).status, 201);
+        await eventually(() => assert.deepEqual(decoded(latest()), { API_TOKEN: 'rotated', DATABASE_URL: 'postgres://x' }));
+        const listed = (await (await call('GET', path(), 'alice')).json()) as Secret[];
+        assert.deepEqual(listed.map((s) => s.name), ['API_TOKEN', 'DATABASE_URL']);
+        assert.ok(listed.every((s) => !('value' in s)));
+    });
+
+    test('a name that is no environment variable name, or a value too large: 400', async () => {
+        assert.equal((await call('PUT', path('1ABC'), 'alice', { value: 'x' })).status, 400);
+        assert.equal((await call('PUT', path('A-B'), 'alice', { value: 'x' })).status, 400);
+        assert.equal((await call('PUT', path('BIG'), 'alice', { value: 'x'.repeat(64 * 1024 + 1) })).status, 400);
+        assert.equal((await call('PUT', path('NO_VALUE'), 'alice', {})).status, 400);
+    });
+
+    test("all of a Project's values together are limited", async () => {
+        for (const n of [1, 2, 3, 4, 5, 6, 7]) {
+            assert.equal((await call('PUT', path(`CHUNK_${n}`), 'alice', { value: 'x'.repeat(64 * 1024) })).status, 201);
+        }
+        const refused = await call('PUT', path('CHUNK_8'), 'alice', { value: 'x'.repeat(64 * 1024) });
+        assert.equal(refused.status, 400);
+        // Replacing a value counts the new one instead of the old.
+        assert.equal((await call('PUT', path('CHUNK_7'), 'alice', { value: 'small' })).status, 200);
+        for (const n of [1, 2, 3, 4, 5, 6, 7]) {
+            assert.equal((await call('DELETE', path(`CHUNK_${n}`), 'alice')).status, 204);
+        }
+    });
+
+    test('DELETE removes the value from the Kubernetes Secret; an unknown name: 404', async () => {
+        assert.equal((await call('DELETE', path('DATABASE_URL'), 'alice')).status, 204);
+        await eventually(() => assert.deepEqual(decoded(latest()), { API_TOKEN: 'rotated' }));
+        assert.equal((await call('DELETE', path('DATABASE_URL'), 'alice')).status, 404);
+    });
+
+    test('before the Project has a namespace the value is stored all the same', async () => {
+        await pause(200); // the earlier tests' writes
+        missingNamespaces.add(`project-${projectId}`);
+        const before = appliedSecrets.length;
+        assert.equal((await call('PUT', path('LATER'), 'alice', { value: 'v' })).status, 201);
+        await pause(200);
+        assert.equal(appliedSecrets.length, before);
+        missingNamespaces.delete(`project-${projectId}`);
+    });
+
+    test("another Account's Project: 404; a read-only key lists but cannot write", async () => {
+        assert.equal((await call('GET', path(), 'bob')).status, 404);
+        assert.equal((await call('PUT', path('X'), 'bob', { value: 'v' })).status, 404);
+        const read = { authorization: 'Bearer madauth_alice_read', 'content-type': 'application/json' };
+        assert.equal((await api.request(path(), { headers: read })).status, 200);
+        assert.equal((await api.request(path('X'), { method: 'PUT', headers: read, body: '{"value":"v"}' })).status, 403);
+    });
+});
+
+describe('Services', () => {
+    let projectId: string;
+    let service: ServiceDetails;
+    const digest = (c: string) => `sha256:${c.repeat(64)}`;
+    const path = (rest = '') => `/v1/projects/${projectId}/services${rest}`;
+    const input = { name: 'api', image: 'ghcr.io/acme/api:v1', port: 8080, memoryMb: 256, cpuMillicores: 250 };
+
+    before(async () => {
+        const response = await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'service-tests' });
+        projectId = ((await response.json()) as Project).id;
+        images.set('acme/api:v1', digest('1'));
+        images.set('acme/private:v1', digest('2'));
+        images.set('library/nginx:latest', digest('3'));
+    });
+
+    test('created with its tag pinned to the digest the registry has now; deploying', async () => {
+        const response = await call('POST', path(), 'alice', input);
+        assert.equal(response.status, 201);
+        service = (await response.json()) as ServiceDetails;
+        assert.equal(service.imageDigest, digest('1'));
+        assert.equal(service.replicas, 1);
+        assert.equal(service.homeSite, null);
+        assert.equal(service.registryAuth, false);
+        assert.equal(service.state, 'deploying');
+    });
+
+    test('the state is read from the Deployment', async () => {
+        const status = { replicas: 1, generation: 1, observedGeneration: 1, updatedReplicas: 1, availableReplicas: 1 };
+        deployments.set(`svc-${service.id}`, status);
+        assert.equal(((await (await call('GET', path(`/${service.id}`), 'alice')).json()) as ServiceDetails).state, 'running');
+        deployments.set(`svc-${service.id}`, { ...status, replicas: 2, updatedReplicas: 2 });
+        assert.equal(((await (await call('GET', path(`/${service.id}`), 'alice')).json()) as ServiceDetails).state, 'degraded');
+        deployments.delete(`svc-${service.id}`);
+    });
+
+    test('an image the registry does not have, or a malformed one: 400; a registry that is down: 503', async () => {
+        assert.equal((await call('POST', path(), 'alice', { ...input, name: 'gone', image: 'ghcr.io/acme/api:v9' })).status, 400);
+        assert.equal((await call('POST', path(), 'alice', { ...input, name: 'bad', image: 'ghcr.io/Acme/API' })).status, 400);
+        registryDown = true;
+        assert.equal((await call('POST', path(), 'alice', { ...input, name: 'down' })).status, 503);
+        registryDown = false;
+        assert.equal((await call('POST', path(), 'alice', { ...input, name: 'api' })).status, 409);
+    });
+
+    test('a private image needs registryAuth; it is stored sealed and never returned', async () => {
+        const image = 'ghcr.io/acme/private:v1';
+        assert.equal((await call('POST', path(), 'alice', { ...input, name: 'private', image })).status, 400);
+        const created = await call('POST', path(), 'alice', {
+            ...input,
+            name: 'private',
+            image,
+            registryAuth: { username: 'ci', password: 'token' },
+        });
+        assert.equal(created.status, 201);
+        const body = (await created.json()) as ServiceDetails & { password?: unknown };
+        assert.equal(body.registryAuth, true);
+        assert.equal(body.imageDigest, digest('2'));
+        assert.ok(!JSON.stringify(body).includes('token'));
+        const stored = await db.pool.query<{ registry_auth: Buffer }>('select registry_auth from services where id = $1', [body.id]);
+        assert.ok(!stored.rows[0]?.registry_auth.toString('latin1').includes('token'));
+    });
+
+    test('a new image at another registry drops the stored credentials instead of sending them there', async () => {
+        const created = (await (
+            await call('POST', path(), 'alice', { ...input, name: 'moving', image: 'ghcr.io/acme/private:v1', registryAuth: { username: 'ci', password: 'token' } })
+        ).json()) as ServiceDetails;
+        const moved = await call('PATCH', path(`/${created.id}`), 'alice', { image: 'nginx' });
+        assert.equal(moved.status, 200);
+        const body = (await moved.json()) as ServiceDetails;
+        assert.equal(body.registryAuth, false);
+        assert.equal(body.imageDigest, digest('3'));
+        assert.equal((await call('DELETE', path(`/${created.id}`), 'alice')).status, 202);
+    });
+
+    test('PATCH: a new tag is resolved again; replicas alone are not', async () => {
+        images.set('acme/api:v2', digest('4'));
+        const patched = await call('PATCH', path(`/${service.id}`), 'alice', { image: 'ghcr.io/acme/api:v2', replicas: 2 });
+        assert.equal(patched.status, 200);
+        const body = (await patched.json()) as ServiceDetails;
+        assert.equal(body.imageDigest, digest('4'));
+        assert.equal(body.replicas, 2);
+        images.set('acme/api:v2', digest('5'));
+        const scaled = (await (await call('PATCH', path(`/${service.id}`), 'alice', { replicas: 3 })).json()) as ServiceDetails;
+        assert.equal(scaled.imageDigest, digest('4'));
+        assert.equal((await call('PATCH', path(`/${service.id}`), 'alice', { replicas: 11 })).status, 400);
+    });
+
+    test('deploy resolves the same tag again and pins its new digest', async () => {
+        const deployed = await call('POST', path(`/${service.id}/deploy`), 'alice');
+        assert.equal(deployed.status, 200);
+        const body = (await deployed.json()) as ServiceDetails;
+        assert.equal(body.imageDigest, digest('5'));
+        assert.ok(body.deployedAt > service.deployedAt);
+    });
+
+    test('the operators get the pinned image, the site and a version of the Secrets', async () => {
+        const rows = (await listServiceRows(db.pool)).filter((row: ServiceRow) => row.project.id === projectId);
+        const api = rows.find((row) => row.service.name === 'api');
+        assert.equal(api?.pinnedImage, `ghcr.io/acme/api@${digest('5')}`);
+        assert.equal(api?.site, 'hetzner-fsn1');
+        const before = api?.secretsVersion;
+        assert.equal((await call('PUT', `/v1/projects/${projectId}/secrets/TOKEN`, 'alice', { value: 'x' })).status, 201);
+        // The version moves once the new values are in the cluster, which the API writes right after answering.
+        const versionNow = async () => (await listServiceRows(db.pool)).find((row) => row.service.id === service.id)?.secretsVersion;
+        for (let attempt = 0; attempt < 50 && (await versionNow()) === before; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        assert.notEqual(await versionNow(), before);
+    });
+
+    test('a single replica runs where the Project\'s oldest Database is, unless homeSite says otherwise', async () => {
+        assert.equal((await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name: 'main', homeSite: 'ovh-lim', memoryMb: 256, storageGb: 1 })).status, 201);
+        const site = async () => (await listServiceRows(db.pool)).find((row) => row.service.id === service.id)?.site;
+        assert.equal(await site(), 'ovh-lim');
+        assert.equal((await call('PATCH', path(`/${service.id}`), 'alice', { homeSite: 'hetzner-fsn1' })).status, 200);
+        assert.equal(await site(), 'hetzner-fsn1');
+    });
+
+    test('a Route sends a prefix to the Service, which cannot be deleted while it does', async () => {
+        const [domain] = (await (await call('GET', `/v1/projects/${projectId}/domains`, 'alice')).json()) as Domain[];
+        assert.ok(domain);
+        const routes = `/v1/projects/${projectId}/domains/${domain.id}/routes`;
+        const created = await call('POST', routes, 'alice', { pathPrefix: '/api', serviceId: service.id });
+        assert.equal(created.status, 201);
+        const route = (await created.json()) as Route;
+        assert.deepEqual(route.target, { kind: 'service', serviceId: service.id });
+        const routing = (await listDomainRoutings(db.pool)).find((d) => d.domainId === domain.id);
+        assert.deepEqual(routing?.routes, [{ id: route.id, pathPrefix: '/api', kind: 'service', serviceId: service.id, port: 8080 }]);
+        assert.equal((await call('POST', routes, 'alice', { pathPrefix: '/x', serviceId: service.id, spaFallback: true })).status, 400);
+        assert.equal((await call('POST', routes, 'alice', { pathPrefix: '/x', serviceId: '00000000-0000-4000-8000-000000000099' })).status, 400);
+        assert.equal((await call('DELETE', path(`/${service.id}`), 'alice')).status, 409);
+        assert.equal((await call('DELETE', `${routes}/${route.id}`, 'alice')).status, 204);
+    });
+
+    test("another Account's Project: 404; deleted: 202, then gone", async () => {
+        assert.equal((await call('GET', path(`/${service.id}`), 'bob')).status, 404);
+        assert.equal((await call('DELETE', path(`/${service.id}`), 'alice')).status, 202);
+        assert.equal((await call('GET', path(`/${service.id}`), 'alice')).status, 404);
+        assert.ok(!(await listServiceRows(db.pool)).some((row) => row.service.id === service.id));
+    });
+});
+
 describe('Holds', () => {
     /** The API as the platform runs it with a billing service: new Accounts wait for a payment method. */
     let gated: ReturnType<typeof createApi>;
@@ -711,7 +1019,8 @@ describe('Holds', () => {
         assert.ok(!storage.calls.includes('create erin-assets'), 'a held Account makes no Garage calls');
         await assert.rejects(
             db.pool.query(
-                `insert into services (project_id, name, image, memory_mb, cpu_millicores, port) values ($1, 'web', 'nginx', 128, 100, 80)`,
+                `insert into services (project_id, name, image, image_digest, memory_mb, cpu_millicores, port)
+                 values ($1, 'web', 'nginx', 'sha256:${'0'.repeat(64)}', 128, 100, 80)`,
                 [projectId],
             ),
             /has a Hold/,

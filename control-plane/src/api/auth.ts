@@ -6,13 +6,17 @@
  *   audience) verified locally against madAuth's JWKS; a session may do
  *   everything the user may, or
  * - one of their API keys (`madauth_…`, opaque), which madAuth checks for us
- *   (`POST /auth/api-keys/verify`); a key may only do what its scopes allow.
+ *   (`POST /auth/api-keys/verify`); a key may only do what its scopes allow,
+ *   or
+ * - an access token madAuth issued to `oup` through the device authorization
+ *   grant (`typ: at+jwt`, `aud` the CLI's client ID, decision 87), verified
+ *   locally like a session and allowed what a session is.
  *
  * The user is a madAuth identity (`usr_…`), which can be a Member of several
  * Accounts.
  */
 import { createHash } from 'node:crypto';
-import { type JWTVerifyGetKey, createLocalJWKSet, createRemoteJWKSet, jwtVerify } from 'jose';
+import { type JWTVerifyGetKey, createLocalJWKSet, createRemoteJWKSet, decodeProtectedHeader, jwtVerify } from 'jose';
 import type pg from 'pg';
 import { type Result, err, ok } from '../result.js';
 
@@ -33,6 +37,8 @@ export type AuthError =
 export type Authenticate = (token: string) => Promise<Result<Identity, AuthError>>;
 
 export const SESSION_TOKEN_TYPE = 'madauth-session+jwt';
+/** An OAuth access token as madAuth's OpenID Connect provider issues it (RFC 9068). */
+export const ACCESS_TOKEN_TYPE = 'at+jwt';
 export const API_KEY_PREFIX = 'madauth_';
 
 /** jose's errors about fetching the JWKS, as opposed to about the token. */
@@ -46,8 +52,27 @@ const sessionError = (error: unknown): AuthError => {
 };
 
 export function sessionVerifier(config: { readonly issuer: string; readonly keys: JWTVerifyGetKey }): Authenticate {
+    return jwtVerifier(config.keys, { issuer: config.issuer, algorithms: ['ES256'], typ: SESSION_TOKEN_TYPE });
+}
+
+/**
+ * Access tokens for the applications in `clientIds` (the CLI's): madAuth's
+ * keys and issuer, `typ: at+jwt`, and one of them as the audience. Without
+ * a client ID none is accepted.
+ */
+export function accessTokenVerifier(config: {
+    readonly issuer: string;
+    readonly keys: JWTVerifyGetKey;
+    readonly clientIds: readonly string[];
+}): Authenticate {
+    return config.clientIds.length === 0
+        ? async () => err({ kind: 'invalid', reason: 'no application may use access tokens here' })
+        : jwtVerifier(config.keys, { issuer: config.issuer, algorithms: ['ES256'], typ: ACCESS_TOKEN_TYPE, audience: [...config.clientIds] });
+}
+
+function jwtVerifier(keys: JWTVerifyGetKey, options: Parameters<typeof jwtVerify>[2]): Authenticate {
     return (token) =>
-        jwtVerify(token, config.keys, { issuer: config.issuer, algorithms: ['ES256'], typ: SESSION_TOKEN_TYPE }).then(
+        jwtVerify(token, keys, options).then(
             ({ payload }) =>
                 typeof payload.sub === 'string' && payload.sub !== ''
                     ? ok({
@@ -137,11 +162,27 @@ export function apiKeyVerifier(
     };
 }
 
-/** API keys go to madAuth, everything else is taken for a session token. */
+/** The JWT's `typ` header, or undefined when the token is no JWT. */
+const typeOf = (token: string): string | undefined => {
+    try {
+        return decodeProtectedHeader(token).typ;
+    } catch {
+        return undefined;
+    }
+};
+
+/**
+ * API keys go to madAuth, access tokens (by their `typ`) to `accessTokens`,
+ * everything else is taken for a session token.
+ */
 export const madauthAuthenticator =
-    (sessions: Authenticate, apiKeys: Authenticate): Authenticate =>
+    (sessions: Authenticate, apiKeys: Authenticate, accessTokens?: Authenticate): Authenticate =>
     (token) =>
-        token.startsWith(API_KEY_PREFIX) ? apiKeys(token) : sessions(token);
+        token.startsWith(API_KEY_PREFIX)
+            ? apiKeys(token)
+            : accessTokens !== undefined && typeOf(token) === ACCESS_TOKEN_TYPE
+              ? accessTokens(token)
+              : sessions(token);
 
 /**
  * The Accounts the madAuth user is a Member of. Their Member rows take the

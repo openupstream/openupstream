@@ -9,9 +9,9 @@
 #
 # Needs the Secret madauth (MADAUTH_SIGNING_KEY, the same on every replica,
 # and WEBHOOK_SECRET) and the ConfigMap madauth-config (MADAUTH_ISSUER,
-# ALLOWED_ORIGINS, WEBHOOK_EVENTS, and for the sidecar MAIL, MAIL_FROM,
-# SES_REGION, SIGNUP, SIGNUP_ALLOW, SIGNUP_MESSAGE), and with MAIL=ses the
-# Secret madauth-ses (the
+# ALLOWED_ORIGINS, WEBHOOK_EVENTS, optionally INITIAL_ADMIN_EMAIL, and for
+# the sidecar MAIL, MAIL_FROM, SES_REGION, SIGNUP, SIGNUP_ALLOW,
+# SIGNUP_MESSAGE), and with MAIL=ses the Secret madauth-ses (the
 # send-only key, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY). The control plane's image is
 # pinned by digest when applied (infra/dev-cluster/platform.sh).
 apiVersion: v1
@@ -54,7 +54,7 @@ spec:
         runAsNonRoot: true
       containers:
         - name: madauth
-          image: ghcr.io/inouiw/madauth-server:0.7.0-beta.2@sha256:e3156eef838dc89a0995693ef828a9d3bf583f90c9846984fe8912d02409e2b4
+          image: ghcr.io/inouiw/madauth-server:0.7.0@sha256:ca15f74ad1f03433065b8cdfdd81533f5a819910172538244137a2a0e5c2796e
           env:
             - name: DATABASE_URL
               valueFrom:

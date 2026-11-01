@@ -153,6 +153,35 @@ export interface BucketDetails extends Bucket {
     access: BucketAccess;
 }
 
+/**
+ * A container image from any registry, as given: `nginx:1.27`,
+ * `ghcr.io/acme/api:v3`, `registry.example.com:5000/team/app@sha256:…`.
+ * A reference without a tag means `latest`.
+ */
+export const IMAGE_REFERENCE_MAX_LENGTH = 512;
+
+/**
+ * Credentials for a private registry: write-only, stored encrypted with the
+ * Project's Secrets and never returned. The registry is the image's.
+ */
+export interface RegistryAuth {
+    username: string;
+    password: string;
+}
+
+/** Limits of a Service, checked by the API. */
+export const SERVICE_LIMITS = {
+    maxReplicas: 10,
+    minMemoryMb: 64,
+    maxMemoryMb: 16384,
+    minCpuMillicores: 50,
+    maxCpuMillicores: 8000,
+} as const;
+
+/**
+ * An HTTP container, always on, 1..N replicas (ARCHITECTURE.md,
+ * "Containers"). Its image is pinned to a digest whenever it is deployed.
+ */
 export interface Service {
     id: Id;
     projectId: Id;
@@ -160,15 +189,74 @@ export interface Service {
     name: string;
     /** The image reference as given, from any registry. */
     image: string;
-    /** `sha256:…`, pinned when the image is deployed; null before the first deploy. */
-    imageDigest: string | null;
+    /** `sha256:…`, the digest the tag resolved to when the Service was last deployed. */
+    imageDigest: string;
+    /** When the tag was last resolved: at creation, on a change of image, and on every deploy. */
+    deployedAt: Timestamp;
     replicas: number;
     memoryMb: number;
     cpuMillicores: number;
     /** The HTTP port the container listens on. */
     port: number;
+    /**
+     * Where a single replica runs; null: the Home site of the Project's oldest
+     * Database, or `hetzner-fsn1`. Two or more replicas run in both Sites.
+     */
+    homeSite: Site | null;
+    /** Whether the image is pulled with registry credentials. */
+    registryAuth: boolean;
     createdAt: Timestamp;
 }
+
+/** Creates a Service; the tag is resolved to a digest while the request waits. */
+export interface ServiceInput {
+    name: string;
+    image: string;
+    port: number;
+    /** Default 1. */
+    replicas?: number;
+    memoryMb: number;
+    cpuMillicores: number;
+    homeSite?: Site;
+    registryAuth?: RegistryAuth;
+}
+
+/**
+ * Changes a Service. A new `image` or `registryAuth` resolves the tag again;
+ * `registryAuth: null` removes the credentials, `homeSite: null` the choice.
+ */
+export interface ServicePatch {
+    image?: string;
+    port?: number;
+    replicas?: number;
+    memoryMb?: number;
+    cpuMillicores?: number;
+    homeSite?: Site | null;
+    registryAuth?: RegistryAuth | null;
+}
+
+/**
+ * Read live from its Deployment: `deploying` until the first replica is
+ * up and while a new version rolls out, `running` with every replica
+ * available, `degraded` with some, `unknown` when Kubernetes cannot be asked.
+ */
+export type ServiceState = 'deploying' | 'running' | 'degraded' | 'unknown';
+
+/** A Service as the API returns it. */
+export interface ServiceDetails extends Service {
+    state: ServiceState;
+}
+
+/** A Secret's name is an environment variable name (the schema checks the same). */
+export const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,254}$/;
+
+/**
+ * At most this many bytes (UTF-8) per value, and all of a Project's values
+ * together at most SECRETS_MAX_TOTAL_BYTES: they go into one Kubernetes
+ * Secret (1 MiB at most) and into every container's environment.
+ */
+export const SECRET_VALUE_MAX_BYTES = 64 * 1024;
+export const SECRETS_MAX_TOTAL_BYTES = 512 * 1024;
 
 /**
  * A Secret's value is write-only: the API accepts it and hands it to the
@@ -186,6 +274,15 @@ export interface Secret {
 export interface SecretInput {
     name: string;
     value: string;
+}
+
+/**
+ * Where `oup login` signs in (`GET /v1/login`, no token needed): madAuth's
+ * issuer and the CLI's client ID there, for the device authorization grant.
+ */
+export interface CliLogin {
+    issuer: string;
+    clientId: string;
 }
 
 /** The TXT record that proves an Account owns a custom domain. */
@@ -266,16 +363,23 @@ export interface Route {
 }
 
 /**
- * Creates a Route to a Bucket of the same Project. The prefix is stripped:
- * `/docs/a.html` on the Route `/docs` serves the object `a.html`. With
- * `spaFallback`, a path with no object serves `index.html` with status 200;
- * every Route to one Bucket has the same `spaFallback`.
+ * Creates a Route to a Bucket or a Service of the same Project. For a
+ * Bucket the prefix is stripped: `/docs/a.html` on the Route `/docs` serves
+ * the object `a.html`. With `spaFallback`, a path with no object serves
+ * `index.html` with status 200; every Route to one Bucket has the same
+ * `spaFallback`. A Service gets the path unchanged.
  */
-export interface RouteInput {
-    pathPrefix: string;
-    bucketId: Id;
-    spaFallback?: boolean;
-}
+export type RouteInput =
+    | {
+          pathPrefix: string;
+          bucketId: Id;
+          spaFallback?: boolean;
+      }
+    | {
+          pathPrefix: string;
+          /** The Service gets the request with its path as it came, prefix included. */
+          serviceId: Id;
+      };
 
 export const RESOURCE_KINDS = ['database', 'bucket', 'service'] as const;
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];

@@ -4,7 +4,7 @@
  * public API: it is served on its own port, never routed by ingress, and
  * callers authenticate with their Kubernetes ServiceAccount token.
  */
-import type { Account, Database, Domain, Id, Member, Project, Route } from './model.js';
+import type { Account, Database, Domain, Id, Member, Project, Route, Service, Site } from './model.js';
 
 /**
  * Kubernetes names, by id (ARCHITECTURE.md, decision 42): the operators
@@ -17,6 +17,23 @@ export const clusterName = (database: Pick<Database, 'id'>): string => `db-${dat
 
 /** Cannot share the Cluster's name, nor `<cluster>-rw`, which the Cluster's own Service takes. */
 export const poolerName = (database: Pick<Database, 'id'>): string => `${clusterName(database)}-pooler`;
+
+/**
+ * The Kubernetes Secret in a Project's namespace that holds all its Secrets'
+ * values; the control plane writes it, Services read it with `envFrom`.
+ */
+export const PROJECT_SECRETS = 'project-secrets';
+
+/**
+ * The `kubernetes.io/dockerconfigjson` Secret in a Project's namespace with
+ * the registry credentials of all its Services, each under its image's
+ * repository; the control plane writes it, every Service names it in
+ * `imagePullSecrets`.
+ */
+export const PROJECT_REGISTRY_AUTH = 'project-registry-auth';
+
+/** The Service's Deployment and Kubernetes Service, in its Project's namespace. */
+export const serviceObjectName = (service: Pick<Service, 'id'>): string => `svc-${service.id}`;
 
 /** The folder under the backup bucket that holds one Database's base backups and WAL. */
 export const backupPrefix = (projectId: Id, databaseId: Id): string =>
@@ -45,12 +62,22 @@ export const INTERNAL_ACCOUNTS_PATH = '/internal/v1/accounts';
 /** `GET` lists every Domain that has Routes, with its Routes, for the Routes operator. */
 export const INTERNAL_ROUTES_PATH = '/internal/v1/routes';
 
+/** `GET` lists every Service with its Project, for the Services operator. */
+export const INTERNAL_SERVICES_PATH = '/internal/v1/services';
+
 /** The Traefik IngressRoute that serves one Domain, in its Project's namespace. */
 export const ingressRouteName = (domainId: Id): string => `domain-${domainId}`;
 
+/** A Route as the Routes operator needs it: the Bucket by name, or the Service with its port. */
+export type RoutedPath = Pick<Route, 'id' | 'pathPrefix'> &
+    (
+        | { readonly kind: 'bucket'; readonly bucketName: string; readonly spaFallback: boolean }
+        | { readonly kind: 'service'; readonly serviceId: Id; readonly port: number }
+    );
+
 /**
  * One Domain as the Routes operator needs it: where it lives, its hostname,
- * and its Routes with the name of the Bucket each one serves.
+ * and its Routes with what each one serves.
  */
 export interface DomainRouting {
     readonly projectId: Id;
@@ -60,11 +87,28 @@ export interface DomainRouting {
     readonly hostname: string;
     /** A default Domain uses the customer domain's wildcard certificate; a custom one gets its own. */
     readonly kind: Domain['kind'];
-    readonly routes: readonly (Pick<Route, 'id' | 'pathPrefix'> & { readonly bucketName: string; readonly spaFallback: boolean })[];
+    readonly routes: readonly RoutedPath[];
 }
 
 export interface AccountRecord extends Account {
     readonly members: readonly Pick<Member, 'authSubject' | 'email'>[];
+}
+
+/** One Service as the Services operator needs it. */
+export interface ServiceRow {
+    readonly project: Project;
+    readonly service: Pick<Service, 'id' | 'name' | 'image' | 'imageDigest' | 'replicas' | 'memoryMb' | 'cpuMillicores' | 'port'>;
+    /** What the Deployment runs: `<registry>/<repository>@<digest>`. */
+    readonly pinnedImage: string;
+    /** Where a single replica runs: the Service's homeSite, else the Project's oldest Database's, else `hetzner-fsn1`. */
+    readonly site: Site;
+    /**
+     * The version of the Project's Secrets in its Kubernetes Secret: it
+     * changes once the control plane has written new values there, never
+     * before. The operator puts it on the pod template, so a change rolls the
+     * Service and its pods read the new values.
+     */
+    readonly secretsVersion: string;
 }
 
 export interface DatabaseRow {

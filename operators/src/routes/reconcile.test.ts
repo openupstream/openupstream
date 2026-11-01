@@ -1,13 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { DomainRouting } from '@openupstream/sdk';
-import { type Kube, type ObjectRef, refOf } from '../kube.js';
+import { type Kube, type KubeObject, type ObjectRef, refOf } from '../kube.js';
 import { err, ok } from '../result.js';
 import { planRoutes } from './manifests.js';
 import { reconcileRoutes } from './reconcile.js';
 import { routesPass } from './loop.js';
 
 const settings = { clusterIssuer: 'letsencrypt-staging' };
+/** What the operator lists for pruning: its objects, not the shared namespace and NetworkPolicy. */
+const ours = (object: KubeObject) => object.metadata.labels?.['openupstream.io/component'] === 'routes';
 
 const routing: DomainRouting = {
     projectId: '11111111-1111-4111-8111-111111111111',
@@ -15,7 +17,7 @@ const routing: DomainRouting = {
     domainId: '22222222-2222-4222-8222-222222222222',
     hostname: 'shop-a1b2c3d4.openupstream.app',
     kind: 'default',
-    routes: [{ id: '44444444-4444-4444-8444-444444444444', pathPrefix: '/', bucketName: 'shop-site', spaFallback: true }],
+    routes: [{ id: '44444444-4444-4444-8444-444444444444', pathPrefix: '/', kind: 'bucket', bucketName: 'shop-site', spaFallback: true }],
 };
 
 /** A cluster holding `existing` objects of ours; records applies and removes. */
@@ -46,17 +48,17 @@ test('applies the plan and deletes only the objects of ours no longer wanted', a
         { apiVersion: 'traefik.io/v1alpha1', kind: 'IngressRoute', namespace: 'project-x', name: 'domain-gone' },
         { apiVersion: 'traefik.io/v1alpha1', kind: 'Middleware', namespace: 'project-x', name: 'route-gone-bucket' },
     ];
-    const current = planRoutes([routing], settings).filter((o) => o.kind !== 'Namespace').map(refOf);
+    const current = planRoutes([routing], settings).filter(ours).map(refOf);
     const { kube, applied, removed, listed } = fakeKube([...current, ...stale]);
     const report = await reconcileRoutes(kube, [routing], settings);
     assert.equal(applied.length, planRoutes([routing], settings).length);
     assert.deepEqual(removed, ['IngressRoute domain-gone', 'Middleware route-gone-bucket']);
-    assert.deepEqual(listed, Array(4).fill('openupstream.io/component=routes'));
+    assert.deepEqual(listed, Array(5).fill('openupstream.io/component=routes'));
     assert.equal(report.failed.length, 0);
 });
 
 test('an empty routing table takes every Route down', async () => {
-    const current = planRoutes([routing], settings).filter((o) => o.kind !== 'Namespace').map(refOf);
+    const current = planRoutes([routing], settings).filter(ours).map(refOf);
     const { kube, removed } = fakeKube(current);
     await reconcileRoutes(kube, [], settings);
     assert.equal(removed.length, current.length);
@@ -83,7 +85,7 @@ test('each Project in order, Projects side by side', async () => {
 
 test("a deleted custom domain's Certificate is pruned after its IngressRoute", async () => {
     const custom = { ...routing, domainId: '88888888-8888-4888-8888-888888888888', hostname: 'www.shop.example', kind: 'custom' as const };
-    const current = planRoutes([routing, custom], settings).filter((o) => o.kind !== 'Namespace').map(refOf);
+    const current = planRoutes([routing, custom], settings).filter(ours).map(refOf);
     const { kube, removed } = fakeKube(current);
     await reconcileRoutes(kube, [routing], settings);
     assert.deepEqual(removed, ['IngressRoute domain-88888888-8888-4888-8888-888888888888', 'Certificate domain-88888888-8888-4888-8888-888888888888']);

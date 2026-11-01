@@ -6,18 +6,25 @@
  * ExternalName Service `garage-web` for Garage's website endpoint (Traefik
  * routes only to Services in the IngressRoute's own namespace), and the
  * Middlewares every Domain shares (compression, HSTS). Per Domain: one
- * IngressRoute. Per Route: a Middleware that tells Garage which Bucket to
- * serve (the Host header is the Bucket's name), and one that strips the
- * path prefix.
+ * IngressRoute. Per Route to a Bucket: a Middleware that tells Garage which
+ * Bucket to serve (the Host header is the Bucket's name), and one that
+ * strips the path prefix.
+ *
+ * A Route to a Service goes to its Kubernetes Service (decision 93), path
+ * unchanged. Like the platform's own routes (infra/ingress), Traefik gives
+ * up connecting to a pod after 1 s (the ServersTransport `fail-fast`), so a
+ * dark Site's pods do not stall requests, and retries GET and HEAD on
+ * another pod; other methods are never resent, since the pod may have acted
+ * on them. A Project with a Route to a Service gets both objects.
  *
  * A default Domain uses the default TLS store's wildcard for the customer
  * domain (infra/ingress). A custom domain gets a Certificate of its own,
  * which cert-manager solves with HTTP-01: the ClusterIssuer picks that
  * solver for Certificates carrying COMPONENT_LABEL (decision 85).
  */
-import { type DomainRouting, ingressRouteName } from '@openupstream/sdk';
+import { type DomainRouting, type RoutedPath, ingressRouteName, serviceObjectName } from '@openupstream/sdk';
 import type { KubeObject } from '../kube.js';
-import { LABELS, MANAGED_BY, namespaceFor, projectNamespace } from '../kubernetes.js';
+import { LABELS, MANAGED_BY, projectNamespace, projectObjectsFor } from '../kubernetes.js';
 
 /** Carried by every object this operator applies, so it can find and delete the ones no longer wanted. */
 export const COMPONENT_LABEL = 'openupstream.io/component';
@@ -37,6 +44,7 @@ export const CERT_MANAGER = 'cert-manager.io/v1';
 export const PRUNED_KINDS = [
     { apiVersion: TRAEFIK, kind: 'IngressRoute' },
     { apiVersion: TRAEFIK, kind: 'Middleware' },
+    { apiVersion: TRAEFIK, kind: 'ServersTransport' },
     { apiVersion: 'v1', kind: 'Service' },
     { apiVersion: CERT_MANAGER, kind: 'Certificate' },
 ] as const;
@@ -46,7 +54,8 @@ export interface RoutesSettings {
     readonly clusterIssuer: string;
 }
 
-type Routed = DomainRouting['routes'][number];
+type Routed = RoutedPath;
+type BucketRoute = Extract<RoutedPath, { kind: 'bucket' }>;
 
 const labels = (projectId: string) => ({
     [LABELS.projectId]: projectId,
@@ -64,9 +73,27 @@ const middleware = (projectId: string, name: string, spec: Record<string, unknow
 const hostMiddlewareName = (route: Routed) => `route-${route.id}-bucket`;
 const stripMiddlewareName = (route: Routed) => `route-${route.id}-strip`;
 
+/** Connecting to a pod gives up after 1 s, so a request finds a live one instead of waiting for a dark Site. */
+const FAIL_FAST = 'fail-fast';
+const RETRY = 'retry-other-pod';
+
+const servesServices = (routings: readonly DomainRouting[], projectId: string) =>
+    routings.some((routing) => routing.projectId === projectId && routing.routes.some((route) => route.kind === 'service'));
+
+/** What a Project's Routes to Services need: the 1 s dial timeout and the retry of GET and HEAD. */
+const serviceRoutingObjects = (projectId: string): KubeObject[] => [
+    {
+        apiVersion: TRAEFIK,
+        kind: 'ServersTransport',
+        metadata: { name: FAIL_FAST, namespace: projectNamespace(projectId), labels: labels(projectId) },
+        spec: { forwardingTimeouts: { dialTimeout: '1s' } },
+    },
+    middleware(projectId, RETRY, { retry: { attempts: 3, initialInterval: '50ms' } }),
+];
+
 /** What a Project's namespace needs once it has a Route. */
 const projectObjects = (routing: DomainRouting): KubeObject[] => [
-    namespaceFor({ id: routing.projectId, name: routing.projectName }),
+    ...projectObjectsFor({ id: routing.projectId, name: routing.projectName }),
     {
         apiVersion: 'v1',
         kind: 'Service',
@@ -84,7 +111,9 @@ export const matchOf = (hostname: string, pathPrefix: string): string =>
         ? `Host(\`${hostname}\`)`
         : `Host(\`${hostname}\`) && (Path(\`${pathPrefix}\`) || PathPrefix(\`${pathPrefix}/\`))`;
 
-const routeObjects = (routing: DomainRouting, route: Routed): KubeObject[] => [
+const routeObjects = (routing: DomainRouting, route: Routed): KubeObject[] => (route.kind === 'bucket' ? bucketRouteObjects(routing, route) : []);
+
+const bucketRouteObjects = (routing: DomainRouting, route: BucketRoute): KubeObject[] => [
     // Garage's website endpoint finds the Bucket by the Host header, its global alias.
     middleware(routing.projectId, hostMiddlewareName(route), { headers: { customRequestHeaders: { Host: route.bucketName } } }),
     ...(route.pathPrefix === '/'
@@ -107,6 +136,51 @@ const certificate = (routing: DomainRouting, settings: RoutesSettings): KubeObje
     },
 });
 
+/**
+ * Traefik orders rules by length unless told otherwise, which would let a
+ * long rule at `/` win over a short one at `/api`; the longer prefix always
+ * wins here, and of one prefix's two Service rules, the one for GET and HEAD.
+ */
+export const priorityOf = (pathPrefix: string, safeMethodsOnly: boolean): number =>
+    1000 + 2 * (pathPrefix === '/' ? 0 : pathPrefix.length) + (safeMethodsOnly ? 1 : 0);
+
+/** One rule of an IngressRoute. */
+interface Rule {
+    readonly match: string;
+    readonly kind: 'Rule';
+    readonly priority: number;
+    readonly middlewares: readonly { readonly name: string }[];
+    readonly services: readonly { readonly name: string; readonly port: number; readonly serversTransport?: string }[];
+}
+
+const bucketRule = (routing: DomainRouting, route: BucketRoute): Rule => ({
+    match: matchOf(routing.hostname, route.pathPrefix),
+    kind: 'Rule',
+    priority: priorityOf(route.pathPrefix, false),
+    middlewares: [
+        { name: 'hsts' },
+        { name: 'compress' },
+        ...(route.pathPrefix === '/' ? [] : [{ name: stripMiddlewareName(route) }]),
+        { name: hostMiddlewareName(route) },
+    ],
+    services: [{ name: 'garage-web', port: GARAGE_WEB.port }],
+});
+
+const serviceRules = (routing: DomainRouting, route: Extract<RoutedPath, { kind: 'service' }>): Rule[] => {
+    const services = [{ name: serviceObjectName({ id: route.serviceId }), port: route.port, serversTransport: FAIL_FAST }];
+    const match = matchOf(routing.hostname, route.pathPrefix);
+    return [
+        {
+            match: `${match} && (Method(\`GET\`) || Method(\`HEAD\`))`,
+            kind: 'Rule',
+            priority: priorityOf(route.pathPrefix, true),
+            middlewares: [{ name: 'hsts' }, { name: 'compress' }, { name: RETRY }],
+            services,
+        },
+        { match, kind: 'Rule', priority: priorityOf(route.pathPrefix, false), middlewares: [{ name: 'hsts' }, { name: 'compress' }], services },
+    ];
+};
+
 const ingressRoute = (routing: DomainRouting): KubeObject => ({
     apiVersion: TRAEFIK,
     kind: 'IngressRoute',
@@ -117,17 +191,7 @@ const ingressRoute = (routing: DomainRouting): KubeObject => ({
     },
     spec: {
         entryPoints: ['websecure'],
-        routes: routing.routes.map((route) => ({
-            match: matchOf(routing.hostname, route.pathPrefix),
-            kind: 'Rule',
-            middlewares: [
-                { name: 'hsts' },
-                { name: 'compress' },
-                ...(route.pathPrefix === '/' ? [] : [{ name: stripMiddlewareName(route) }]),
-                { name: hostMiddlewareName(route) },
-            ],
-            services: [{ name: 'garage-web', port: GARAGE_WEB.port }],
-        })),
+        routes: routing.routes.flatMap((route): Rule[] => (route.kind === 'bucket' ? [bucketRule(routing, route)] : serviceRules(routing, route))),
         // A default Domain: the default TLS store's certificate, the customer domain's wildcard.
         tls: routing.kind === 'custom' ? { secretName: tlsSecretName(routing) } : {},
     },
@@ -140,7 +204,10 @@ const ingressRoute = (routing: DomainRouting): KubeObject => ({
 export function planRoutes(routings: readonly DomainRouting[], settings: RoutesSettings): KubeObject[] {
     const projects = [...new Map(routings.map((routing) => [routing.projectId, routing])).values()];
     return [
-        ...projects.flatMap(projectObjects),
+        ...projects.flatMap((routing) => [
+            ...projectObjects(routing),
+            ...(servesServices(routings, routing.projectId) ? serviceRoutingObjects(routing.projectId) : []),
+        ]),
         ...routings.flatMap((routing) => [
             ...routing.routes.flatMap((route) => routeObjects(routing, route)),
             ...(routing.kind === 'custom' ? [certificate(routing, settings)] : []),

@@ -6,6 +6,7 @@ import { DNS_LABEL } from '@openupstream/sdk';
 import { BACKUP_ENDPOINT } from './backups.js';
 import { retentionInterval } from './cleanup.js';
 import type { GarageConfig } from './garage.js';
+import { type KeyEncryptionKey, parseKeyEncryptionKey } from './secrets/envelope.js';
 import { type Result, err, ok } from './result.js';
 
 export interface Config {
@@ -17,6 +18,8 @@ export interface Config {
     readonly billingCallers: ReadonlySet<string>;
     /** ServiceAccounts that may list the routing table: the Routes operator. */
     readonly routesCallers: ReadonlySet<string>;
+    /** ServiceAccounts that may list Services: the Services operator. */
+    readonly servicesCallers: ReadonlySet<string>;
     /** The Holds every new Account starts with, e.g. `payment-method`. None by default: no gate. */
     readonly newAccountHolds: readonly string[];
     readonly auth: {
@@ -26,6 +29,12 @@ export interface Config {
         readonly madauthUrl: string;
         /** A JWKS document instead of madAuth's (tests). */
         readonly jwks?: string;
+        /**
+         * `oup`'s client ID in madAuth, registered with the device grant
+         * (decision 87): its access tokens are accepted, and `GET /v1/login`
+         * tells the CLI. Unset: the CLI cannot sign in, API keys still work.
+         */
+        readonly cliClientId?: string;
     };
     readonly backup: {
         readonly endpoint: string;
@@ -37,6 +46,8 @@ export interface Config {
         readonly retention: string;
     };
     readonly garage: GarageConfig;
+    /** Wraps every Project's data key (ARCHITECTURE.md, "Secrets"). */
+    readonly kek: KeyEncryptionKey;
     /** Customer hostnames live under it, e.g. Buckets at `<bucket>.s3.<customerDomain>` (decision 68). */
     readonly customerDomain: string;
     /** Our own hostnames live under it (decision 67); like the customer domain, no Account may claim it. */
@@ -59,6 +70,7 @@ export interface WaitlistConfig {
 /** The ServiceAccounts the internal API answers by default. */
 export const DEFAULT_ALLOWED_CALLERS = ['system:serviceaccount:openupstream-system:databases-operator'];
 export const DEFAULT_ROUTES_CALLERS = ['system:serviceaccount:openupstream-system:routes-operator'];
+export const DEFAULT_SERVICES_CALLERS = ['system:serviceaccount:openupstream-system:services-operator'];
 
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -100,6 +112,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
     if (madauthUrl !== '' && !URL.canParse(madauthUrl)) {
         problems.push('MADAUTH_URL must be a URL');
     }
+    const cliClientId = env['CLI_CLIENT_ID'] ?? '';
     const jwks = env['AUTH_JWKS'] ?? '';
     if (jwks !== '' && !isJwks(jwks)) {
         problems.push('AUTH_JWKS must be a JWKS document: {"keys": [...]}');
@@ -117,6 +130,12 @@ export function configFrom(env: Env): Result<Config, string[]> {
         problems.push('GARAGE_ADMIN_URL and GARAGE_S3_URL must be URLs');
     }
     const garageAdminToken = required('GARAGE_ADMIN_TOKEN');
+    const kekId = required('SECRETS_KEK_ID');
+    const kekBase64 = required('SECRETS_KEK');
+    const kek = kekId === '' || kekBase64 === '' ? undefined : parseKeyEncryptionKey(kekId, kekBase64);
+    if (kek !== undefined && !kek.ok) {
+        problems.push(`SECRETS_KEK: ${kek.error.kind === 'invalid-key' ? kek.error.message : kek.error.kind}`);
+    }
     const domainName = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
     const customerDomain = required('CUSTOMER_DOMAIN');
     if (customerDomain !== '' && !domainName.test(customerDomain)) {
@@ -140,7 +159,14 @@ export function configFrom(env: Env): Result<Config, string[]> {
         problems.push('CLEANUP_INTERVAL_SECONDS must be a number of seconds, at least 1');
     }
     const waitlist = waitlistFrom(env, problems);
-    if (problems.length > 0 || retention === undefined || publicPort === undefined || internalPort === undefined) {
+    if (
+        problems.length > 0 ||
+        retention === undefined ||
+        publicPort === undefined ||
+        internalPort === undefined ||
+        kek === undefined ||
+        !kek.ok
+    ) {
         return err(problems);
     }
     return ok({
@@ -150,8 +176,9 @@ export function configFrom(env: Env): Result<Config, string[]> {
         allowedCallers: new Set(list(env['ALLOWED_CALLERS'] ?? DEFAULT_ALLOWED_CALLERS.join(','))),
         billingCallers: new Set(list(env['BILLING_CALLERS'])),
         routesCallers: new Set(list(env['ROUTES_CALLERS'] ?? DEFAULT_ROUTES_CALLERS.join(','))),
+        servicesCallers: new Set(list(env['SERVICES_CALLERS'] ?? DEFAULT_SERVICES_CALLERS.join(','))),
         newAccountHolds,
-        auth: { issuer, madauthUrl, ...(jwks === '' ? {} : { jwks }) },
+        auth: { issuer, madauthUrl, ...(jwks === '' ? {} : { jwks }), ...(cliClientId === '' ? {} : { cliClientId }) },
         backup: {
             endpoint: env['BACKUP_ENDPOINT'] ?? BACKUP_ENDPOINT,
             region: env['BACKUP_REGION'] ?? 'nbg1',
@@ -161,6 +188,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
             retention,
         },
         garage: { adminUrl: garageAdminUrl, adminToken: garageAdminToken, s3Url: garageS3Url },
+        kek: kek.value,
         customerDomain,
         platformDomain,
         cleanupIntervalMs: cleanupSeconds * 1000,

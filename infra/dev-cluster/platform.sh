@@ -10,7 +10,8 @@
 #    openupstream-ses (MAIL=log writes them to the sidecar's log instead);
 # 3. the control plane, which migrates and seeds the platform rows, so from
 #    then on the operator owns those Databases too; it manages Buckets in
-#    Garage with the admin token garage.sh left it;
+#    Garage with the admin token garage.sh left it, and encrypts Secrets
+#    with a key-encryption key generated once (secrets-kek);
 # 4. the public hostnames (after ingress.sh): madAuth at
 #    https://$PLATFORM_DOMAIN/auth, the API at https://api.$PLATFORM_DOMAIN,
 #    with a certificate from CLUSTER_ISSUER; with SIGNUP=closed also the
@@ -18,7 +19,9 @@
 # 5. the Databases operator, reconciling every 30 s with rows from the
 #    control plane;
 # 6. the Routes operator, turning the routing table into Traefik objects
-#    every 30 s.
+#    every 30 s;
+# 7. the Services operator, running every Service as a Deployment under
+#    gVisor every 30 s.
 #
 # Images come from GHCR, pinned by digest: by default the ones built for the
 # current commit (.github/workflows/images.yml). Override with IMAGE_TAG.
@@ -65,6 +68,11 @@ case $SIGNUP in
     [[ $MAIL == ses || $MAIL == log ]] || { echo "SIGNUP=closed needs MAIL=ses or MAIL=log for the waitlist's e-mails" >&2; exit 1; } ;;
   *) echo "SIGNUP must be open or closed" >&2; exit 1 ;;
 esac
+# INITIAL_ADMIN_EMAIL makes that user madAuth's first admin once they sign
+# in; an admin registers the CLI (infra/madauth/register-cli.sh), whose
+# client ID then goes into CLI_CLIENT_ID for `oup login` (decision 87).
+INITIAL_ADMIN_EMAIL=${INITIAL_ADMIN_EMAIL:-}
+CLI_CLIENT_ID=${CLI_CLIENT_ID:-}
 
 # Anonymous, like the cluster's pull: fails while a package is not public.
 digest() { # image name → image@sha256:…
@@ -108,8 +116,8 @@ kubectl -n "$PLATFORM_NS" create configmap madauth-config --dry-run=client -o ya
   --from-literal=SES_REGION="${SES_REGION:-eu-central-1}" \
   --from-literal=SIGNUP="$SIGNUP" \
   --from-literal=SIGNUP_ALLOW="$SIGNUP_ALLOW" \
-  --from-literal=SIGNUP_MESSAGE="Sign-up is not open yet. Leave your e-mail address at https://$PLATFORM_DOMAIN to hear when it is." |
-  kubectl apply -f - >/dev/null
+  --from-literal=SIGNUP_MESSAGE="Sign-up is not open yet. Leave your e-mail address at https://$PLATFORM_DOMAIN to hear when it is." \
+  ${INITIAL_ADMIN_EMAIL:+--from-literal=INITIAL_ADMIN_EMAIL="$INITIAL_ADMIN_EMAIL"} | kubectl apply -f - >/dev/null
 if [[ $MAIL == ses ]]; then
   # The send-only key (docs/self-hosting.md, section 6), straight from the
   # profile into the Secret. Read first: set -e does not see a failure
@@ -121,9 +129,28 @@ if [[ $MAIL == ses ]]; then
     kubectl apply -f - >/dev/null
   unset SES_KEY_ID SES_SECRET
 fi
+# Pods read their ConfigMap once, at start: a hash of it in the pod template
+# rolls them out when a run of this script changes it (e.g. CLI_CLIENT_ID),
+# and only then.
+config_rollout() { # deployment, configmap
+  local hash
+  hash=$(kubectl -n "$PLATFORM_NS" get configmap "$2" -o jsonpath='{.data}' | shasum | cut -c1-16)
+  kubectl -n "$PLATFORM_NS" patch deployment "$1" >/dev/null \
+    -p "{\"spec\": {\"template\": {\"metadata\": {\"annotations\": {\"openupstream.io/config-hash\": \"$hash\"}}}}}"
+}
+
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/infra/madauth/madauth.yaml" |
   kubectl apply -f - >/dev/null
+config_rollout madauth madauth-config
 kubectl -n "$PLATFORM_NS" rollout status deployment/madauth --timeout=5m
+
+# The key-encryption key for Secrets (ARCHITECTURE.md, "Secrets"): created
+# once and never replaced, since every Project's data key is wrapped by it.
+if ! kubectl -n "$PLATFORM_NS" get secret secrets-kek >/dev/null 2>&1; then
+  kubectl -n "$PLATFORM_NS" create secret generic secrets-kek --dry-run=client -o yaml \
+    --from-literal=SECRETS_KEK_ID="kek-$(date -u +%Y%m%d)" \
+    --from-literal=SECRETS_KEK="$(openssl rand -base64 32)" | kubectl apply -f - >/dev/null
+fi
 
 # The waitlist's settings (control-plane/src/config.ts); its e-mails use
 # madAuth's send-only key from the Secret madauth-ses.
@@ -148,9 +175,11 @@ kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client
   --from-literal=GARAGE_S3_URL=http://garage.garage.svc:3900 \
   --from-literal=CUSTOMER_DOMAIN="$CUSTOMER_DOMAIN" \
   --from-literal=PLATFORM_DOMAIN="$PLATFORM_DOMAIN" \
+  --from-literal=CLI_CLIENT_ID="${CLI_CLIENT_ID:-}" \
   ${WAITLIST_CONFIG[@]+"${WAITLIST_CONFIG[@]}"} | kubectl apply -f - >/dev/null
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/control-plane/deploy/control-plane.yaml" |
   kubectl apply -f - >/dev/null
+config_rollout control-plane control-plane-config
 kubectl -n "$PLATFORM_NS" rollout status deployment/control-plane --timeout=5m
 
 sed -e "s#PLATFORM_DOMAIN#$PLATFORM_DOMAIN#g" -e "s#CLUSTER_ISSUER#$CLUSTER_ISSUER#g" "$ROOT/infra/ingress/platform-routes.yaml" |
@@ -175,3 +204,8 @@ sed -e "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" -e "s#value: CL
   "$ROOT/operators/deploy/routes-operator.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n openupstream-system rollout status deployment/routes-operator --timeout=5m
+
+kubectl apply -f "$ROOT/operators/deploy/services-rbac.yaml" >/dev/null
+sed "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" "$ROOT/operators/deploy/services-operator.yaml" |
+  kubectl apply -f - >/dev/null
+kubectl -n openupstream-system rollout status deployment/services-operator --timeout=5m

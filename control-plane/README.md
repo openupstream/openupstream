@@ -40,17 +40,20 @@ npm run migrate:create -w control-plane add-something
 with the environment `src/config.ts` lists (`DATABASE_URL`, the `AUTH_*`
 and `BACKUP_*` settings and the backup credentials; Garage's admin API and
 S3 API inside the cluster, `GARAGE_ADMIN_URL` and `GARAGE_S3_URL`, with
-`GARAGE_ADMIN_TOKEN`; `CUSTOMER_DOMAIN`, under which Buckets are reached
+`GARAGE_ADMIN_TOKEN`; the key-encryption key for Secrets, `SECRETS_KEK`
+(32 bytes, base64) with its id `SECRETS_KEK_ID`; optionally `CLI_CLIENT_ID`, the client ID of `oup`
+in madAuth (`infra/madauth/register-cli.sh`); `CUSTOMER_DOMAIN`, under which Buckets are reached
 at `<bucket>.s3.<CUSTOMER_DOMAIN>`; `PLATFORM_DOMAIN`, our own hostnames,
 which like `CUSTOMER_DOMAIN` cannot be claimed as custom domains; optionally
 `NEW_ACCOUNT_HOLDS`, the Holds every new Account starts with, e.g.
 `payment-method`, and `BILLING_CALLERS`, the billing service's
 ServiceAccount; `ROUTES_CALLERS`, default the Routes operator's;
-`WAITLIST_*` for the waitlist, see below). At startup it applies pending
-migrations, seeds the platform's own Account, Project and Database rows
-(`src/platform.ts`) and gives every Project without one its default
-Domain, then listens on `PORT` (8080, public API) and `INTERNAL_PORT`
-(8081), and with `WAITLIST_URL` on `WAITLIST_PORT` (8082).
+`SERVICES_CALLERS`, default the Services operator's; `WAITLIST_*` for the
+waitlist, see below). At startup it applies pending migrations, seeds the
+platform's own Account, Project and Database rows (`src/platform.ts`) and
+gives every Project without one its default Domain, then listens on `PORT`
+(8080, public API) and `INTERNAL_PORT` (8081), and with `WAITLIST_URL` on
+`WAITLIST_PORT` (8082).
 
 In the cluster it runs from the image built by `Dockerfile` (GitHub Actions
 pushes it to `ghcr.io/openupstream/control-plane`) with
@@ -59,10 +62,12 @@ Database. `infra/dev-cluster/platform.sh` bootstraps both.
 
 ## Public API
 
-`src/api/` (Hono, zod validation). Every route but `GET /v1/health` needs a
-madAuth credential as `Authorization: Bearer …` (`src/api/auth.ts`): a
-session token, verified against madAuth's JWKS (`MADAUTH_URL`, madAuth
-inside the cluster) for the issuer `AUTH_ISSUER`, or an API key
+`src/api/` (Hono, zod validation). Every route but `GET /v1/health` and
+`GET /v1/login` needs a madAuth credential as `Authorization: Bearer …`
+(`src/api/auth.ts`): a session token, verified against madAuth's JWKS
+(`MADAUTH_URL`, madAuth inside the cluster) for the issuer `AUTH_ISSUER`;
+an access token `oup login` got (`typ: at+jwt`, verified the same way, with
+`aud` = `CLI_CLIENT_ID`), which may do what a session may; or an API key
 (`madauth_…`), which madAuth checks for us; a key needs `openupstream:read`
 for GET and `openupstream:write` for anything else. The caller acts for
 every Account its madAuth user is a Member of. A Project of another
@@ -71,6 +76,7 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 
 | Route | |
 | --- | --- |
+| `GET /v1/login` | no token needed: `{issuer, clientId}`, where `oup login` signs in with the device grant; 404 without `CLI_CLIENT_ID` |
 | `GET /v1/accounts` | the caller's Accounts, each with its `holds` |
 | `POST /v1/accounts` | `{name}` → 201: a new Account, the caller its first Member |
 | `GET /v1/projects` | the Projects of the caller's Accounts |
@@ -90,8 +96,17 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `POST /v1/projects/{id}/domains/{id}/verify` | looks the TXT record up now → 200 with the Domain verified (it stays so), its Routes served from the next Routes operator pass, with a certificate of its own once its CNAME points at `ingress.<CUSTOMER_DOMAIN>` (set it before the first Route; a failed certificate is retried after an hour); 409 if the record is not there yet (with the values found) or another Project verified the hostname first; 503 if DNS cannot be asked |
 | `DELETE /v1/projects/{id}/domains/{id}` | 204: the custom domain and its Routes; a Bucket left without Routes stops being served by Garage; 409 for the default Domain |
 | `GET /v1/projects/{id}/domains/{id}/routes` | the Domain's Routes, longest prefix first |
-| `POST /v1/projects/{id}/domains/{id}/routes` | `{pathPrefix, bucketId, spaFallback?}` → 201: the Bucket is served below the prefix (stripped) within one Routes operator pass; 400 for a Bucket not in the Project; 409 if the prefix is taken, or if the Bucket's other Routes have another `spaFallback`; 503 if Garage cannot be reached |
+| `POST /v1/projects/{id}/domains/{id}/routes` | `{pathPrefix, bucketId, spaFallback?}` or `{pathPrefix, serviceId}` → 201: the Bucket is served below the prefix (stripped), or the Service gets the requests with their path unchanged, within one Routes operator pass; 400 for a Bucket or Service not in the Project; 409 if the prefix is taken, or if the Bucket's other Routes have another `spaFallback`; 503 if Garage cannot be reached |
 | `DELETE /v1/projects/{id}/domains/{id}/routes/{id}` | 204; the Bucket's last Route also stops Garage serving it |
+| `GET /v1/projects/{id}/services` | with each Service's `state`, read live from its Deployment |
+| `POST /v1/projects/{id}/services` | `{name, image, port, memoryMb, cpuMillicores, replicas?, homeSite?, registryAuth?}` → 201, `state: deploying`, the image pinned to the digest its tag points at now (`src/registry.ts`); 400 for an image the registry does not have or will not serve with `registryAuth` (`{username, password}`, never returned), or a registry at a private address; 503 if the registry cannot be reached; 409 if the name is taken in the Project; 402 if the Account has a Hold |
+| `GET /v1/projects/{id}/services/{id}` | `state`: `deploying`, `running`, `degraded`, or `unknown` when Kubernetes cannot be asked |
+| `PATCH /v1/projects/{id}/services/{id}` | any of `image, port, replicas, memoryMb, cpuMillicores, homeSite, registryAuth` (`null` removes the last two); a new image or new credentials resolve the tag again; a new image at another registry without new credentials drops the stored ones |
+| `POST /v1/projects/{id}/services/{id}/deploy` | resolves the same tag again and pins what it points at now |
+| `DELETE /v1/projects/{id}/services/{id}` | 202: the row goes at once, the Deployment with the next Services operator pass; 409 while a Route serves it |
+| `GET /v1/projects/{id}/secrets` | the Project's Secrets, names and times only |
+| `PUT /v1/projects/{id}/secrets/{name}` | `{value}` → 201 for a new Secret, 200 for a new value; written into the Project's Kubernetes Secret right after the answer (or by the next secrets pass, before the Project has a namespace). The name is an environment variable name; 400 for a value over 64 KiB, or if the Project's values together would pass 512 KiB |
+| `DELETE /v1/projects/{id}/secrets/{name}` | 204 |
 
 A Bucket name is a hostname label of 3 to 63 characters. Creating one
 creates its Garage bucket (the name as its global alias) and a key that may
@@ -183,9 +198,14 @@ the audience `openupstream-control-plane`; a TokenReview confirms it, and
 only the ServiceAccounts listed for the route get an answer: 401 without a
 valid token, 403 for anyone else, 503 when the token cannot be checked.
 
-- `GET /internal/v1/routes`: every Domain with Routes to live Buckets, with
-  its Project and each Route's Bucket name (`DomainRouting`). For
+- `GET /internal/v1/routes`: every Domain with Routes to live Buckets or
+  Services, with its Project and each Route's Bucket name or Service id and
+  port (`DomainRouting`). For
   `ROUTES_CALLERS` (default: the Routes operator).
+- `GET /internal/v1/services`: every Service of a live Project with the
+  image pinned by digest, the Site a single replica runs in and a version of
+  the Project's Secrets that changes with them (`ServiceRow`). For
+  `SERVICES_CALLERS` (default: the Services operator).
 - `GET /internal/v1/databases`: every Database with its Project
   (`DatabaseRow` in `sdk/src/internal.ts`). For `ALLOWED_CALLERS`
   (default: the Databases operator).
@@ -204,6 +224,15 @@ create TokenReviews.
 `src/secrets/store.ts` stores and reads Secrets with it. The key-encryption
 key is 32 random bytes, base64 encoded, with an id
 (`parseKeyEncryptionKey`); the wrapped data keys record that id.
+
+`src/secrets/render.ts` writes a Project's values into the Kubernetes
+Secret `project-secrets` in its namespace, and its Services' registry
+credentials into the dockerconfigjson Secret `project-registry-auth`, with server-side apply under the
+field manager `openupstream-control-plane`: the API does so after every
+change, and the secrets pass every `CLEANUP_INTERVAL_SECONDS` for every
+live Project that has a data key, on one replica at a time (its own
+advisory lock). A Project without a namespace yet is skipped until an
+operator has created it.
 
 ## Tests
 

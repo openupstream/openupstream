@@ -1,6 +1,6 @@
 /**
  * The waitlist's addresses (ARCHITECTURE.md, decision 86; the table is in
- * migrations/1761912000000_waitlist.sql). Every e-mail carries a fresh
+ * migrations/1761919200000_waitlist.sql). Every e-mail carries a fresh
  * random token; only its SHA-256 is stored. Every token of an address
  * confirms or removes it (a pending one's for CONFIRM_WITHIN).
  */

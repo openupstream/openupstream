@@ -9,7 +9,9 @@ import {
     INTERNAL_ACCOUNTS_PATH,
     INTERNAL_DATABASES_PATH,
     INTERNAL_ROUTES_PATH,
+    INTERNAL_SERVICES_PATH,
     PLATFORM,
+    type ServiceRow,
 } from '@openupstream/sdk';
 import { err, ok } from '../result.js';
 import type { Authenticate } from './auth.js';
@@ -25,10 +27,29 @@ const routings: DomainRouting[] = [
         domainId: '0b7c3f1e-2d4a-4c8b-9e6f-111111111111',
         hostname: 'shop-a1b2c3d4.openupstream.app',
         kind: 'default',
-        routes: [{ id: '0b7c3f1e-2d4a-4c8b-9e6f-222222222222', pathPrefix: '/', bucketName: 'shop-site', spaFallback: true }],
+        routes: [{ id: '0b7c3f1e-2d4a-4c8b-9e6f-222222222222', pathPrefix: '/', kind: 'bucket', bucketName: 'shop-site', spaFallback: true }],
     },
 ];
 const rows: DatabaseRow[] = [{ project: PLATFORM.project, database: PLATFORM.database }];
+const servicesOperator = 'system:serviceaccount:openupstream-system:services-operator';
+const serviceRows: ServiceRow[] = [
+    {
+        project: PLATFORM.project,
+        service: {
+            id: '0b7c3f1e-2d4a-4c8b-9e6f-333333333333',
+            name: 'api',
+            image: 'nginx:1.27',
+            imageDigest: `sha256:${'a'.repeat(64)}`,
+            replicas: 2,
+            memoryMb: 256,
+            cpuMillicores: 250,
+            port: 8080,
+        },
+        pinnedImage: `docker.io/library/nginx@sha256:${'a'.repeat(64)}`,
+        site: 'hetzner-fsn1',
+        secretsVersion: 'd41d8cd98f00b204e9800998ecf8427e',
+    },
+];
 const accountId = '0b7c3f1e-2d4a-4c8b-9e6f-1a2b3c4d5e6f';
 const unknownId = '0b7c3f1e-2d4a-4c8b-9e6f-000000000000';
 
@@ -60,7 +81,9 @@ before(async () => {
         allowedCallers: new Set([operator]),
         billingCallers: new Set([billing]),
         routesCallers: new Set([routesOperator]),
+        servicesCallers: new Set([servicesOperator]),
         listDomainRoutings: async () => routings,
+        listServiceRows: async () => serviceRows,
         listDatabaseRows: async () => {
             if (listFails) {
                 throw new Error('database down');
@@ -158,4 +181,12 @@ test('each caller only gets its own routes', async () => {
     assert.equal((await get(operator, `${INTERNAL_ACCOUNTS_PATH}/${accountId}/holds/unpaid`, 'DELETE')).status, 403);
     assert.equal((await get(billing)).status, 403);
     assert.deepEqual([...holds], []);
+});
+
+test('the Services operator gets every Service; nobody else does', async () => {
+    const response = await get(servicesOperator, INTERNAL_SERVICES_PATH);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), serviceRows);
+    assert.equal((await get(operator, INTERNAL_SERVICES_PATH)).status, 403);
+    assert.equal((await get(servicesOperator)).status, 403);
 });

@@ -238,7 +238,7 @@ the domain's DNS is (ours: domaindiscount24).
 5. `infra/dev-cluster/platform.sh` copies this profile into the cluster as
    the Secret `madauth-ses`, which the madAuth sidecar sends with
    (`MAIL=ses`, the default there), and the control plane too, for the
-   waitlist's e-mails when sign-up is closed (section 8). Both send as
+   waitlist's e-mails when sign-up is closed (section 9). Both send as
    the same address, so the policy needs nothing more.
 6. **Send a test mail** with that profile, then check the headers (in
    Gmail: **Show original**) for SPF, DKIM and DMARC **PASS**:
@@ -283,7 +283,28 @@ Only needed by whoever publishes it; using the SDK needs nothing.
 5. Later versions: a `sdk-v<version>` tag, then an approval on GitHub
    (sdk/README.md, "Releasing").
 
-## 8. Sign-up and the waitlist
+## 8. The CLI's sign-in
+
+`oup login` signs in with madAuth's device authorization grant (ARCHITECTURE.md,
+decision 87), as a client an admin registers once per madAuth:
+
+1. Make yourself madAuth's first admin: set `INITIAL_ADMIN_EMAIL` to your
+   address (`infra/dev-cluster/platform.sh` passes it to madAuth), sign up
+   or sign in with it and confirm the address.
+2. Register the client; it asks for your e-mail and password, so neither
+   ends up in the shell history:
+
+   ```bash
+   infra/madauth/register-cli.sh https://openupstream.com
+   ```
+
+   It prints `CLI_CLIENT_ID=mc_…`. An admin with a second factor adds the
+   client in the browser instead, as the script's header shows.
+3. Set `CLI_CLIENT_ID` for the control plane (`platform.sh` takes it from
+   the environment) and roll it out. `GET /v1/login` then answers, and
+   `oup login --api https://api.openupstream.com` works.
+
+## 9. Sign-up and the waitlist
 
 Sign-up is **open by default**: anyone who reaches your madAuth can create
 a user, and with no billing service every Account may create Resources.
@@ -309,21 +330,14 @@ To close it, as the hosted service does until it can invoice:
    now refuses everyone else, with a message that points to
    `https://$PLATFORM_DOMAIN`, where the waitlist page takes e-mail
    addresses (double opt-in, through SES as in section 6; `MAIL=log`
-   writes the confirmation links to the control plane's log instead).
-3. **Restart madAuth and the control plane** if they were running already:
-   they read the settings at startup, and `platform.sh` does not restart a
-   Deployment whose spec did not change.
-
-   ```bash
-   kubectl -n project-00000000-0000-4000-8000-000000000002 rollout restart deployment/madauth deployment/control-plane
-   ```
-
-4. **Check it**: a sign-up with another address is refused, and
+   writes the confirmation links to the control plane's log instead). It
+   rolls out madAuth and the control plane when their settings changed.
+3. **Check it**: a sign-up with another address is refused, and
    `https://$PLATFORM_DOMAIN` shows the waitlist; confirm an address of
    your own with the link it mails you.
 
 To open sign-up again, run `platform.sh` with `SIGNUP=open` (it removes the
-waitlist route) and restart as in step 3. The addresses stay in the table
+waitlist route). The addresses stay in the table
 `waitlist` of the control plane's Database: write to the confirmed ones
 once, then delete them, as the privacy notice promises.
 

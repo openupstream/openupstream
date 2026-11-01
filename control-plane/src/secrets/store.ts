@@ -7,9 +7,10 @@
  * uses to render the Project's Kubernetes Secret.
  */
 import type pg from 'pg';
-import type { Secret, SecretInput } from '@openupstream/sdk';
+import { SECRET_NAME, SECRETS_MAX_TOTAL_BYTES, type Secret, type SecretInput } from '@openupstream/sdk';
 import { type Result, err, ok } from '../result.js';
 import {
+    CIPHERTEXT_OVERHEAD_BYTES,
     type DataKey,
     type EnvelopeError,
     type KeyEncryptionKey,
@@ -22,12 +23,10 @@ import {
 
 export type Db = pg.Pool | pg.PoolClient;
 
-/** An environment variable name; the schema enforces the same rule. */
-const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,254}$/;
-
 export type SecretStoreError =
     | { readonly kind: 'project-not-found'; readonly projectId: string }
     | { readonly kind: 'invalid-name'; readonly name: string }
+    | { readonly kind: 'too-large'; readonly projectId: string; readonly bytes: number }
     | { readonly kind: 'envelope'; readonly projectId: string; readonly error: EnvelopeError };
 
 interface SecretRow {
@@ -109,6 +108,16 @@ export async function putSecret(
     if (!dataKey.ok) {
         return dataKey;
     }
+    // The Project's other values plus this one; checked against their plaintext sizes, which the store does not keep.
+    // A soft limit: concurrent PUTs to one Project can pass it together; Kubernetes' 1 MiB per Secret stays far off.
+    const others = await db.query<{ bytes: string }>(
+        `select coalesce(sum(octet_length(ciphertext) - $3), 0) as bytes from secrets where project_id = $1 and name <> $2`,
+        [projectId, input.name, CIPHERTEXT_OVERHEAD_BYTES],
+    );
+    const bytes = Number(others.rows[0]?.bytes ?? 0) + Buffer.byteLength(input.value, 'utf8');
+    if (bytes > SECRETS_MAX_TOTAL_BYTES) {
+        return err({ kind: 'too-large', projectId, bytes });
+    }
     const ciphertext = encryptSecretValue(dataKey.value, { projectId, name: input.name }, input.value);
     const result = await db.query<SecretRow>(
         `insert into secrets (project_id, name, ciphertext) values ($1, $2, $3)
@@ -161,4 +170,39 @@ export async function readSecretValues(
         values.set(row.name, value.value);
     }
     return ok(values);
+}
+
+/**
+ * Seals a value of the Project that is not a Secret, such as a Service's
+ * registry credentials, with the Project's data key. `name` binds it like a
+ * Secret's name; it contains a `/`, so it never equals one.
+ */
+export async function sealProjectValue(
+    db: Db,
+    kek: KeyEncryptionKey,
+    projectId: string,
+    name: string,
+    value: string,
+): Promise<Result<Buffer, SecretStoreError>> {
+    const dataKey = await dataKeyFor(db, kek, projectId);
+    return dataKey.ok ? ok(encryptSecretValue(dataKey.value, { projectId, name }, value)) : dataKey;
+}
+
+/** Opens what sealProjectValue sealed under the same Project and name. */
+export async function openProjectValue(
+    db: Db,
+    kek: KeyEncryptionKey,
+    projectId: string,
+    name: string,
+    sealed: Buffer,
+): Promise<Result<string, SecretStoreError>> {
+    const dataKey = await readDataKey(db, kek, projectId);
+    if (!dataKey.ok) {
+        return dataKey;
+    }
+    if (!dataKey.value) {
+        return err({ kind: 'project-not-found', projectId });
+    }
+    const value = decryptSecretValue(dataKey.value, { projectId, name }, sealed);
+    return value.ok ? value : err({ kind: 'envelope', projectId, error: value.error });
 }

@@ -99,8 +99,17 @@ Germany.
   kubelet 10250, Garage RPC 3901) only from the other two nodes' public IPs.
   These control-plane connections are TLS (k3s, etcd) or Garage's own
   encrypted RPC; flannel's WireGuard carries pod traffic only.
-- gVisor (`runsc`) is added by hand to k3s's containerd config template and
+- gVisor (`runsc`) is added to k3s's containerd config template and
   exposed as the `gvisor` RuntimeClass; k3s does not detect it on its own.
+  `infra/gvisor/install.sh` installs a pinned release, checked against the
+  SHA-512 recorded in the script, on each compute node before k3s first
+  starts, and writes the template (`config-v3.toml.tmpl`, extending k3s's
+  base) that adds the handler `runsc` (#90). The compute nodes carry the
+  label `openupstream.io/gvisor=true`, and the RuntimeClass schedules only
+  there; the third Site has no gVisor. Its `overhead` reserves 64 Mi and
+  10m CPU per pod for gVisor itself (50-60 MB measured), not billed.
+  Tested on the dev cluster (2026-10-31): pods run under `runsc`
+  (`dmesg` shows gVisor), installed on fresh Ubuntu 24.04 nodes.
 - Tailscale is for admin access only (Kubernetes API, SSH, Grafana). It is
   not the node mesh.
 
@@ -196,7 +205,7 @@ front of each. madAuth needs its Database for every sign-in: while that
 Database fails over, sign-in is unavailable (53 s measured on the dev
 cluster).
 
-The API accepts two kinds of madAuth credentials (#64):
+The API accepts three kinds of madAuth credentials (#64, #87):
 
 - a session token: a JWT (ES256, `typ: madauth-session+jwt`, issuer
   checked, no audience) verified against madAuth's JWKS, fetched from madAuth
@@ -207,6 +216,23 @@ The API accepts two kinds of madAuth credentials (#64):
   reuses the answer for a minute, so a revoked key works for at most a
   minute more. `openupstream:read` allows every GET, `openupstream:write`
   everything.
+- an access token of `oup` (`typ: at+jwt`, ES256, issuer checked, `aud` the
+  CLI's client ID, valid 15 minutes), verified against the same JWKS. `oup
+  login` gets it with madAuth's device authorization grant (RFC 8628, madAuth
+  0.7): it shows a code and opens the approval page, where the user signs
+  in with any method they have and approves; over SSH it prints the URL and
+  the code instead. It asks for `offline_access`, keeps the refresh token
+  (30 days from its last use, rotated on every use) in
+  `~/.config/openupstream/credentials.json` (mode 600) and stores each new
+  one before it uses the new access token, one `oup` process at a time
+  (a lock file), since madAuth ends the chain when a refresh token is used
+  twice. Like a session, it may do
+  everything its user may. It carries no e-mail address, so creating an
+  Account still needs a session or an API key. The CLI learns madAuth's
+  issuer and its client ID from `GET /v1/login`; `OUP_API_KEY` replaces the
+  sign-in in CI. An admin registers the CLI once
+  (`infra/madauth/register-cli.sh`); the approval page at madAuth's
+  `loginUrl` comes with the dashboard's first page.
 
 The subject is a madAuth user, which can be a Member of several Accounts.
 A signed-in user creates an Account with `POST /v1/accounts` and becomes its
@@ -245,7 +271,8 @@ page has a privacy notice and the Impressum, whose text the operator sets
 (`WAITLIST_IMPRINT`).
 
 The public API (Hono, zod validation, `control-plane/src/api`) serves
-Projects and their Databases in the caller's Accounts; another Account's
+Projects and their Databases, Buckets, Services, Domains, Routes and
+Secrets in the caller's Accounts; another Account's
 Project answers 404 (#61). A Database's state (`provisioning`, `ready`,
 `degraded`, `unknown`) is read live from its Cluster. Its connection details
 (the Pooler's in-cluster address, database and user `app`) are returned,
@@ -273,7 +300,9 @@ Thin reconcilers for the things no off-the-shelf operator does:
   alone holds Garage's admin token
 - Database → CloudNativePG `Cluster` (two instances, one per compute Site),
   PgBouncer `Pooler`, backup schedule
-- Secrets → a Kubernetes `Secret` in the Project's namespace
+- Service → a Deployment under gVisor and a Kubernetes Service (the
+  Services operator, `operators/src/services`, #93); like the Routes
+  operator it deletes its objects that no row wants any more
 
 The step from a control plane row to Kubernetes objects is a pure function
 that returns the objects or a list of errors; the reconcile loop around it
@@ -284,7 +313,11 @@ a misspelt or removed field fails the typecheck.
 
 The reconcile pass talks to Kubernetes through `@kubernetes/client-node`,
 with server-side apply under the field manager `openupstream-operators`
-(#47). It only creates and updates: a Database's objects are deleted by the
+(#47). The client serializes kinds it has a model for by the model's
+attribute names, which differ in places (a NetworkPolicy's `from` is
+`_from`); every object is first deserialized into that shape, so what is
+sent is what was written (found on the dev cluster: the peers of every
+NetworkPolicy had been dropped, which admitted all traffic). It only creates and updates: a Database's objects are deleted by the
 control plane's delete of that Database or its Project, never because a row
 is missing (#48). It runs in the cluster (`operators/deploy/`, one
 replica) and makes a pass every 30 s with the rows from the control plane's
@@ -401,6 +434,14 @@ digest (#55).
   `max-age=31536000, immutable`, `index.html` gets `no-cache`, everything else
   `max-age=300`. Files uploaded with another S3 client keep whatever headers
   that client set; ingress does not rewrite them.
+- `oup site deploy <dir> --bucket <name>` makes the Bucket mirror the
+  directory (#88): it uploads only files whose MD5 differs from the
+  object's ETag, every `index.html` after the other files, so a client that
+  loads the new one finds the assets it names, then deletes the objects the
+  directory no longer has; `--keep` leaves them, `--force` uploads every
+  file, rewriting the headers of objects another client put there. Dotfiles stay out, except
+  `.well-known`. It uses the Bucket's own key, which the API hands to a
+  caller who may write.
 - Compression (gzip, brotli, zstd) at Traefik. No CDN; customers who want one
   put Cloudflare in front.
 
@@ -416,6 +457,48 @@ digest (#55).
   acceptable on shared nodes.
 - Services with two or more replicas are spread across both compute Sites;
   single-replica Services run in the Home site of the Project's Databases.
+- A Service is a row in the control plane (#92): `POST …/services` with its
+  image, port, replicas, memory and CPU, `PATCH` to change it, `POST
+  …/services/{id}/deploy` to resolve the same tag again, `DELETE` (409
+  while a Route serves it). Its state (`deploying`, `running`, `degraded`)
+  is read live from its Deployment. The control plane resolves the tag to
+  a digest while the request waits, with the registry's token flow: an image
+  the registry does not have, or will not serve with the given credentials,
+  is a 400, a registry that cannot be reached a 503, and nothing is written.
+  Only a new image, new credentials or a deploy resolve again, so scaling
+  never moves the image.
+- The registry is the customer's choice, so the control plane reaches it
+  over https only and refuses one whose name resolves to a loopback,
+  private, link-local or shared address: a Service cannot make the control
+  plane call into the cluster or a private network. The check is made when
+  the name is looked up; a registry that changes its DNS answer before the
+  request is not caught.
+- Pull credentials (`registryAuth`, a username and password) are sealed with
+  the Project's data key like a Secret's value and never returned. The
+  control plane renders all of a Project's into one
+  `kubernetes.io/dockerconfigjson` Secret, `project-registry-auth`, an entry
+  per Service under its image's repository (`ghcr.io/acme/api`), which
+  kubelet matches as a prefix of the image it pulls; every Service names
+  it in `imagePullSecrets`. Two Services of one Project that pull the same
+  repository with different credentials share one entry. Credentials go
+  only to their own registry: a new image at another registry drops them,
+  and a redirect to another host is followed without them.
+- Without a `homeSite` of its own, a single replica runs in the Home site of
+  the Project's oldest live Database, else in `hetzner-fsn1`.
+- The Services operator (#93) runs each Service as a Deployment `svc-<id>`
+  with the image by digest and `runtimeClassName: gvisor`, and a Kubernetes
+  Service of the same name for its Routes. A single replica has a
+  preferred node affinity for its Site, so it moves to the other when that
+  one fails; two or more have a hard topology spread over the compute
+  Sites that leaves out a dark Site's tainted node (as in decision 46).
+  Rollouts start the new pod before stopping the old one. Requests and
+  limits are both the configured memory and CPU, so what is billed is
+  reserved and no Service takes another's CPU. Pods mount no
+  ServiceAccount token, read `project-secrets` with `envFrom` and do not
+  start before it exists; a version of the Project's Secrets on the pod
+  template rolls the Service when they change. The control plane records
+  that version only after it wrote the new values, so pods never restart
+  into the old ones.
 
 ## Routing and domains
 
@@ -451,7 +534,11 @@ digest (#55).
   nor one another Project has verified. Deleting a custom domain deletes
   its Routes; the default Domain goes only with its Project.
 - A Route sends a path prefix (`/` or `/a/b`, no trailing slash) to a Bucket,
-  optionally with SPA fallback, or to a Service. A Bucket or Service that a
+  optionally with SPA fallback, or to a Service. A Service gets the path
+  as it came, prefix included (#93); only a Bucket's prefix is stripped.
+  Like the platform's own routes, Traefik gives up connecting to a
+  Service's pod after 1 s and retries GET and HEAD on another; the longer
+  prefix always wins, whatever the method (explicit rule priorities). A Bucket or Service that a
   Route still targets cannot be deleted; deleting a Domain deletes its
   Routes, and deleting a Project deletes its Domains at once, so nothing of
   it is served any more.
@@ -486,7 +573,21 @@ digest (#55).
   reach each other only through public Routes. The platform Project's
   namespace, where the control plane runs, also admits the operators on the
   internal API's port.
-- Egress to the internet is allowed, with a per-pod bandwidth limit.
+- The NetworkPolicy `project-isolation` (#89) lets a Project's pods accept
+  connections from each other (a Service to its Database's Pooler, a
+  standby to its primary), from Traefik's namespace and from
+  CloudNativePG's operator in `cnpg-system`, which asks each instance for
+  its status; nothing else. Every operator that applies a Project's
+  namespace applies it right after the namespace, before anything else goes
+  in, so no pod of a Project runs unisolated. The operators' exception in
+  the platform namespace is a second policy in `control-plane/deploy/`.
+- Egress to the internet is allowed, with a per-pod bandwidth limit (not
+  set yet). A Service's pods may connect only to DNS, their own Project's
+  namespace (its Databases' Poolers) and public addresses: the
+  NetworkPolicy `service-egress` (#93) leaves out every loopback, private,
+  shared and link-local range, which holds the cluster's pod and service
+  networks, the nodes' private addresses and metadata endpoints. Their
+  Buckets they reach at their public hostnames.
 - One-off jobs are an API call; customers cannot spawn containers from inside
   containers.
 - Deleting a Project deletes its namespace and every Resource, Secret and
@@ -503,10 +604,27 @@ digest (#55).
   records the id of its key-encryption key, so the key-encryption key can be
   rotated by rewrapping the data keys without touching the values.
 - The key-encryption key is a Kubernetes Secret in the control plane's
-  namespace; k3s secrets encryption at rest is on.
-- The Secrets operator renders a Kubernetes `Secret` into the Project's
-  namespace; Services and jobs read it via `envFrom`. Changing a Secret rolls
-  the Services that use it.
+  namespace (`secrets-kek`); k3s secrets encryption at rest is on. On the
+  production cluster a copy is kept outside it, with the maintainer's
+  credentials: without the key, neither the cluster nor a restore of the
+  control plane's Database can read any Secret. The dev cluster's is
+  generated per session and thrown away with it.
+- The control plane renders all of a Project's Secrets into one Kubernetes
+  `Secret`, `project-secrets`, in the Project's namespace (#91): right after
+  every change through the API, and again every 30 s on one replica (an
+  advisory lock, like the cleanup), so a write that failed, or that came
+  before an operator created the namespace, arrives within one pass; a
+  Project with Services but no Secrets gets an empty one, since a Service's
+  pods wait for it rather than start without their values (the
+  API does not wait for its write; two quick changes can land out of order,
+  which the pass also repairs). It
+  alone holds the key-encryption key, so no decrypted value crosses the
+  internal API. Services and jobs read the Secret via `envFrom`. Changing a
+  Secret rolls the Services that use it.
+- The API takes a value with `PUT …/secrets/{name}` (an environment
+  variable name) and never returns it; a value is at most 64 KiB and a
+  Project's values together at most 512 KiB, since they share one
+  Kubernetes Secret and every container's environment.
 - The envelope protects copies of the control plane's Database that leave the
   cluster (backups). It does not protect against someone with cluster-admin;
   that is accepted.
@@ -686,6 +804,13 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 84 | Static sites: Garage's website endpoint behind Traefik. The control plane sets a Bucket's website settings (index, SPA fallback) in Garage when a Route is created; a Routes operator applies an IngressRoute per Domain with per-Route Middlewares (Host header = Bucket name, prefix stripped) and an ExternalName Service to Garage, and deletes its objects the routing table no longer has; default Domains share one wildcard certificate in Traefik's default TLS store; SPA fallback is per Bucket, so Routes to one Bucket must agree | the control plane writing the Traefik objects itself; keeping the prefix in object keys; SPA fallback in Traefik's errors middleware; a certificate per default Domain | the operator pattern of the Databases, with Garage's admin token staying in the control plane only; one site mounts at any prefix; Garage already has the routing rule; a wildcard needs no issuance per Project. Contradicts the earlier plan of an operator writing Garage's website settings. Traefik must allow ExternalName Services, which only the Routes operator creates |
 | 85 | Custom domains: a claim gets a random token, published by the Account as TXT at `_openupstream.<domain>` and looked up when it calls verify, once, through the cluster's resolver; hostnames under the customer and platform domains, or verified by another Project, cannot be claimed; the Routes operator gives a verified custom domain with Routes a cert-manager Certificate (HTTP-01, selected by label on the existing ClusterIssuers) and deletes it with the Domain, its Secret garbage-collected through cert-manager's owner references | the control plane polling pending claims; re-checking the TXT record periodically; a separate HTTP-01 ClusterIssuer; DNS-01 by CNAME-delegating `_acme-challenge` to us | verification while the request waits, like Buckets, gives the Account its answer at once; a removed record does not take a site down, the claim is what was proven; one issuer per environment keeps the platform's and customers' certificates on the same account; HTTP-01 needs nothing from the customer beyond the CNAME the traffic needs anyway. Traefik's Ingress provider is enabled, limited to cert-manager's solver Ingresses, and its port-80 redirect drops to the lowest priority |
 | 86 | Until a company exists and the hosted service can invoice ("Gate before the first invoice"), its sign-up is closed and `openupstream.com` serves a waitlist. This suspends decision 65's "anyone may sign up" there, not its payment-method gate; sign-up opens again (`SIGNUP=open`) once the gate is passed, and the waitlist is mailed once and deleted. Closed by the madAuth sidecar answering `user.signing_up` (`SIGNUP=closed`, `SIGNUP_ALLOW` for us), open by default. The waitlist: a page served by the control plane on its own port, its addresses in a table of the control plane's Database, double opt-in with a token link per e-mail, mailed through SES with madAuth's send-only key, a removal link in every e-mail, unconfirmed addresses deleted after 48 hours, at most one e-mail per address an hour, Traefik's per-IP limit on the form; English, with a consent text, privacy notice and an Impressum the operator sets | open sign-up with every new Account held (`NEW_ACCOUNT_HOLDS`); invitations only; a static page in a Bucket through the routing table, or an nginx container, posting to the API; single opt-in; a mailing-list provider | no Accounts to clean up or disappoint, and nobody signs up for something they cannot use; madAuth has no switch of its own, and the webhook covers every sign-up method, OAuth included. The page needs no dashboard, no CORS and no second image; a Bucket would need a Domain at `openupstream.com` in the platform Project. Double opt-in and a removal link are what German law (UWG § 7, Art. 7 GDPR) expects as proof of consent; no list provider means no further subprocessor. Self-hosters keep open sign-up without setting anything |
+| 87 | `oup login` uses madAuth's device authorization grant (RFC 8628, madAuth 0.7) as the public client `oup CLI`, asking for `openid email offline_access`; the control plane accepts madAuth access tokens (`at+jwt`, `aud` = `CLI_CLIENT_ID`) with a session's rights and tells the CLI the issuer and client ID at `GET /v1/login`; the refresh token is kept in `~/.config/openupstream/credentials.json` (mode 600) and each new one stored before use; `OUP_API_KEY` for CI | authorization code with PKCE and a loopback redirect; both flows; e-mail and password in the terminal turned into an API key; pasting an API key | the flow RFC 8628 wrote for command-line tools, as `gh auth login` and `az login` use: it works over SSH, in containers and on headless machines, with every sign-in method, passkeys included; `verification_uri_complete` makes it one click when a browser is at hand, so a loopback flow would add code for no gain; a password in the terminal would leave out passkey users. madAuth refuses clients without `deviceFlow`, and only an admin with a fresh sign-in registers one |
+| 88 | `oup site deploy` makes the Bucket mirror the directory: changed files only (MD5 against the ETag), `index.html` files after the rest, then stale objects deleted (`--keep` to leave them); cache headers and content types from the file name | upload only, never delete | a deploy should leave exactly the build behind, or deleted pages stay reachable; uploading the index last keeps a client from loading an index whose assets are not there yet; hashed assets of the previous build go with it, so a page open from before the deploy may miss a lazily loaded chunk; `--keep` is for sites that need that |
+| 89 | Every Project namespace gets one NetworkPolicy, `project-isolation`: ingress from the Project's own pods, Traefik's namespace and `cnpg-system`, nothing else; egress open. The operators apply it right after the namespace; the platform namespace's exception for the operators (port 8081) is a static policy next to the control plane | a policy per Database and per Service; a deny-all policy plus one allow policy per source; Calico instead of k3s's built-in policy controller | one object that every operator applies identically under the shared field manager, so whichever operator creates the namespace isolates it before anything runs there; same-namespace traffic is what a Project needs inside (Services to Poolers, CloudNativePG replication); k3s enforces it without another CNI. Egress for customer containers is decided with the Services operator |
+| 90 | gVisor is installed by a script on each compute node before k3s starts (`infra/gvisor/install.sh`): a pinned release whose archive is checked against a SHA-512 in the script, and a containerd config template that extends k3s's base with the handler `runsc`. The RuntimeClass `gvisor` selects nodes labelled `openupstream.io/gvisor=true` | gVisor's apt repository; a privileged DaemonSet that installs runsc on the nodes | a node setup step like k3s itself, with nothing privileged left running in the cluster; the pin makes every node run the same sandbox, and an upgrade is a reviewed change of two lines; the apt repository serves whatever is newest. The label keeps gVisor pods off a node without runsc, where they would never start |
+| 91 | The control plane writes the Kubernetes Secret `project-secrets` per Project itself, after each change and in a 30 s pass; no Secrets operator. The public API: `GET …/secrets` (names), `PUT …/secrets/{name}` `{value}`, `DELETE …/secrets/{name}`; every Service of the Project gets all of them | a Secrets operator fed decrypted values by an internal API route (the earlier plan of decision 20); per-Service selection of Secrets | the control plane alone holds the key-encryption key, so plaintext never travels between processes and no operator can read every Project's Secrets; it needs `create` and `patch` on Secrets cluster-wide, which a Secrets operator would have needed as well. Project-wide Secrets match how they are described to customers; selecting per Service can come later without changing the API |
+| 92 | Services API: a Service is a row, created, changed (`PATCH`) and redeployed (`POST …/deploy`) through the API, its state read from its Deployment. The control plane resolves the tag to a digest at the registry while the request waits, over https and never at a private address; pull credentials are per Service, sealed with the Project's data key, and rendered into one dockerconfigjson Secret per Project keyed by repository | Deployments as immutable records with history and rollback; the operator resolving tags on its pass; named registry credentials shared by Services; a pull Secret per Service | the pattern of Buckets: a 201 means the image exists and can be pulled, and a bad tag or credentials is an answer, not a state to poll; the operator never needs credentials or the internet. One Secret per Project lives and dies with the namespace and needs no pruning by the control plane; kubelet's prefix match keeps credentials per repository. Rollback is a `PATCH` back to a digest (`image@sha256:…`) |
+| 93 | A Services operator (`OPERATOR=services`, own ServiceAccount) applies per Service a Deployment (gVisor, image by digest, requests = limits, no ServiceAccount token, `envFrom` `project-secrets` required, Secrets version on the pod template) and a Kubernetes Service, plus per Project the NetworkPolicy `service-egress`, and deletes what no row wants. Routes to a Service keep the path, dial with a 1 s timeout and retry GET and HEAD only | extending the Routes operator; `optional` Secrets; stripping the prefix as for Buckets; egress left open | each operator keeps only the rights it needs and one concern per pass; a pod that waited for its Secrets never runs without them; apps behind `/api` usually expect their full path; customer code must not reach Garage's admin API, the control plane or other Projects from inside the cluster, so only the internet and its own namespace are open |
 
 ## Open questions
 
@@ -783,7 +908,11 @@ Decisions table once it is settled.
    images; creating and deleting Projects and Databases through the
    public API, with the cleanup; madAuth with sign-up, API keys and
    Accounts created through the API (2026-10-17). Left: TopoLVM, restore
-   through the API, `oup login` and `oup pg` commands. Public hostnames for
+   through the API, the `oup pg` commands. Done since: `oup login`
+   (2026-10-31, #87), tested on the dev cluster with madAuth 0.7.0: the
+   code approved through madAuth's API, the tokens stored with mode 600,
+   a refresh that rotated the refresh token, a logout that ended it, and
+   `OUP_API_KEY`. Public hostnames for
    madAuth and the API come with step 2, together with SES and the
    payment-method gate that open sign-up needs.
 2. Object storage and static sites: Garage, routing table, Traefik,
@@ -813,9 +942,30 @@ Decisions table once it is settled.
    page behind madAuth's routes, its e-mail sent through SES, confirm and
    remove through the public route, form posts limited to 5 a minute per
    IP; `SIGNUP=open` and a restart removed the page and opened sign-up.
-   Left: `oup site deploy` with its cache headers, the production DNS
-   zones.
-3. Containers, Service mode.
+   `oup site deploy` with its cache headers (2026-10-31, #88): a second
+   deploy uploaded nothing, a new build only its changed files with the
+   index last and deleted the old bundle, and the served headers matched.
+   Left: the approval page
+   for `oup login` at madAuth's `loginUrl`, the production DNS zones.
+3. Containers, Service mode. Done on the dev cluster (2026-10-31): the
+   NetworkPolicy `project-isolation` in every Project namespace (#89),
+   gVisor on the compute nodes and the RuntimeClass `gvisor` (#90),
+   Secrets through the API, written into each Project's namespace by the
+   control plane (#91), Services through the API pinned to the digest of
+   their tag (#92), run by the Services operator and served through Routes
+   (#93). Tested: `traefik/whoami:v1.10` from Docker Hub created through the
+   API, pinned to `sha256:1699d99c…`, running under `runsc` and answering
+   at the Project's default hostname through Traefik in the other Site,
+   with its name from a Secret; a new Secret value rolled it, two replicas
+   ran one per Site, a redeploy kept the digest, deleting it while routed
+   was refused and afterwards both operators removed its objects. A pod in
+   another namespace reached none of the Project's pods, madAuth or the
+   internal API; a Service's pod reached its own namespace, DNS and the
+   internet, not the control plane, Garage's admin API or the metadata
+   endpoint. The test found that the operators' Kubernetes client had
+   dropped every NetworkPolicy's peers (fixed, see "Operators"). Left: a
+   CLI for Services and Secrets, the log stream, private registries tried
+   against a real one (the Docker Hub credential key form included).
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
    staying writable while a whole Site is switched off.

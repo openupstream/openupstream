@@ -15,6 +15,8 @@ const env = {
     GARAGE_S3_URL: 'http://garage.garage.svc.cluster.local:3900',
     CUSTOMER_DOMAIN: 'openupstream.app',
     PLATFORM_DOMAIN: 'openupstream.com',
+    SECRETS_KEK_ID: 'kek-2026-10',
+    SECRETS_KEK: Buffer.alloc(32, 7).toString('base64'),
 };
 
 test('a complete environment, with defaults for the rest', () => {
@@ -40,6 +42,9 @@ test('Garage inside the cluster, the customer domain and the platform domain', (
     });
     assert.equal(config.value.customerDomain, 'openupstream.app');
     assert.equal(config.value.platformDomain, 'openupstream.com');
+    assert.equal(config.value.auth.cliClientId, undefined);
+    const withCli = configFrom({ ...env, CLI_CLIENT_ID: 'mc_cli' });
+    assert.equal(withCli.ok && withCli.value.auth.cliClientId, 'mc_cli');
     const bad = configFrom({ ...env, GARAGE_S3_URL: 'not a url', CUSTOMER_DOMAIN: 'https://openupstream.app', PLATFORM_DOMAIN: 'Openupstream' });
     assert.deepEqual(bad.ok ? [] : bad.error, [
         'GARAGE_ADMIN_URL and GARAGE_S3_URL must be URLs',
@@ -75,6 +80,8 @@ test('every problem is reported at once', () => {
         'GARAGE_ADMIN_URL is not set',
         'GARAGE_S3_URL is not set',
         'GARAGE_ADMIN_TOKEN is not set',
+        'SECRETS_KEK_ID is not set',
+        'SECRETS_KEK is not set',
         'CUSTOMER_DOMAIN is not set',
         'PLATFORM_DOMAIN is not set',
         'PORT and INTERNAL_PORT must be port numbers',
@@ -130,4 +137,13 @@ test('a waitlist needs an Impressum and a way to send its e-mails', () => {
     ]);
     const noKey = configFrom({ ...waitlistEnv, AWS_SECRET_ACCESS_KEY: '' });
     assert.deepEqual(noKey.ok ? [] : noKey.error, ['WAITLIST_MAIL=ses needs MAIL_FROM, SES_REGION and AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY']);
+});
+
+test('the key-encryption key with its id; a malformed key is reported', () => {
+    const config = configFrom(env);
+    assert.ok(config.ok);
+    assert.equal(config.value.kek.id, 'kek-2026-10');
+    assert.equal(config.value.kek.key.length, 32);
+    const bad = configFrom({ ...env, SECRETS_KEK: 'too short' });
+    assert.deepEqual(bad.ok ? [] : bad.error, ['SECRETS_KEK: the key-encryption key must be 32 bytes in standard base64']);
 });
