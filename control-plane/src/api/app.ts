@@ -1119,7 +1119,10 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (project === undefined || job === undefined) {
             return c.json(notFound, 404);
         }
-        const input = runInput.safeParse((await body(c)) ?? {});
+        // No body starts the run as the Job is; a body that is not JSON is refused, not taken for none.
+        const text = await c.req.text();
+        const parsed: unknown = text.trim() === '' ? {} : await Promise.resolve(text).then(JSON.parse).catch(() => undefined);
+        const input = runInput.safeParse(parsed);
         if (!input.success) {
             return c.json(invalid(input.error.issues), 400);
         }

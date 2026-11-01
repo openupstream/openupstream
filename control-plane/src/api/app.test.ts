@@ -1200,6 +1200,12 @@ describe('Jobs', () => {
         assert.equal((await call('POST', runsPath, 'alice', { env: { 'NOT-A-NAME': 'x' } })).status, 400);
         assert.equal((await call('POST', runsPath, 'alice', { args: [] })).status, 400);
         assert.equal((await call('POST', runsPath, 'alice', { image: 'nginx' })).status, 400);
+        const malformed = await api.request(runsPath, {
+            method: 'POST',
+            headers: { authorization: 'Bearer madauth_alice_write', 'content-type': 'application/json' },
+            body: '{"args": ["42"',
+        });
+        assert.equal(malformed.status, 400, 'a broken body is not taken for none');
         const big = await call('POST', runsPath, 'alice', { env: { A: 'x'.repeat(9000), B: 'y'.repeat(9000) } });
         assert.equal(big.status, 400);
         assert.match(JSON.stringify(await big.json()), /more than 16384/);

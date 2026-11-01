@@ -158,8 +158,16 @@ export function kubeFrom(config: KubeConfig, { timeoutMs = KUBE_CALL_TIMEOUT_MS 
             );
         },
         remove: async (ref) => {
+            // Background: what the object owns goes with it (a CronJob's runs, a Deployment's pods), whatever the kind's default.
             const result = await attempt(() =>
-                api.delete({ apiVersion: ref.apiVersion, kind: ref.kind, metadata: { name: ref.name, ...(ref.namespace === undefined ? {} : { namespace: ref.namespace }) } }),
+                api.delete(
+                    { apiVersion: ref.apiVersion, kind: ref.kind, metadata: { name: ref.name, ...(ref.namespace === undefined ? {} : { namespace: ref.namespace }) } },
+                    undefined,
+                    undefined,
+                    undefined,
+                    undefined,
+                    'Background',
+                ),
             );
             return result.ok || result.error.status === 404 ? ok(undefined) : result;
         },

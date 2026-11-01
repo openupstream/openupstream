@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { type JobRow, jobSpecVersion } from '@openupstream/sdk';
-import type { Kube, KubeObject, ObjectRef } from '../kube.js';
+import type { KubeObject } from '../kube.js';
 import { err, ok } from '../result.js';
+import { fakeKube } from '../testing/kube.js';
 import { jobsPass } from './loop.js';
 import { planJobs } from './manifests.js';
 import { reconcileJobs } from './reconcile.js';
@@ -129,24 +130,6 @@ test('the CronJob carries the spec version the control plane compares its row wi
     assert.equal(cronJobOf([row()])?.metadata.annotations?.['openupstream.io/spec-version'], jobSpecVersion(row()));
 });
 
-/** A cluster holding `existing` objects of ours; records applies and removes. */
-const fakeKube = (existing: ObjectRef[]) => {
-    const applied: string[] = [];
-    const removed: string[] = [];
-    const kube: Kube = {
-        apply: async (object) => {
-            applied.push(`${object.kind} ${object.metadata.name}`);
-            return ok(undefined);
-        },
-        readSecret: async () => ok(undefined),
-        list: async (apiVersion, kind) => ok(existing.filter((ref) => ref.apiVersion === apiVersion && ref.kind === kind)),
-        remove: async (ref) => {
-            removed.push(`${ref.kind} ${ref.name}`);
-            return ok(undefined);
-        },
-    };
-    return { kube, applied, removed };
-};
 
 test("a deleted Job's CronJob is removed; its runs are left to Kubernetes", async () => {
     const gone = 'job-99999999-9999-4999-8999-999999999999';
