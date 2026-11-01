@@ -6,7 +6,7 @@
  *   oup logout
  *   oup link <project>                       this directory's Project (.openupstream.json)
  *   oup service list | show <name> | delete <name>
- *   oup service deploy <name> --image <ref> [--port …] …
+ *   oup service deploy <name> --image <ref> [--port … | --no-port] …
  *   oup job list | show <name> | runs <name> | delete <name>
  *   oup job deploy <name> --image <ref> [--schedule …] … [-- command…]
  *   oup job run <name> [--env NAME=value] [-- args…]   waits for the outcome

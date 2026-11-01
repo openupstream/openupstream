@@ -495,7 +495,8 @@ digest (#55).
   with the image by digest and `runtimeClassName: gvisor`, and a Kubernetes
   Service of the same name for its Routes. A Service without a port is a
   worker (#98), such as a queue consumer on `SKIP LOCKED` (#8): no
-  Kubernetes Service, no readiness probe (it is ready once it runs), and
+  Kubernetes Service, no readiness probe (it is ready once it has run for
+  10 s, so one that crashes at start does not replace the old pods), and
   no Route may serve it, nor may a routed Service drop its port. A single replica has a
   preferred node affinity for its Site, so it moves to the other when that
   one fails; two or more have a hard topology spread over the compute

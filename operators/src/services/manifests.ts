@@ -42,6 +42,8 @@ export const SERVICE_ID_LABEL = 'openupstream.io/service-id';
 export const SERVICE_NAME_LABEL = 'openupstream.io/service-name';
 export const SECRETS_VERSION_ANNOTATION = 'openupstream.io/secrets-version';
 export const RUNTIME_CLASS = 'gvisor';
+/** How long a worker (a Service without a port) runs before it counts as available. */
+export const WORKER_MIN_READY_SECONDS = 10;
 
 /** The kinds this operator prunes, a Deployment before the Service that fronts it. */
 export const PRUNED_KINDS = [
@@ -104,6 +106,8 @@ const deployment = (row: ServiceRow): KubeObject => {
             selector: { matchLabels: { [SERVICE_ID_LABEL]: service.id } },
             // A new version starts before an old one stops, so a single replica is never down for a rollout.
             strategy: { type: 'RollingUpdate', rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } },
+            // Nothing probes a worker: it must run for 10 s before it replaces an old pod, so one that crashes at start does not.
+            ...(service.port === null ? { minReadySeconds: WORKER_MIN_READY_SECONDS } : {}),
             template: {
                 metadata: { labels: podLabels, annotations: { [SECRETS_VERSION_ANNOTATION]: row.secretsVersion } },
                 spec: {

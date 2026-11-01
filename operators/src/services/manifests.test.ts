@@ -62,6 +62,9 @@ test('a worker without a port gets no Kubernetes Service, no container port and 
     const container = podOf(plan.find((o) => o.kind === 'Deployment')).spec.containers[0] as Record<string, unknown> | undefined;
     assert.equal(container?.['ports'], undefined);
     assert.equal(container?.['readinessProbe'], undefined);
+    const spec = plan.find((o) => o.kind === 'Deployment')?.['spec'] as { minReadySeconds?: number };
+    assert.equal(spec.minReadySeconds, 10, 'a worker that crashes at start does not replace the old pods');
+    assert.equal((planServices([row()]).find((o) => o.kind === 'Deployment')?.['spec'] as { minReadySeconds?: number }).minReadySeconds, undefined);
 });
 
 test('the pod runs the pinned image under gVisor, with the Project Secrets and registry credentials, and no API token', () => {
