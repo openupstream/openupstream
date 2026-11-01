@@ -1,7 +1,7 @@
 /**
  * Renders a Project's Secrets into the Kubernetes Secret its Services and
- * jobs read with `envFrom` (ARCHITECTURE.md, "Secrets"; decision 91), and
- * its Services' registry credentials into the one they pull with. The
+ * Jobs read with `envFrom` (ARCHITECTURE.md, "Secrets"; decision 91), and
+ * their registry credentials into the one they pull with. The
  * control plane does this itself, since it alone holds the key-encryption
  * key: no decrypted value ever crosses the internal API.
  *
@@ -14,6 +14,7 @@ import { PROJECT_REGISTRY_AUTH, PROJECT_SECRETS, type RegistryAuth, projectNames
 import type pg from 'pg';
 import type { ControlPlaneKube, SecretManifest } from '../kube.js';
 import { type Result, err, ok } from '../result.js';
+import { jobRegistryAuthName } from '../jobs/store.js';
 import { credentialKey, parseImageReference } from '../registry.js';
 import { registryAuthName } from '../services/store.js';
 import type { KeyEncryptionKey } from './envelope.js';
@@ -62,21 +63,25 @@ export const registryAuthManifest = (projectId: string, credentials: ReadonlyMap
         ),
     });
 
-/** Every Service's registry credentials, opened, by the key kubelet matches. */
+/** Every Service's and Job's registry credentials, opened, by the key kubelet matches. */
 async function registryCredentials(
     deps: Pick<SecretsDeps, 'pool' | 'kek'>,
     projectId: string,
 ): Promise<Result<ReadonlyMap<string, RegistryAuth>, string>> {
-    const { rows } = await deps.pool.query<{ id: string; image: string; registry_auth: Buffer }>(
-        'select id, image, registry_auth from services where project_id = $1 and registry_auth is not null order by created_at, id',
+    const { rows } = await deps.pool.query<{ kind: 'Service' | 'Job'; id: string; image: string; registry_auth: Buffer }>(
+        `select 'Service' as kind, id, image, registry_auth, created_at from services where project_id = $1 and registry_auth is not null
+         union all
+         select 'Job' as kind, id, image, registry_auth, created_at from jobs where project_id = $1 and registry_auth is not null
+         order by created_at, id`,
         [projectId],
     );
     const credentials = new Map<string, RegistryAuth>();
     for (const row of rows) {
         const image = parseImageReference(row.image);
-        const opened = await openProjectValue(deps.pool, deps.kek, projectId, registryAuthName(row.id), row.registry_auth);
+        const name = row.kind === 'Service' ? registryAuthName(row.id) : jobRegistryAuthName(row.id);
+        const opened = await openProjectValue(deps.pool, deps.kek, projectId, name, row.registry_auth);
         if (!opened.ok) {
-            return err(`cannot open the registry credentials of Service ${row.id}: ${opened.error.kind}`);
+            return err(`cannot open the registry credentials of ${row.kind} ${row.id}: ${opened.error.kind}`);
         }
         if (image.ok) {
             credentials.set(credentialKey(image.value), JSON.parse(opened.value) as RegistryAuth);
@@ -112,7 +117,7 @@ export async function syncProjectSecrets(
     if (!registry.ok || registry.value === 'no-namespace') {
         return registry;
     }
-    // Only now may the Services roll: their pods will read these values.
+    // Only now may the Services roll and the Jobs change: their pods will read these values.
     await deps.pool.query('update projects set secrets_version = $2 where id = $1 and secrets_version is distinct from $2', [projectId, version]);
     return registry;
 }
@@ -129,7 +134,7 @@ const secretsVersionOf = async (pool: pg.Pool, projectId: string): Promise<strin
 
 /**
  * One pass over every live Project that has ever had a Secret or registry
- * credentials (it has a data key), or has a Service: its pods wait for
+ * credentials (it has a data key), or has a Service or Job: its pods wait for
  * `project-secrets` to exist, so they never start without the values they
  * are meant to have, and a Project without Secrets gets an empty one. A
  * Project whose write fails is logged; the others go on.
@@ -139,7 +144,8 @@ export async function secretsPass(deps: SecretsDeps): Promise<void> {
         `select p.id from projects p
          where p.deleted_at is null
            and (exists (select 1 from project_data_keys k where k.project_id = p.id)
-                or exists (select 1 from services s where s.project_id = p.id))
+                or exists (select 1 from services s where s.project_id = p.id)
+                or exists (select 1 from jobs j where j.project_id = p.id))
          order by p.id`,
     );
     const outcomes = await Promise.all(

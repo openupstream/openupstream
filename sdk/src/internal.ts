@@ -4,7 +4,7 @@
  * public API: it is served on its own port, never routed by ingress, and
  * callers authenticate with their Kubernetes ServiceAccount token.
  */
-import type { Account, Database, Domain, Id, Member, Project, Route, Service, Site } from './model.js';
+import type { Account, Database, Domain, Id, Job, Member, Project, Route, Service, Site } from './model.js';
 
 /**
  * Kubernetes names, by id (ARCHITECTURE.md, decision 42): the operators
@@ -20,20 +20,23 @@ export const poolerName = (database: Pick<Database, 'id'>): string => `${cluster
 
 /**
  * The Kubernetes Secret in a Project's namespace that holds all its Secrets'
- * values; the control plane writes it, Services read it with `envFrom`.
+ * values; the control plane writes it, Services and Jobs read it with `envFrom`.
  */
 export const PROJECT_SECRETS = 'project-secrets';
 
 /**
  * The `kubernetes.io/dockerconfigjson` Secret in a Project's namespace with
- * the registry credentials of all its Services, each under its image's
- * repository; the control plane writes it, every Service names it in
- * `imagePullSecrets`.
+ * the registry credentials of all its Services and Jobs, each under its
+ * image's repository; the control plane writes it, every Service and Job
+ * names it in `imagePullSecrets`.
  */
 export const PROJECT_REGISTRY_AUTH = 'project-registry-auth';
 
 /** The Service's Deployment and Kubernetes Service, in its Project's namespace. */
 export const serviceObjectName = (service: Pick<Service, 'id'>): string => `svc-${service.id}`;
+
+/** The Job's CronJob, in its Project's namespace; its runs are Kubernetes Jobs named after it. */
+export const jobObjectName = (job: Pick<Job, 'id'>): string => `job-${job.id}`;
 
 /** The folder under the backup bucket that holds one Database's base backups and WAL. */
 export const backupPrefix = (projectId: Id, databaseId: Id): string =>
@@ -64,6 +67,9 @@ export const INTERNAL_ROUTES_PATH = '/internal/v1/routes';
 
 /** `GET` lists every Service with its Project, for the Services operator. */
 export const INTERNAL_SERVICES_PATH = '/internal/v1/services';
+
+/** `GET` lists every Job with its Project, for the Jobs operator. */
+export const INTERNAL_JOBS_PATH = '/internal/v1/jobs';
 
 /** The Traefik IngressRoute that serves one Domain, in its Project's namespace. */
 export const ingressRouteName = (domainId: Id): string => `domain-${domainId}`;
@@ -111,7 +117,7 @@ export interface ServiceRow {
     readonly secretsVersion: string;
 }
 
-/** On a Service's Deployment: the spec version it was applied from (serviceSpecVersion). */
+/** On a Service's Deployment and a Job's CronJob: the spec version it was applied from (serviceSpecVersion, jobSpecVersion). */
 export const SPEC_VERSION_ANNOTATION = 'openupstream.io/spec-version';
 
 /**
@@ -122,6 +128,41 @@ export const SPEC_VERSION_ANNOTATION = 'openupstream.io/spec-version';
  */
 export const serviceSpecVersion = (row: Pick<ServiceRow, 'service' | 'pinnedImage' | 'site' | 'secretsVersion'>): string =>
     [row.pinnedImage, row.service.replicas, row.service.memoryMb, row.service.cpuMillicores, row.service.port, row.site, row.secretsVersion].join('|');
+
+/** One Job as the Jobs operator needs it. */
+export interface JobRow {
+    readonly project: Project;
+    readonly job: Pick<
+        Job,
+        'id' | 'name' | 'image' | 'imageDigest' | 'command' | 'args' | 'memoryMb' | 'cpuMillicores' | 'timeoutSeconds' | 'schedule' | 'timeZone'
+    >;
+    /** What its runs start: `<registry>/<repository>@<digest>`. */
+    readonly pinnedImage: string;
+    /** Where its runs go: the Job's homeSite, else the Project's oldest Database's, else `hetzner-fsn1`. */
+    readonly site: Site;
+    /** As for a Service: the version of the Project's Secrets in its Kubernetes Secret. */
+    readonly secretsVersion: string;
+}
+
+/**
+ * Everything of a Job's row that its CronJob is rendered from. The Jobs
+ * operator writes it on the CronJob; until the CronJob carries the version
+ * the row asks for, the Job is `deploying` and no run starts from the old
+ * template.
+ */
+export const jobSpecVersion = (row: Pick<JobRow, 'job' | 'pinnedImage' | 'site' | 'secretsVersion'>): string =>
+    JSON.stringify([
+        row.pinnedImage,
+        row.job.command,
+        row.job.args,
+        row.job.memoryMb,
+        row.job.cpuMillicores,
+        row.job.timeoutSeconds,
+        row.job.schedule,
+        row.job.timeZone,
+        row.site,
+        row.secretsVersion,
+    ]);
 
 export interface DatabaseRow {
     readonly project: Project;

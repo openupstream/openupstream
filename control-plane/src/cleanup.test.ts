@@ -19,6 +19,7 @@ const fakes = () => {
     const kube: ControlPlaneKube = {
         readCluster: async () => ok(undefined),
         readDeployment: async () => ok(undefined),
+        readCronJob: async () => ok(undefined),
         remove: async (ref: ObjectRef) => {
             if (failKinds.has(ref.kind)) {
                 return err('forbidden');

@@ -37,6 +37,7 @@ const fakeKube = (failing: readonly string[] = [], missing: readonly string[] = 
     const kube: ControlPlaneKube = {
         readCluster: async () => ok(undefined),
         readDeployment: async () => ok(undefined),
+        readCronJob: async () => ok(undefined),
         remove: async () => ok(undefined),
         applySecret: async (secret) => {
             if (failing.includes(secret.metadata.namespace)) {

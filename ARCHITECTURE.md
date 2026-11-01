@@ -504,6 +504,33 @@ digest (#55).
   template rolls the Service when they change. The control plane records
   that version only after it wrote the new values, so pods never restart
   into the old ones.
+- A Job (#95, [ADR-0003](docs/adr/0003-jobs.md)) is a row like a Service:
+  `POST …/jobs` with its image, optional `command` (the entrypoint) and
+  `args`, memory, CPU, a timeout (default 1 h, at most 24 h) and an
+  optional `schedule` (five cron fields or `@hourly`…`@yearly`) read in an
+  optional IANA `timeZone` (default UTC); `PATCH`, `POST …/deploy` and
+  `DELETE` as for a Service. A Job with a schedule is a Cron job. Its image
+  is pinned at deploy and its pull credentials go into
+  `project-registry-auth` like a Service's, so every run starts the same
+  digest without asking the registry.
+- `POST …/jobs/{id}/runs`, with optional `args` and `env`, starts a
+  One-off job from any Job while the request waits: the control plane
+  copies the `jobTemplate` of the Job's CronJob into a Kubernetes Job, owned
+  by the CronJob, with the run's arguments. An Account with a Hold starts
+  none (402). Runs are read live from Kubernetes, scheduled and started
+  alike; there is no run history in the control plane.
+- The Jobs operator applies one CronJob `job-<id>` per Job, suspended when
+  the Job has no schedule, with the pod rules of a Service (gVisor, image
+  by digest, requests = limits, no ServiceAccount token, `envFrom`
+  `project-secrets`, the egress policy), in the Job's Site by preference.
+  It carries the spec version of the row (`jobSpecVersion` in the sdk);
+  until it carries the current one the Job is `deploying` and a run is
+  refused with 409, so no run starts from an old template. A run is never
+  retried (`backoffLimit: 0`), a Cron job never overlaps its previous run
+  (the due one is skipped), every run is stopped at its Job's timeout, and
+  a finished run stays 24 hours, so its logs can be read; a Cron job keeps
+  at most its last 3 successful and 3 failed runs. Deleting a Job deletes
+  its CronJob, and Kubernetes its runs.
 
 ## Routing and domains
 
@@ -817,6 +844,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 92 | Services API: a Service is a row, created, changed (`PATCH`) and redeployed (`POST …/deploy`) through the API, its state read from its Deployment. The control plane resolves the tag to a digest at the registry while the request waits, over https and never at a private address; pull credentials are per Service, sealed with the Project's data key, and rendered into one dockerconfigjson Secret per Project keyed by repository | Deployments as immutable records with history and rollback; the operator resolving tags on its pass; named registry credentials shared by Services; a pull Secret per Service | the pattern of Buckets: a 201 means the image exists and can be pulled, and a bad tag or credentials is an answer, not a state to poll; the operator never needs credentials or the internet. One Secret per Project lives and dies with the namespace and needs no pruning by the control plane; kubelet's prefix match keeps credentials per repository. Rollback is a `PATCH` back to a digest (`image@sha256:…`) |
 | 93 | A Services operator (`OPERATOR=services`, own ServiceAccount) applies per Service a Deployment (gVisor, image by digest, requests = limits, no ServiceAccount token, `envFrom` `project-secrets` required, Secrets version on the pod template) and a Kubernetes Service, plus per Project the NetworkPolicy `service-egress`, and deletes what no row wants. Routes to a Service keep the path, dial with a 1 s timeout and retry GET and HEAD only | extending the Routes operator; `optional` Secrets; stripping the prefix as for Buckets; egress left open | each operator keeps only the rights it needs and one concern per pass; a pod that waited for its Secrets never runs without them; apps behind `/api` usually expect their full path; customer code must not reach Garage's admin API, the control plane or other Projects from inside the cluster, so only the internet and its own namespace are open |
 | 94 | `oup` acts on the Project linked to the directory (`oup link` writes its id to `.openupstream.json`, found upwards like `.git`; `--project` or `OUP_PROJECT` override); `oup service deploy` is one idempotent command (create, else change what differs, else deploy the tag again; always resolves the tag, then waits until running); Secret values and registry passwords come from stdin only | `--project` on every command; separate create/update/redeploy verbs mirroring the API; `NAME=value` arguments | the directory is where the code of one Project lives, as with Vercel or Railway, and the id survives renames; the same deploy line works for the first and every later deploy, locally and in CI; arguments end up in shell history and the process list |
+| 95 | Jobs ([ADR-0003](docs/adr/0003-jobs.md)): one `…/jobs` resource (image pinned at deploy, command, args, resources, timeout, optional `schedule` and `timeZone`); a schedule makes it a Cron job, `POST …/jobs/{id}/runs` (args, env) starts a One-off job. The control plane creates that Kubernetes Job while the request waits, as a copy of the `jobTemplate` of the Job's CronJob, which the Jobs operator applies (suspended without a schedule). Runs are read from Kubernetes only, kept 24 h. No retries, no overlap, timeout default 1 h, at most 24 h, UTC unless a time zone is given | a One-off job running a Service's image with another command (Render, Heroku); self-contained runs that carry their image; the operator creating runs from rows; run rows in the control plane; the pod template in the sdk; Kubernetes' defaults, or retries and overlap per Job | runs start in seconds and from the pinned digest, without a registry call; the pod rules are written once, in the operator, and deleting a Job deletes its runs by garbage collection; no table to keep in step with Kubernetes. Costs: a run is refused for up to one operator pass after a change, no history beyond a day, and the control plane may create and delete Jobs in every Project namespace |
 
 ## Open questions
 

@@ -24,6 +24,9 @@ import type {
     DatabaseInput,
     Domain,
     Id,
+    JobDetails,
+    JobInput,
+    JobPatch,
     Project,
     ProjectInput,
     Route,
@@ -198,6 +201,34 @@ export class OpenUpstreamClient {
     /** Deletes the Service; refused while a Route serves it. */
     deleteService(projectId: Id, serviceId: Id): Promise<ApiResult<void>> {
         return this.#call('DELETE', `/v1/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}`);
+    }
+
+    listJobs(projectId: Id): Promise<ApiResult<JobDetails[]>> {
+        return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/jobs`);
+    }
+
+    /** Resolves the image's tag to a digest now; the Job is ready to run within one operator pass. */
+    createJob(projectId: Id, input: JobInput): Promise<ApiResult<JobDetails>> {
+        return this.#call('POST', `/v1/projects/${encodeURIComponent(projectId)}/jobs`, input);
+    }
+
+    getJob(projectId: Id, jobId: Id): Promise<ApiResult<JobDetails>> {
+        return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}`);
+    }
+
+    /** Changes the Job; a new image or new registry credentials resolve the tag again. */
+    updateJob(projectId: Id, jobId: Id, patch: JobPatch): Promise<ApiResult<JobDetails>> {
+        return this.#call('PATCH', `/v1/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}`, patch);
+    }
+
+    /** Resolves the Job's tag again; later runs start what it points at now. */
+    deployJob(projectId: Id, jobId: Id): Promise<ApiResult<JobDetails>> {
+        return this.#call('POST', `/v1/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}/deploy`);
+    }
+
+    /** Deletes the Job; its runs, running ones included, are stopped and removed. */
+    deleteJob(projectId: Id, jobId: Id): Promise<ApiResult<void>> {
+        return this.#call('DELETE', `/v1/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}`);
     }
 
     /** The Project's Secrets, names only: a value is never returned. */

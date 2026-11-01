@@ -8,20 +8,23 @@ import {
     type BucketDetails,
     type DatabaseDetails,
     type Domain,
+    type JobDetails,
     type Project,
     type Route,
     type Secret,
     type ServiceDetails,
     type ServiceRow,
+    jobSpecVersion,
     serviceSpecVersion,
 } from '@openupstream/sdk';
 import { getAccountRecord, liftHold, placeHold } from '../accounts/store.js';
 import { listDatabaseRows } from '../databases/rows.js';
 import { ensureDefaultDomains } from '../domains/store.js';
 import { listDomainRoutings } from '../routes/store.js';
-import { type ClusterStatus, type ControlPlaneKube, type DeploymentStatus, type SecretManifest } from '../kube.js';
+import { type ClusterStatus, type ControlPlaneKube, type CronJobStatus, type DeploymentStatus, type SecretManifest } from '../kube.js';
 import type { RegistryDeps } from '../registry.js';
 import { listServiceRows } from '../services/store.js';
+import { listJobRows } from '../jobs/store.js';
 import { parseKeyEncryptionKey } from '../secrets/envelope.js';
 import { err, ok } from '../result.js';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
@@ -91,6 +94,9 @@ function fakeRegistry(): RegistryDeps {
 /** What the fake Kubernetes reports per Deployment name. */
 const deployments = new Map<string, DeploymentStatus>();
 
+/** What the fake Kubernetes reports per CronJob name. */
+const cronJobs = new Map<string, CronJobStatus>();
+
 /** What the fake Kubernetes reports per Cluster name; a string is an error. */
 const clusters = new Map<string, ClusterStatus | string>();
 
@@ -104,6 +110,7 @@ const kube: ControlPlaneKube = {
         return typeof status === 'string' ? err(status) : ok(status);
     },
     readDeployment: async (_namespace, name) => ok(deployments.get(name)),
+    readCronJob: async (_namespace, name) => ok(cronJobs.get(name)),
     remove: async () => ok(undefined),
     applySecret: async (secret) => {
         if (missingNamespaces.has(secret.metadata.namespace)) {
@@ -960,6 +967,154 @@ describe('Services', () => {
     });
 });
 
+describe('Jobs', () => {
+    let projectId: string;
+    let job: JobDetails;
+    const digest = (c: string) => `sha256:${c.repeat(64)}`;
+    const path = (rest = '') => `/v1/projects/${projectId}/jobs${rest}`;
+    const input = { name: 'nightly', image: 'ghcr.io/acme/api:v1', command: ['node', 'dist/nightly.js'], memoryMb: 256, cpuMillicores: 250 };
+    const issues = async (response: Response) => JSON.stringify(await response.json());
+
+    before(async () => {
+        const response = await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'job-tests' });
+        projectId = ((await response.json()) as Project).id;
+        images.set('acme/api:v1', digest('1'));
+        images.set('acme/private:v1', digest('2'));
+    });
+
+    test('created with its tag pinned, the default timeout and no schedule; deploying', async () => {
+        const response = await call('POST', path(), 'alice', input);
+        assert.equal(response.status, 201);
+        job = (await response.json()) as JobDetails;
+        assert.equal(job.imageDigest, digest('1'));
+        assert.deepEqual(job.command, ['node', 'dist/nightly.js']);
+        assert.equal(job.args, null);
+        assert.equal(job.timeoutSeconds, 3600);
+        assert.equal(job.schedule, null);
+        assert.equal(job.timeZone, null);
+        assert.equal(job.registryAuth, false);
+        assert.equal(job.state, 'deploying');
+        assert.equal((await call('POST', path(), 'alice', input)).status, 409);
+    });
+
+    test("ready once the CronJob carries the row's current spec, deploying while it carries an older one", async () => {
+        const stateNow = async () => ((await (await call('GET', path(`/${job.id}`), 'alice')).json()) as JobDetails).state;
+        const row = (await listJobRows(db.pool, projectId)).find((candidate) => candidate.job.id === job.id);
+        assert.ok(row);
+        cronJobs.set(`job-${job.id}`, { specVersion: jobSpecVersion(row) });
+        assert.equal(await stateNow(), 'ready');
+        cronJobs.set(`job-${job.id}`, { specVersion: 'an older spec' });
+        assert.equal(await stateNow(), 'deploying');
+        const listed = (await (await call('GET', path(), 'alice')).json()) as JobDetails[];
+        assert.deepEqual(listed.map((candidate) => [candidate.name, candidate.state]), [['nightly', 'deploying']]);
+        cronJobs.delete(`job-${job.id}`);
+    });
+
+    test('schedules, time zones, command and timeout are checked before anything is written', async () => {
+        const refused = async (extra: Record<string, unknown>, expected: RegExp) => {
+            const response = await call('POST', path(), 'alice', { ...input, name: 'refused', ...extra });
+            assert.equal(response.status, 400, JSON.stringify(extra));
+            assert.match(await issues(response), expected);
+        };
+        await refused({ schedule: '0 25 * * *' }, /hour: 25 is outside 0-23/);
+        await refused({ schedule: '@every 5m' }, /not one of/);
+        await refused({ schedule: '0 3 * * *', timeZone: 'Mars/Base' }, /IANA time zone/);
+        await refused({ timeZone: 'Europe/Berlin' }, /timeZone needs a schedule/);
+        await refused({ command: [] }, /command/);
+        await refused({ args: ['x'.repeat(9000), 'y'.repeat(9000)] }, /more than 16384/);
+        await refused({ timeoutSeconds: 86401 }, /timeoutSeconds/);
+        await refused({ memoryMb: 32 }, /memoryMb/);
+        assert.equal((await db.pool.query(`select 1 from jobs where name = 'refused'`)).rowCount, 0);
+    });
+
+    test('a Cron job: its schedule is stored trimmed with its time zone', async () => {
+        const response = await call('POST', path(), 'alice', { ...input, name: 'cleanup', schedule: ' */15 * * * * ', timeZone: 'Europe/Berlin' });
+        assert.equal(response.status, 201);
+        const created = (await response.json()) as JobDetails;
+        assert.equal(created.schedule, '*/15 * * * *');
+        assert.equal(created.timeZone, 'Europe/Berlin');
+        const rows = await listJobRows(db.pool, projectId);
+        assert.deepEqual(rows.find((row) => row.job.id === created.id)?.job.schedule, '*/15 * * * *');
+        // Removing the schedule removes its time zone; setting one alone again is refused.
+        const unscheduled = await call('PATCH', path(`/${created.id}`), 'alice', { schedule: null });
+        assert.equal(unscheduled.status, 200);
+        const body = (await unscheduled.json()) as JobDetails;
+        assert.equal(body.schedule, null);
+        assert.equal(body.timeZone, null);
+        assert.equal((await call('PATCH', path(`/${created.id}`), 'alice', { timeZone: 'UTC' })).status, 400);
+        assert.equal((await call('PATCH', path(`/${created.id}`), 'alice', { schedule: '@daily', timeZone: 'UTC' })).status, 200);
+        assert.equal((await call('DELETE', path(`/${created.id}`), 'alice')).status, 202);
+    });
+
+    test('PATCH: a new tag is resolved again; command, args and resources alone are not', async () => {
+        images.set('acme/api:v2', digest('4'));
+        const patched = await call('PATCH', path(`/${job.id}`), 'alice', { image: 'ghcr.io/acme/api:v2', args: ['--full'] });
+        assert.equal(patched.status, 200);
+        const body = (await patched.json()) as JobDetails;
+        assert.equal(body.imageDigest, digest('4'));
+        assert.deepEqual(body.args, ['--full']);
+        images.set('acme/api:v2', digest('5'));
+        const changed = (await (await call('PATCH', path(`/${job.id}`), 'alice', { command: null, memoryMb: 512, timeoutSeconds: 60 })).json()) as JobDetails;
+        assert.equal(changed.imageDigest, digest('4'));
+        assert.equal(changed.command, null);
+        assert.deepEqual(changed.args, ['--full']);
+        assert.equal(changed.memoryMb, 512);
+        assert.equal(changed.timeoutSeconds, 60);
+    });
+
+    test('deploy resolves the same tag again and pins its new digest', async () => {
+        const deployed = await call('POST', path(`/${job.id}/deploy`), 'alice');
+        assert.equal(deployed.status, 200);
+        const body = (await deployed.json()) as JobDetails;
+        assert.equal(body.imageDigest, digest('5'));
+        assert.ok(body.deployedAt > job.deployedAt);
+    });
+
+    test("a private image's credentials are sealed, never returned, and rendered for kubelet with the Services'", async () => {
+        const image = 'ghcr.io/acme/private:v1';
+        assert.equal((await call('POST', path(), 'alice', { ...input, name: 'private', image })).status, 400);
+        const created = await call('POST', path(), 'alice', { ...input, name: 'private', image, registryAuth: { username: 'ci', password: 'token' } });
+        assert.equal(created.status, 201);
+        const body = (await created.json()) as JobDetails;
+        assert.equal(body.registryAuth, true);
+        assert.ok(!JSON.stringify(body).includes('token'));
+        const stored = await db.pool.query<{ registry_auth: Buffer }>('select registry_auth from jobs where id = $1', [body.id]);
+        assert.ok(!stored.rows[0]?.registry_auth.toString('latin1').includes('token'));
+        // The API writes the Project's Secrets right after answering.
+        const rendered = async () =>
+            appliedSecrets
+                .filter((secret) => secret.metadata.namespace === `project-${projectId}` && secret.metadata.name === 'project-registry-auth')
+                .at(-1);
+        for (let attempt = 0; attempt < 50 && (await rendered()) === undefined; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        const config = JSON.parse(Buffer.from((await rendered())?.data['.dockerconfigjson'] ?? '', 'base64').toString()) as {
+            auths: Record<string, { username: string }>;
+        };
+        assert.equal(config.auths['ghcr.io/acme/private']?.username, 'ci');
+        // A deploy pulls with the stored credentials.
+        assert.equal((await call('POST', path(`/${body.id}/deploy`), 'alice')).status, 200);
+        assert.equal((await call('DELETE', path(`/${body.id}`), 'alice')).status, 202);
+    });
+
+    test('the operator gets the pinned image and where the runs go', async () => {
+        const row = (await listJobRows(db.pool)).find((candidate) => candidate.job.id === job.id);
+        assert.equal(row?.pinnedImage, `ghcr.io/acme/api@${digest('5')}`);
+        assert.equal(row?.site, 'hetzner-fsn1');
+        assert.equal((await call('PATCH', path(`/${job.id}`), 'alice', { homeSite: 'ovh-lim' })).status, 200);
+        assert.equal((await listJobRows(db.pool)).find((candidate) => candidate.job.id === job.id)?.site, 'ovh-lim');
+    });
+
+    test("another Account's Project: 404; deleted: 202, then gone", async () => {
+        assert.equal((await call('GET', path(`/${job.id}`), 'bob')).status, 404);
+        assert.equal((await call('DELETE', path(`/${job.id}`), 'bob')).status, 404);
+        assert.equal((await call('DELETE', path(`/${job.id}`), 'alice')).status, 202);
+        assert.equal((await call('GET', path(`/${job.id}`), 'alice')).status, 404);
+        assert.equal((await call('DELETE', path(`/${job.id}`), 'alice')).status, 404);
+        assert.ok(!(await listJobRows(db.pool)).some((row) => row.job.id === job.id));
+    });
+});
+
 describe('Holds', () => {
     /** The API as the platform runs it with a billing service: new Accounts wait for a payment method. */
     let gated: ReturnType<typeof createApi>;
@@ -1030,6 +1185,14 @@ describe('Holds', () => {
             db.pool.query(
                 `insert into services (project_id, name, image, image_digest, memory_mb, cpu_millicores, port)
                  values ($1, 'web', 'nginx', 'sha256:${'0'.repeat(64)}', 128, 100, 80)`,
+                [projectId],
+            ),
+            /has a Hold/,
+        );
+        await assert.rejects(
+            db.pool.query(
+                `insert into jobs (project_id, name, image, image_digest, memory_mb, cpu_millicores, timeout_seconds)
+                 values ($1, 'nightly', 'nginx', 'sha256:${'0'.repeat(64)}', 128, 100, 60)`,
                 [projectId],
             ),
             /has a Hold/,

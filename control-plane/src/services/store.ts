@@ -193,6 +193,19 @@ export async function deleteService(pool: pg.Pool, projectId: string, id: string
     return deleted.value.rowCount === 1 ? 'deleted' : 'not-found';
 }
 
+/**
+ * Where a single replica of a Service, or a Job's runs, go, in SQL over the
+ * table aliased `t`: its home_site, else the Home site of its Project's
+ * oldest live Database, else hetzner-fsn1 (ARCHITECTURE.md, "Containers").
+ */
+export const siteOf = (t: string): string =>
+    `coalesce(
+        ${t}.home_site,
+        (select d.home_site from databases d where d.project_id = ${t}.project_id and d.deleted_at is null
+         order by d.created_at, d.id limit 1),
+        'hetzner-fsn1'
+    )`;
+
 interface OperatorRow extends Row {
     project_name: string;
     account_id: string;
@@ -211,12 +224,7 @@ export async function listServiceRows(pool: pg.Pool, projectId?: string): Promis
     const { rows } = await pool.query<OperatorRow>(
         `select ${columns('s.')},
                 p.name as project_name, p.account_id, p.created_at as project_created_at,
-                coalesce(
-                    s.home_site,
-                    (select d.home_site from databases d where d.project_id = s.project_id and d.deleted_at is null
-                     order by d.created_at, d.id limit 1),
-                    'hetzner-fsn1'
-                ) as site,
+                ${siteOf('s')} as site,
                 coalesce(p.secrets_version, '') as secrets_version
          from services s join projects p on p.id = s.project_id
          where p.deleted_at is null and ($1::uuid is null or s.project_id = $1)

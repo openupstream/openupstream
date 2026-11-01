@@ -6,8 +6,10 @@ import {
     type AccountRecord,
     type DatabaseRow,
     type DomainRouting,
+    type JobRow,
     INTERNAL_ACCOUNTS_PATH,
     INTERNAL_DATABASES_PATH,
+    INTERNAL_JOBS_PATH,
     INTERNAL_ROUTES_PATH,
     INTERNAL_SERVICES_PATH,
     PLATFORM,
@@ -50,6 +52,28 @@ const serviceRows: ServiceRow[] = [
         secretsVersion: 'd41d8cd98f00b204e9800998ecf8427e',
     },
 ];
+const jobsOperator = 'system:serviceaccount:openupstream-system:jobs-operator';
+const jobRows: JobRow[] = [
+    {
+        project: PLATFORM.project,
+        job: {
+            id: '0b7c3f1e-2d4a-4c8b-9e6f-444444444444',
+            name: 'nightly',
+            image: 'nginx:1.27',
+            imageDigest: `sha256:${'a'.repeat(64)}`,
+            command: ['node', 'dist/nightly.js'],
+            args: null,
+            memoryMb: 256,
+            cpuMillicores: 250,
+            timeoutSeconds: 3600,
+            schedule: '0 3 * * *',
+            timeZone: 'Europe/Berlin',
+        },
+        pinnedImage: `docker.io/library/nginx@sha256:${'a'.repeat(64)}`,
+        site: 'hetzner-fsn1',
+        secretsVersion: 'd41d8cd98f00b204e9800998ecf8427e',
+    },
+];
 const accountId = '0b7c3f1e-2d4a-4c8b-9e6f-1a2b3c4d5e6f';
 const unknownId = '0b7c3f1e-2d4a-4c8b-9e6f-000000000000';
 
@@ -82,8 +106,10 @@ before(async () => {
         billingCallers: new Set([billing]),
         routesCallers: new Set([routesOperator]),
         servicesCallers: new Set([servicesOperator]),
+        jobsCallers: new Set([jobsOperator]),
         listDomainRoutings: async () => routings,
         listServiceRows: async () => serviceRows,
+        listJobRows: async () => jobRows,
         listDatabaseRows: async () => {
             if (listFails) {
                 throw new Error('database down');
@@ -189,4 +215,12 @@ test('the Services operator gets every Service; nobody else does', async () => {
     assert.deepEqual(await response.json(), serviceRows);
     assert.equal((await get(operator, INTERNAL_SERVICES_PATH)).status, 403);
     assert.equal((await get(servicesOperator)).status, 403);
+});
+
+test('the Jobs operator gets every Job; nobody else does', async () => {
+    const response = await get(jobsOperator, INTERNAL_JOBS_PATH);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), jobRows);
+    assert.equal((await get(servicesOperator, INTERNAL_JOBS_PATH)).status, 403);
+    assert.equal((await get(jobsOperator, INTERNAL_SERVICES_PATH)).status, 403);
 });

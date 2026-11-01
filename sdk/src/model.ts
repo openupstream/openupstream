@@ -8,7 +8,7 @@
 export type Id = string;
 export type Timestamp = string;
 
-/** Compute Sites, where Databases and Services run. Both are in Germany. */
+/** Compute Sites, where Databases, Services and Jobs run. Both are in Germany. */
 export const COMPUTE_SITES = ['hetzner-fsn1', 'ovh-lim'] as const;
 export type Site = (typeof COMPUTE_SITES)[number];
 
@@ -245,6 +245,105 @@ export type ServiceState = 'deploying' | 'running' | 'degraded' | 'unknown';
 /** A Service as the API returns it. */
 export interface ServiceDetails extends Service {
     state: ServiceState;
+}
+
+/** Limits of a Job, checked by the API; memory and CPU as for a Service. */
+export const JOB_LIMITS = {
+    minMemoryMb: SERVICE_LIMITS.minMemoryMb,
+    maxMemoryMb: SERVICE_LIMITS.maxMemoryMb,
+    minCpuMillicores: SERVICE_LIMITS.minCpuMillicores,
+    maxCpuMillicores: SERVICE_LIMITS.maxCpuMillicores,
+    defaultTimeoutSeconds: 3600,
+    maxTimeoutSeconds: 86400,
+    /** Entries of `command` and of `args`, and their bytes (UTF-8) together, which go into a Kubernetes annotation. */
+    maxArgs: 256,
+    maxArgsTotalBytes: 16 * 1024,
+} as const;
+
+/**
+ * A container image run to completion (ARCHITECTURE.md, "Containers"): a
+ * Cron job when it has a `schedule`, and started as a One-off job through
+ * the API whether or not it has one. Its image is pinned to a digest
+ * whenever it is deployed; every run starts that digest.
+ */
+export interface Job {
+    id: Id;
+    projectId: Id;
+    /** DNS label, unique within the Project. */
+    name: string;
+    /** The image reference as given, from any registry. */
+    image: string;
+    /** `sha256:…`, the digest the tag resolved to when the Job was last deployed. */
+    imageDigest: string;
+    /** When the tag was last resolved: at creation, on a change of image, and on every deploy. */
+    deployedAt: Timestamp;
+    /** Replaces the image's entrypoint; null: the image's. */
+    command: string[] | null;
+    /** Replaces the image's command (its CMD); null: the image's. A run may replace it again. */
+    args: string[] | null;
+    memoryMb: number;
+    cpuMillicores: number;
+    /** A run still going after this long is stopped and failed. */
+    timeoutSeconds: number;
+    /**
+     * Five-field cron expression (`*\/15 * * * *`) or `@hourly`, `@daily`,
+     * `@weekly`, `@monthly`, `@yearly`; null: started only through the API.
+     * A run that is due while the previous one still runs is skipped.
+     */
+    schedule: string | null;
+    /** IANA time zone the schedule is read in, e.g. `Europe/Berlin`; null: UTC. */
+    timeZone: string | null;
+    /** Where its runs go; null: the Home site of the Project's oldest Database, or `hetzner-fsn1`. */
+    homeSite: Site | null;
+    /** Whether the image is pulled with registry credentials. */
+    registryAuth: boolean;
+    createdAt: Timestamp;
+}
+
+/** Creates a Job; the tag is resolved to a digest while the request waits. */
+export interface JobInput {
+    name: string;
+    image: string;
+    command?: string[];
+    args?: string[];
+    memoryMb: number;
+    cpuMillicores: number;
+    /** Default JOB_LIMITS.defaultTimeoutSeconds. */
+    timeoutSeconds?: number;
+    schedule?: string;
+    timeZone?: string;
+    homeSite?: Site;
+    registryAuth?: RegistryAuth;
+}
+
+/**
+ * Changes a Job. A new `image` or `registryAuth` resolves the tag again;
+ * null removes a `command`, `args`, `schedule`, `timeZone`, `homeSite` or
+ * the registry credentials.
+ */
+export interface JobPatch {
+    image?: string;
+    command?: string[] | null;
+    args?: string[] | null;
+    memoryMb?: number;
+    cpuMillicores?: number;
+    timeoutSeconds?: number;
+    schedule?: string | null;
+    timeZone?: string | null;
+    homeSite?: Site | null;
+    registryAuth?: RegistryAuth | null;
+}
+
+/**
+ * Read live from its CronJob: `deploying` until the Jobs operator has
+ * applied the Job as it is now, `ready` once it has (runs can start),
+ * `unknown` when Kubernetes cannot be asked.
+ */
+export type JobState = 'deploying' | 'ready' | 'unknown';
+
+/** A Job as the API returns it. */
+export interface JobDetails extends Job {
+    state: JobState;
 }
 
 /** A Secret's name is an environment variable name (the schema checks the same). */

@@ -1,6 +1,6 @@
 /**
  * The public API (ARCHITECTURE.md, "Control plane"): the caller's Accounts,
- * and the Projects, Databases, Buckets, Services, Domains, routing table and Secrets in them. Every route under /v1 except the
+ * and the Projects, Databases, Buckets, Services, Jobs, Domains, routing table and Secrets in them. Every route under /v1 except the
  * health check needs a madAuth session token or API key (./auth.ts); an
  * API key needs `openupstream:read` for GET and `openupstream:write` for
  * anything else. Another Account's Project answers 404, like one that does
@@ -13,6 +13,7 @@ import {
     DATABASE_MIN_MEMORY_MB,
     DNS_LABEL,
     HOSTNAME,
+    JOB_LIMITS,
     PATH_PREFIX,
     SECRET_NAME,
     SECRET_VALUE_MAX_BYTES,
@@ -24,6 +25,10 @@ import {
     type Database,
     type DatabaseDetails,
     type DatabaseState,
+    type Job,
+    type JobDetails,
+    type JobRow,
+    type JobState,
     type RegistryAuth,
     type RouteInput,
     type Service,
@@ -31,6 +36,8 @@ import {
     type ServiceRow,
     type ServiceState,
     clusterName,
+    jobObjectName,
+    jobSpecVersion,
     serviceObjectName,
     serviceSpecVersion,
     poolerName,
@@ -46,7 +53,9 @@ import { createDatabase, deleteDatabase, getDatabase, listDatabases } from '../d
 import type { TxtLookup } from '../domains/dns.js';
 import { createCustomDomain, deleteDomain, getDomain, isReserved, listDomains, verifyDomain } from '../domains/store.js';
 import { GARAGE_REGION, type ObjectStorage } from '../garage.js';
-import { type ControlPlaneKube, serviceStateOf, stateOf } from '../kube.js';
+import { type JobChanges, createJob, deleteJob, getJob, jobRegistryAuthName, listJobRows, listJobs, sealedJobRegistryAuth, updateJob } from '../jobs/store.js';
+import { isTimeZone, scheduleError } from '../jobs/schedule.js';
+import { type ControlPlaneKube, jobStateOf, serviceStateOf, stateOf } from '../kube.js';
 import { type RegistryDeps, type ResolveError, parseImageReference, resolveDigest } from '../registry.js';
 import { createProject, deleteProject, getProject, listProjects } from '../projects/store.js';
 import { type Result, ok } from '../result.js';
@@ -159,6 +168,65 @@ const servicePatch = z.strictObject({
     homeSite: z.enum(COMPUTE_SITES).nullable().optional(),
     registryAuth: registryAuthInput.nullable().optional(),
 });
+
+/** An entrypoint or its arguments: at least one entry; null in a PATCH removes it. */
+const argList = z.array(z.string().max(JOB_LIMITS.maxArgsTotalBytes)).min(1).max(JOB_LIMITS.maxArgs);
+
+const jobFields = {
+    image: serviceFields.image,
+    command: argList,
+    args: argList,
+    memoryMb: z.int().min(JOB_LIMITS.minMemoryMb).max(JOB_LIMITS.maxMemoryMb),
+    cpuMillicores: z.int().min(JOB_LIMITS.minCpuMillicores).max(JOB_LIMITS.maxCpuMillicores),
+    timeoutSeconds: z.int().min(1).max(JOB_LIMITS.maxTimeoutSeconds),
+    schedule: z
+        .string()
+        .max(200)
+        .transform((schedule) => schedule.trim())
+        .superRefine((schedule, ctx) => {
+            const error = scheduleError(schedule);
+            if (error !== undefined) {
+                ctx.addIssue({ code: 'custom', message: error });
+            }
+        }),
+    timeZone: z.string().max(64).refine(isTimeZone, 'an IANA time zone such as Europe/Berlin'),
+};
+
+const jobInput = z.strictObject({
+    name: z.string().regex(DNS_LABEL, 'a DNS label: lowercase letters, digits and hyphens'),
+    image: jobFields.image,
+    command: jobFields.command.optional(),
+    args: jobFields.args.optional(),
+    memoryMb: jobFields.memoryMb,
+    cpuMillicores: jobFields.cpuMillicores,
+    timeoutSeconds: jobFields.timeoutSeconds.optional(),
+    schedule: jobFields.schedule.optional(),
+    timeZone: jobFields.timeZone.optional(),
+    homeSite: z.enum(COMPUTE_SITES).optional(),
+    registryAuth: registryAuthInput.optional(),
+});
+
+const jobPatch = z.strictObject({
+    image: jobFields.image.optional(),
+    command: jobFields.command.nullable().optional(),
+    args: jobFields.args.nullable().optional(),
+    memoryMb: jobFields.memoryMb.optional(),
+    cpuMillicores: jobFields.cpuMillicores.optional(),
+    timeoutSeconds: jobFields.timeoutSeconds.optional(),
+    schedule: jobFields.schedule.nullable().optional(),
+    timeZone: jobFields.timeZone.nullable().optional(),
+    homeSite: z.enum(COMPUTE_SITES).nullable().optional(),
+    registryAuth: registryAuthInput.nullable().optional(),
+});
+
+/** Why a Job's command, args and time zone do not fit together; undefined when they do. */
+const jobShapeError = (job: Pick<Job, 'command' | 'args' | 'schedule' | 'timeZone'>): string | undefined => {
+    const bytes = [...(job.command ?? []), ...(job.args ?? [])].reduce((sum, arg) => sum + Buffer.byteLength(arg, 'utf8'), 0);
+    if (bytes > JOB_LIMITS.maxArgsTotalBytes) {
+        return `command and args take ${bytes} bytes, more than ${JOB_LIMITS.maxArgsTotalBytes}`;
+    }
+    return job.timeZone !== null && job.schedule === null ? 'timeZone needs a schedule' : undefined;
+};
 
 const pathPrefix = z.string().regex(PATH_PREFIX, '`/` or `/segment[/segment…]`, without a trailing slash');
 const routeInput = z.union([
@@ -673,19 +741,69 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         return reference.ok ? reference.value.registry : undefined;
     };
     const sameRegistry = (a: string, b: string) => registryOf(a) !== undefined && registryOf(a) === registryOf(b);
-    const sealAuth = (projectId: string, serviceId: string, auth: RegistryAuth) =>
-        sealProjectValue(pool, deps.kek, projectId, registryAuthName(serviceId), JSON.stringify(auth));
-    /** The Service's stored credentials, opened; undefined when it has none. */
-    const storedAuth = async (service: Service): Promise<RegistryAuth | undefined> => {
-        const sealed = await sealedRegistryAuth(pool, service.projectId, service.id);
+    /** Seals credentials bound to `boundTo`, a Service's or Job's registryAuthName. */
+    const sealAuthAs = (projectId: string, boundTo: string, auth: RegistryAuth) =>
+        sealProjectValue(pool, deps.kek, projectId, boundTo, JSON.stringify(auth));
+    /** Credentials sealed bound to `boundTo`, opened; undefined when there are none. */
+    const openAuth = async (projectId: string, boundTo: string, sealed: Buffer | undefined): Promise<RegistryAuth | undefined> => {
         if (sealed === undefined) {
             return undefined;
         }
-        const opened = await openProjectValue(pool, deps.kek, service.projectId, registryAuthName(service.id), sealed);
+        const opened = await openProjectValue(pool, deps.kek, projectId, boundTo, sealed);
         if (!opened.ok) {
-            throw new Error(`cannot open the registry credentials of Service ${service.id}: ${opened.error.kind}`);
+            throw new Error(`cannot open the registry credentials ${boundTo}: ${opened.error.kind}`);
         }
         return JSON.parse(opened.value) as RegistryAuth;
+    };
+    /** The Service's stored credentials, opened; undefined when it has none. */
+    const storedAuth = async (service: Service): Promise<RegistryAuth | undefined> =>
+        openAuth(service.projectId, registryAuthName(service.id), await sealedRegistryAuth(pool, service.projectId, service.id));
+    /**
+     * Stored credentials belong to the old image's registry: a new image
+     * elsewhere drops them (null), so they never reach another registry;
+     * otherwise what the request gave.
+     */
+    const authAfterChange = (
+        current: { readonly image: string; readonly registryAuth: boolean },
+        image: string | undefined,
+        given: RegistryAuth | null | undefined,
+    ): RegistryAuth | null | undefined =>
+        given === undefined && image !== undefined && current.registryAuth && !sameRegistry(current.image, image) ? null : given;
+    /**
+     * The columns a PATCH of a Service or Job writes for its image: with a new
+     * image or new credentials, the tag resolved again with the credentials it
+     * will be pulled with, and those sealed bound to `boundTo`; nothing else.
+     */
+    const imageChange = async (
+        current: { readonly projectId: string; readonly image: string; readonly registryAuth: boolean },
+        image: string | undefined,
+        givenAuth: RegistryAuth | null | undefined,
+        boundTo: string,
+        stored: () => Promise<RegistryAuth | undefined>,
+    ): Promise<
+        Result<
+            { readonly image?: string; readonly imageDigest?: string; readonly registryAuth?: Buffer | null },
+            { readonly image: string; readonly error: ResolveError }
+        >
+    > => {
+        const registryAuth = authAfterChange(current, image, givenAuth);
+        if (image === undefined && registryAuth === undefined) {
+            return ok({});
+        }
+        const pulled = image ?? current.image;
+        const digest = await resolve(pulled, registryAuth === undefined ? await stored() : (registryAuth ?? undefined));
+        if (!digest.ok) {
+            return { ok: false, error: { image: pulled, error: digest.error } };
+        }
+        const sealed = registryAuth === undefined || registryAuth === null ? undefined : await sealAuthAs(current.projectId, boundTo, registryAuth);
+        if (sealed !== undefined && !sealed.ok) {
+            throw new Error(`cannot seal: ${sealed.error.kind}`);
+        }
+        return ok({
+            ...(image === undefined ? {} : { image }),
+            imageDigest: digest.value,
+            ...(registryAuth === undefined ? {} : { registryAuth: sealed?.value ?? null }),
+        });
     };
 
     app.get('/v1/projects/:projectId/services', async (c) => {
@@ -716,7 +834,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             return unresolved(c, rest.image, digest.error);
         }
         const id = randomUUID();
-        const sealed = registryAuth === undefined ? undefined : await sealAuth(project.id, id, registryAuth);
+        const sealed = registryAuth === undefined ? undefined : await sealAuthAs(project.id, registryAuthName(id), registryAuth);
         if (sealed !== undefined && !sealed.ok) {
             return sealed.error.kind === 'project-not-found' ? c.json(notFound, 404) : Promise.reject(new Error(`cannot seal: ${sealed.error.kind}`));
         }
@@ -765,32 +883,17 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (!input.success) {
             return c.json(invalid(input.error.issues), 400);
         }
-        const { image, registryAuth: givenAuth, ...rest } = input.data;
-        // Stored credentials belong to the old image's registry: a new image elsewhere drops them, so they never reach another registry.
-        const registryAuth =
-            givenAuth === undefined && image !== undefined && service.registryAuth && !sameRegistry(service.image, image) ? null : givenAuth;
-        // A new image or new credentials: the tag is resolved again, with the credentials it will be pulled with.
-        const redeploy = image !== undefined || registryAuth !== undefined;
-        const auth = registryAuth === undefined ? await storedAuth(service) : (registryAuth ?? undefined);
-        const digest = redeploy ? await resolve(image ?? service.image, auth) : undefined;
-        if (digest !== undefined && !digest.ok) {
-            return unresolved(c, image ?? service.image, digest.error);
+        const { image, registryAuth, ...rest } = input.data;
+        const change = await imageChange(service, image, registryAuth, registryAuthName(service.id), () => storedAuth(service));
+        if (!change.ok) {
+            return unresolved(c, change.error.image, change.error.error);
         }
-        const sealed = registryAuth === undefined || registryAuth === null ? undefined : await sealAuth(service.projectId, service.id, registryAuth);
-        if (sealed !== undefined && !sealed.ok) {
-            throw new Error(`cannot seal: ${sealed.error.kind}`);
-        }
-        const changes: ServiceChanges = {
-            ...rest,
-            ...(image === undefined ? {} : { image }),
-            ...(digest === undefined ? {} : { imageDigest: digest.value }),
-            ...(registryAuth === undefined ? {} : { registryAuth: sealed?.value ?? null }),
-        };
+        const changes: ServiceChanges = { ...rest, ...change.value };
         const updated = await updateService(pool, service.projectId, service.id, changes);
         if (updated === undefined) {
             return c.json(notFound, 404);
         }
-        if (registryAuth !== undefined) {
+        if (change.value.registryAuth !== undefined) {
             syncSecrets(service.projectId);
         }
         return c.json(await serviceDetails(updated));
@@ -826,6 +929,164 @@ export function createApi(deps: ApiDeps): Hono<Env> {
                 }
                 return c.body(null, 202);
         }
+    });
+
+    /**
+     * The state from the CronJob, compared with the spec the row asks for now
+     * (`wanted`, from listJobRows); `unknown` when Kubernetes cannot be asked.
+     */
+    const jobStateFor = async (job: Job, wanted: JobRow | undefined): Promise<JobState> => {
+        const cronJob = await kube.readCronJob(projectNamespace(job.projectId), jobObjectName(job));
+        if (!cronJob.ok) {
+            deps.log?.({ msg: 'cannot read CronJob', job: job.id, error: cronJob.error });
+            return 'unknown';
+        }
+        return jobStateOf(cronJob.value, wanted === undefined ? '' : jobSpecVersion(wanted));
+    };
+    /** The Jobs with their state; the rows they are compared with are read once for all of them. */
+    const jobsDetails = async (jobs: readonly Job[]): Promise<JobDetails[]> => {
+        const projectIds = [...new Set(jobs.map((job) => job.projectId))];
+        const rows = (await Promise.all(projectIds.map((projectId) => listJobRows(pool, projectId)))).flat();
+        return Promise.all(jobs.map(async (job) => ({ ...job, state: await jobStateFor(job, rows.find((row) => row.job.id === job.id)) })));
+    };
+    const jobDetails = async (job: Job): Promise<JobDetails> => (await jobsDetails([job]))[0] as JobDetails;
+    /** The Job's stored credentials, opened; undefined when it has none. */
+    const storedJobAuth = async (job: Job): Promise<RegistryAuth | undefined> =>
+        openAuth(job.projectId, jobRegistryAuthName(job.id), await sealedJobRegistryAuth(pool, job.projectId, job.id));
+
+    app.get('/v1/projects/:projectId/jobs', async (c) => {
+        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
+        if (project === undefined) {
+            return c.json(notFound, 404);
+        }
+        return c.json(await jobsDetails(await listJobs(pool, project.id)));
+    });
+
+    app.post('/v1/projects/:projectId/jobs', async (c) => {
+        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
+        if (project === undefined) {
+            return c.json(notFound, 404);
+        }
+        const input = jobInput.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const { registryAuth, homeSite, command, args, timeoutSeconds, schedule, timeZone, ...rest } = input.data;
+        const shape = { command: command ?? null, args: args ?? null, schedule: schedule ?? null, timeZone: timeZone ?? null };
+        const shapeError = jobShapeError(shape);
+        if (shapeError !== undefined) {
+            return c.json({ error: shapeError }, 400);
+        }
+        // Checked first so a held Account makes no registry calls; the schema checks again.
+        const holds = await holdsOf(pool, project.accountId);
+        if (holds.length > 0) {
+            return held(c, holds);
+        }
+        const digest = await resolve(rest.image, registryAuth);
+        if (!digest.ok) {
+            return unresolved(c, rest.image, digest.error);
+        }
+        const id = randomUUID();
+        const sealed = registryAuth === undefined ? undefined : await sealAuthAs(project.id, jobRegistryAuthName(id), registryAuth);
+        if (sealed !== undefined && !sealed.ok) {
+            return sealed.error.kind === 'project-not-found' ? c.json(notFound, 404) : Promise.reject(new Error(`cannot seal: ${sealed.error.kind}`));
+        }
+        const created = await createJob(pool, project.id, {
+            ...rest,
+            ...shape,
+            id,
+            imageDigest: digest.value,
+            timeoutSeconds: timeoutSeconds ?? JOB_LIMITS.defaultTimeoutSeconds,
+            homeSite: homeSite ?? null,
+            registryAuth: sealed?.value ?? null,
+        });
+        if (!created.ok) {
+            switch (created.error.kind) {
+                case 'held':
+                    return held(c, await holdsOf(pool, project.accountId));
+                case 'name-taken':
+                    return c.json({ error: `a Job named ${created.error.name} exists` }, 409);
+                case 'project-deleted':
+                    return c.json(notFound, 404);
+            }
+        }
+        if (registryAuth !== undefined) {
+            syncSecrets(project.id);
+        }
+        c.header('location', `/v1/projects/${project.id}/jobs/${created.value.id}`);
+        // The Jobs operator creates the CronJob within one pass.
+        return c.json({ ...created.value, state: 'deploying' } satisfies JobDetails, 201);
+    });
+
+    const jobOf = async (accountIds: string[], projectId: string, id: string) => {
+        const project = await projectOf(accountIds, projectId);
+        return project === undefined || !UUID.test(id) ? undefined : getJob(pool, project.id, id);
+    };
+
+    app.get('/v1/projects/:projectId/jobs/:jobId', async (c) => {
+        const job = await jobOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('jobId'));
+        return job === undefined ? c.json(notFound, 404) : c.json(await jobDetails(job));
+    });
+
+    app.patch('/v1/projects/:projectId/jobs/:jobId', async (c) => {
+        const job = await jobOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('jobId'));
+        if (job === undefined) {
+            return c.json(notFound, 404);
+        }
+        const input = jobPatch.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const { image, registryAuth: givenAuth, ...rest } = input.data;
+        // Without a schedule the time zone means nothing: removing the schedule removes it too, unless it is given.
+        const timeZone = rest.schedule === null && rest.timeZone === undefined ? null : rest.timeZone;
+        const shapeError = jobShapeError({
+            command: rest.command === undefined ? job.command : rest.command,
+            args: rest.args === undefined ? job.args : rest.args,
+            schedule: rest.schedule === undefined ? job.schedule : rest.schedule,
+            timeZone: timeZone === undefined ? job.timeZone : timeZone,
+        });
+        if (shapeError !== undefined) {
+            return c.json({ error: shapeError }, 400);
+        }
+        const change = await imageChange(job, image, givenAuth, jobRegistryAuthName(job.id), () => storedJobAuth(job));
+        if (!change.ok) {
+            return unresolved(c, change.error.image, change.error.error);
+        }
+        const changes: JobChanges = { ...rest, timeZone, ...change.value };
+        const updated = await updateJob(pool, job.projectId, job.id, changes);
+        if (updated === undefined) {
+            return c.json(notFound, 404);
+        }
+        if (change.value.registryAuth !== undefined) {
+            syncSecrets(job.projectId);
+        }
+        return c.json(await jobDetails(updated));
+    });
+
+    app.post('/v1/projects/:projectId/jobs/:jobId/deploy', async (c) => {
+        const job = await jobOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('jobId'));
+        if (job === undefined) {
+            return c.json(notFound, 404);
+        }
+        const digest = await resolve(job.image, await storedJobAuth(job));
+        if (!digest.ok) {
+            return unresolved(c, job.image, digest.error);
+        }
+        const updated = await updateJob(pool, job.projectId, job.id, { imageDigest: digest.value });
+        return updated === undefined ? c.json(notFound, 404) : c.json(await jobDetails(updated));
+    });
+
+    app.delete('/v1/projects/:projectId/jobs/:jobId', async (c) => {
+        const job = await jobOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('jobId'));
+        if (job === undefined || !(await deleteJob(pool, job.projectId, job.id))) {
+            return c.json(notFound, 404);
+        }
+        if (job.registryAuth) {
+            syncSecrets(job.projectId);
+        }
+        // The Jobs operator removes the CronJob, and with it its runs, within one pass.
+        return c.body(null, 202);
     });
 
     app.notFound((c) => c.json(notFound, 404));

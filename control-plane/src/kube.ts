@@ -1,12 +1,12 @@
 /**
- * What the control plane asks of Kubernetes: a Database's and a Service's
- * state for the API, the deletes of the cleanup (decision 48: deleting is the control
+ * What the control plane asks of Kubernetes: a Database's, a Service's and
+ * a Job's state for the API, the deletes of the cleanup (decision 48: deleting is the control
  * plane's explicit step, never the operator's), and the Secrets it renders
  * from its encrypted store (decision 91), since it alone holds the
  * key-encryption key. Every other object is the operators' to create.
  */
 import { ApiException, type KubeConfig, KubernetesObjectApi, PatchStrategy } from '@kubernetes/client-node';
-import { SPEC_VERSION_ANNOTATION, type DatabaseState, type ServiceState } from '@openupstream/sdk';
+import { SPEC_VERSION_ANNOTATION, type DatabaseState, type JobState, type ServiceState } from '@openupstream/sdk';
 import { type Result, err, ok } from './result.js';
 
 export interface ObjectRef {
@@ -49,6 +49,16 @@ export const serviceStateOf = (status: DeploymentStatus | undefined, wantedVersi
     return status.availableReplicas >= status.replicas ? 'running' : 'degraded';
 };
 
+/** The fields of a Job's CronJob that decide its state. */
+export interface CronJobStatus {
+    /** What the Jobs operator applied it from (jobSpecVersion); undefined before it set one. */
+    readonly specVersion: string | undefined;
+}
+
+/** Ready once the CronJob carries the row's current spec (`wantedVersion`): runs then start from it. */
+export const jobStateOf = (status: CronJobStatus | undefined, wantedVersion: string): JobState =>
+    status !== undefined && status.specVersion === wantedVersion ? 'ready' : 'deploying';
+
 /** The control plane's field manager for server-side apply; the operators have their own. */
 export const FIELD_MANAGER = 'openupstream-control-plane';
 
@@ -66,6 +76,8 @@ export interface ControlPlaneKube {
     readCluster(namespace: string, name: string): Promise<Result<ClusterStatus | undefined, string>>;
     /** undefined when the Deployment does not exist (yet). */
     readDeployment(namespace: string, name: string): Promise<Result<DeploymentStatus | undefined, string>>;
+    /** undefined when the CronJob does not exist (yet). */
+    readCronJob(namespace: string, name: string): Promise<Result<CronJobStatus | undefined, string>>;
     /** Deletes an object; one that is already gone counts as deleted. */
     remove(ref: ObjectRef): Promise<Result<void, string>>;
     /**
@@ -120,6 +132,12 @@ interface DeploymentObject {
     status?: { observedGeneration?: number; updatedReplicas?: number; availableReplicas?: number };
 }
 
+interface CronJobObject {
+    apiVersion: string;
+    kind: string;
+    metadata: { name: string; namespace: string; annotations?: Record<string, string> };
+}
+
 export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIMEOUT_MS } = {}): ControlPlaneKube {
     const api = KubernetesObjectApi.makeApiClient(config);
     return {
@@ -155,6 +173,16 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
                 availableReplicas: deployment.status?.availableReplicas ?? 0,
                 specVersion: deployment.metadata.annotations?.[SPEC_VERSION_ANNOTATION],
             });
+        },
+        readCronJob: async (namespace, name) => {
+            const result = await within(
+                api.read<CronJobObject>({ apiVersion: 'batch/v1', kind: 'CronJob', metadata: { name, namespace } }),
+                timeoutMs,
+            );
+            if (!result.ok) {
+                return result.error.status === NOT_FOUND ? ok(undefined) : err(result.error.message);
+            }
+            return ok({ specVersion: result.value.metadata.annotations?.[SPEC_VERSION_ANNOTATION] });
         },
         remove: async (ref) => {
             const result = await within(
