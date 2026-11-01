@@ -11,23 +11,24 @@ CONTRIBUTING.md. The repository layout is in README.md.
   user which approach they prefer before writing code.
 - Ask clarifying questions whenever requirements, scope, or expected behavior
   are ambiguous — don't guess silently.
-- **When asking a question, make sure the user understands the consequences
-  of each answer:** what it changes, what it costs, and what it rules out or
-  makes hard to undo later (a migration, a breaking API change, a lock-in).
-  Mark your recommendation and say why.
-- **Always offer a choice to get a deeper explanation** instead of forcing
-  the user to pick an answer or type one. In Claude Code, ask such questions
-  with AskUserQuestion and make "Explain in more detail" one of its options
-  (the next-step box has only two buttons, too few for this). It allows four
-  options; when all four are real answers, keep them, leave out the explain
-  option and say in the question that the user can type "explain" as their
-  own answer. When they ask for it, explain, then ask the same question
-  again.
-- **When it helps the decision, first research how similar products or
-  libraries solve it** (other cloud providers, Kubernetes operators,
-  established open-source projects) and add a short summary to the
-  question: who does what, with a link to the source. Skip this for
-  questions that only concern this repository's internals.
+- **Make sure the user understands the consequences of each choice before
+  they answer.** For every option of a non-trivial decision (simple yes/no
+  confirmations stay short), state what it changes and what it costs or
+  rules out (migration effort, irreversibility, price, performance,
+  maintenance, user-visible behavior). Name your recommendation and why.
+  - **Offer an "Explain in more detail" option** alongside the answers, so
+    the user can ask for a deeper explanation instead of having to pick an
+    answer or type one. In Claude Code, ask with AskUserQuestion, not the
+    next-step box, whose two buttons leave no room for it. If the question
+    tool's option limit is already used by real alternatives, keep the
+    alternatives and say in the question that answering "explain" asks for
+    more detail. When chosen, explain the trade-offs in depth, then ask the
+    question again.
+  - **Where it helps the decision, research first how similar products or
+    libraries solve it** (other cloud providers, Kubernetes operators,
+    established open-source projects, platform conventions) and summarize
+    the relevant approaches with links in the question. Skip this for
+    project-internal choices where no outside comparison exists.
 - After completing a task, recommend one concrete next step, usually the next
   item in the build order in `ARCHITECTURE.md` or a follow-up the task turned
   up.
