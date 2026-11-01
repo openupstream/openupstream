@@ -1,9 +1,10 @@
 name: Images
 
-# Builds the control plane and operators images and pushes them to GHCR,
-# tagged with the commit SHA (and `main` on main). Clusters pull them pinned
-# by digest (ARCHITECTURE.md, decision 55). Pull requests from forks build
-# without pushing.
+# Builds the control plane, operators and demo app images and pushes them to
+# GHCR, tagged with the commit SHA (and `main` on main). Clusters pull them
+# pinned by digest (ARCHITECTURE.md, decision 55). Pull requests from forks
+# build without pushing. A new package is private on GHCR until it is made
+# public once in its settings (docs/self-hosting.md).
 
 on:
   push:
@@ -20,7 +21,10 @@ jobs:
       packages: write
     strategy:
       matrix:
-        workspace: [control-plane, operators]
+        include:
+          - { image: control-plane, file: control-plane/Dockerfile, app: '' }
+          - { image: operators, file: operators/Dockerfile, app: '' }
+          - { image: example-notes, file: examples/Dockerfile, app: notes }
     env:
       PUSH: ${{ github.event_name == 'push' }}
     steps:
@@ -35,13 +39,14 @@ jobs:
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          file: ${{ matrix.workspace }}/Dockerfile
+          file: ${{ matrix.file }}
+          build-args: ${{ matrix.app != '' && format('APP={0}', matrix.app) || '' }}
           push: ${{ env.PUSH == 'true' }}
           tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ matrix.workspace }}:${{ github.sha }}
-            ${{ github.ref == 'refs/heads/main' && format('ghcr.io/{0}/{1}:main', github.repository_owner, matrix.workspace) || '' }}
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:${{ github.sha }}
+            ${{ github.ref == 'refs/heads/main' && format('ghcr.io/{0}/{1}:main', github.repository_owner, matrix.image) || '' }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-          cache-from: type=gha,scope=${{ matrix.workspace }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.workspace }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

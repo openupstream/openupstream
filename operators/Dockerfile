@@ -10,6 +10,7 @@ COPY control-plane/package.json control-plane/
 COPY operators/package.json operators/
 COPY cli/package.json cli/
 COPY dashboard/package.json dashboard/
+COPY examples/package.json examples/
 RUN npm ci --workspace sdk --workspace operators
 COPY sdk sdk
 COPY operators operators
@@ -24,6 +25,7 @@ COPY control-plane/package.json control-plane/
 COPY operators/package.json operators/
 COPY cli/package.json cli/
 COPY dashboard/package.json dashboard/
+COPY examples/package.json examples/
 RUN npm ci --omit=dev --workspace sdk --workspace operators && npm cache clean --force
 COPY --from=build /repo/sdk/dist sdk/dist
 COPY --from=build /repo/operators/dist operators/dist

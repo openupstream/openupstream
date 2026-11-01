@@ -1,0 +1,10 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "dist",
+    "declaration": false
+  },
+  "include": ["shared", "notes"],
+  "exclude": ["**/*.test.ts", "dist", "node_modules"]
+}

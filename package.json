@@ -10,7 +10,8 @@
     "control-plane",
     "operators",
     "cli",
-    "dashboard"
+    "dashboard",
+    "examples"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
