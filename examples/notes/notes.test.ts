@@ -63,6 +63,8 @@ test('bad input is a 400, an unknown path a 404', async () => {
     assert.equal((await fetch(`${url}/api/notes`, { method: 'POST', body: '{"body":""}' })).status, 400);
     assert.equal((await fetch(`${url}/api/notes`, { method: 'POST', body: 'not json' })).status, 400);
     assert.equal((await fetch(`${url}/notes`, { method: 'POST', body: new URLSearchParams({ body: ' ' }) })).status, 400);
+    assert.equal((await fetch(`${url}/api/notes`, { method: 'POST', body: JSON.stringify({ body: 'x'.repeat(9000) }) })).status, 413);
+    assert.equal((await fetch(`${url}/notes`, { method: 'POST', body: new URLSearchParams({ body: 'x'.repeat(9000) }) })).status, 413);
     assert.equal((await fetch(`${url}/nope`)).status, 404);
     await close();
 });

@@ -3,7 +3,7 @@
  * request handler over a store, so the tests need no database.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { readBody, send, sendJson } from '../shared/http.js';
+import { log, readBody, send, sendJson } from '../shared/http.js';
 
 export const MAX_NOTE_LENGTH = 1000;
 const MAX_BODY_BYTES = 8 * 1024;
@@ -32,6 +32,21 @@ export function parseNote(text: string | undefined): Parsed {
     }
     return body.length > MAX_NOTE_LENGTH ? { ok: false, error: `a note has at most ${MAX_NOTE_LENGTH} characters` } : { ok: true, body };
 }
+
+/**
+ * The JSON of a request body, or undefined when it is not JSON. JSON.parse
+ * only reports bad input by throwing, so the catch stays here.
+ */
+const parseJson = (text: string): { readonly value: unknown } | undefined => {
+    try {
+        return { value: JSON.parse(text === '' ? '{}' : text) as unknown };
+    } catch {
+        return undefined;
+    }
+};
+
+const noteText = (json: unknown): string | undefined =>
+    typeof json === 'object' && json !== null && 'body' in json && typeof json.body === 'string' ? json.body : undefined;
 
 const escapeHtml = (text: string): string =>
     text.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] ?? char);
@@ -74,7 +89,11 @@ export function notesHandler(store: NotesStore) {
             case 'GET /api/notes':
                 return sendJson(response, 200, await store.list(LISTED));
             case 'POST /notes': {
-                const parsed = parseNote(new URLSearchParams((await readBody(request, MAX_BODY_BYTES)) ?? '').get('body') ?? undefined);
+                const text = await readBody(request, MAX_BODY_BYTES);
+                if (text === undefined) {
+                    return send(response, 413, 'the request is too large');
+                }
+                const parsed = parseNote(new URLSearchParams(text).get('body') ?? undefined);
                 if (!parsed.ok) {
                     return send(response, 400, renderPage(await store.list(LISTED), parsed.error), 'text/html; charset=utf-8');
                 }
@@ -84,8 +103,14 @@ export function notesHandler(store: NotesStore) {
             }
             case 'POST /api/notes': {
                 const text = await readBody(request, MAX_BODY_BYTES);
-                const json = text === undefined ? undefined : (JSON.parse(text === '' ? '{}' : text) as unknown);
-                const parsed = parseNote(typeof json === 'object' && json !== null && 'body' in json && typeof json.body === 'string' ? json.body : undefined);
+                if (text === undefined) {
+                    return sendJson(response, 413, { error: 'the request is too large' });
+                }
+                const json = parseJson(text);
+                if (json === undefined) {
+                    return sendJson(response, 400, { error: 'the body is not JSON' });
+                }
+                const parsed = parseNote(noteText(json.value));
                 return parsed.ok ? sendJson(response, 201, await store.add(parsed.body)) : sendJson(response, 400, { error: parsed.error });
             }
             default:
@@ -94,12 +119,9 @@ export function notesHandler(store: NotesStore) {
     };
     return (request: IncomingMessage, response: ServerResponse): Promise<void> =>
         routes(request, response).catch((error: unknown) => {
-            const unparsable = error instanceof SyntaxError;
             if (!response.headersSent) {
-                unparsable ? sendJson(response, 400, { error: 'the body is not JSON' }) : send(response, 503, 'the database is not available');
+                send(response, 503, 'the database is not available');
             }
-            if (!unparsable) {
-                console.error(JSON.stringify({ time: new Date().toISOString(), msg: 'request failed', error: String(error) }));
-            }
+            log({ msg: 'request failed', error: String(error) });
         });
 }

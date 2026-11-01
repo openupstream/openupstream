@@ -20,7 +20,7 @@ gets (decision 97), creates its table on start and serves:
 | `GET /` | the newest 50 notes and a form |
 | `POST /notes` | the form: `body`, then a redirect to `/` |
 | `GET /api/notes` | the newest 50 notes as JSON |
-| `POST /api/notes` | `{"body": "…"}` → 201 with the note |
+| `POST /api/notes` | `{"body": "…"}` → 201 with the note; 400 for no text or no JSON, 413 over 8 KiB |
 | `GET /healthz` | 200 while the process runs |
 | `GET /readyz` | 200 while the database answers, else 503 |
 
