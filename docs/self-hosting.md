@@ -125,7 +125,14 @@ in for a customer's own zone when trying custom domains, since hostnames in
 the other two cannot be claimed (#85). Both parent domains are registered and served
 by domaindiscount24. Do steps 2 to 4 once per subdomain.
 
-1. Create an account at [bunny.net](https://bunny.net).
+1. Create an account at [bunny.net](https://bunny.net), then **Billing**:
+   top up the balance right away. DNS zones and queries are free, but every
+   account pays a minimum of $1 a month from a prepaid balance, and top-ups
+   start at $10. The account starts as a 14-day free trial; when it ends
+   without a balance, bunny.net disables the account, its zones stop
+   resolving, and their data is deleted 14 days later. $10 lasts about ten
+   months: set a reminder to top up again, or turn on auto-recharge under
+   **Billing**.
 2. **DNS → Add DNS Zone**: enter the subdomain itself, e.g.
    `dev.openupstream.com`. Leave it empty; the scripts create the records.
    bunny.net's nameservers are `kiki.bunny.net` and `coco.bunny.net`.
