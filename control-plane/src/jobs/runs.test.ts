@@ -100,6 +100,22 @@ test('the state of a run is read from its Kubernetes Job', () => {
     assert.deepEqual([timedOut.state, timedOut.reason, timedOut.finishedAt], ['failed', 'DeadlineExceeded', '2026-11-01T11:00:00.000Z']);
 });
 
+test('the outcome counts from the moment the Job controller decides it, before its pod is gone', () => {
+    const at = (time: string) => new Date(`2026-11-01T${time}Z`);
+    const ending = runOf(
+        kubeJob('f', {
+            ready: 0,
+            startTime: at('10:00:01'),
+            conditions: [{ type: 'FailureTarget', status: 'True', reason: 'DeadlineExceeded', lastTransitionTime: at('10:10:01') }],
+        }),
+    );
+    assert.deepEqual([ending.state, ending.reason, ending.finishedAt], ['failed', 'DeadlineExceeded', '2026-11-01T10:10:01.000Z']);
+    const succeeding = runOf(
+        kubeJob('g', { ready: 0, startTime: at('10:00:01'), conditions: [{ type: 'SuccessCriteriaMet', status: 'True', lastTransitionTime: at('10:02:00') }] }),
+    );
+    assert.deepEqual([succeeding.state, succeeding.finishedAt], ['succeeded', '2026-11-01T10:02:00.000Z']);
+});
+
 test('runs are listed newest first', () => {
     const runs = [kubeJob('old', undefined, {}, '2026-11-01T09:00:00Z'), kubeJob('new', undefined, {}, '2026-11-01T11:00:00Z')].map(runOf);
     assert.deepEqual(runs.sort(byNewest).map((run) => run.id), ['new', 'old']);
