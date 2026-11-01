@@ -13,6 +13,7 @@ import type pg from 'pg';
 import { ACCOUNT_HELD, FOREIGN_KEY_VIOLATION, UNIQUE_VIOLATION, unlessCodes } from '../db/errors.js';
 import { parseImageReference, pinnedImage } from '../registry.js';
 import { type Result, ok } from '../result.js';
+import { siteOf } from '../services/store.js';
 
 interface Row {
     id: string;
@@ -216,12 +217,7 @@ export async function listJobRows(pool: pg.Pool, projectId?: string): Promise<Jo
     const { rows } = await pool.query<OperatorRow>(
         `select ${columns('j.')},
                 p.name as project_name, p.account_id, p.created_at as project_created_at,
-                coalesce(
-                    j.home_site,
-                    (select d.home_site from databases d where d.project_id = j.project_id and d.deleted_at is null
-                     order by d.created_at, d.id limit 1),
-                    'hetzner-fsn1'
-                ) as site,
+                ${siteOf('j')} as site,
                 coalesce(p.secrets_version, '') as secrets_version
          from jobs j join projects p on p.id = j.project_id
          where p.deleted_at is null and ($1::uuid is null or j.project_id = $1)

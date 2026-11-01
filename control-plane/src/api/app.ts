@@ -744,7 +744,6 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     /** Seals credentials bound to `boundTo`, a Service's or Job's registryAuthName. */
     const sealAuthAs = (projectId: string, boundTo: string, auth: RegistryAuth) =>
         sealProjectValue(pool, deps.kek, projectId, boundTo, JSON.stringify(auth));
-    const sealAuth = (projectId: string, serviceId: string, auth: RegistryAuth) => sealAuthAs(projectId, registryAuthName(serviceId), auth);
     /** Credentials sealed bound to `boundTo`, opened; undefined when there are none. */
     const openAuth = async (projectId: string, boundTo: string, sealed: Buffer | undefined): Promise<RegistryAuth | undefined> => {
         if (sealed === undefined) {
@@ -770,6 +769,42 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         given: RegistryAuth | null | undefined,
     ): RegistryAuth | null | undefined =>
         given === undefined && image !== undefined && current.registryAuth && !sameRegistry(current.image, image) ? null : given;
+    /**
+     * The columns a PATCH of a Service or Job writes for its image: with a new
+     * image or new credentials, the tag resolved again with the credentials it
+     * will be pulled with, and those sealed bound to `boundTo`; nothing else.
+     */
+    const imageChange = async (
+        current: { readonly projectId: string; readonly image: string; readonly registryAuth: boolean },
+        image: string | undefined,
+        givenAuth: RegistryAuth | null | undefined,
+        boundTo: string,
+        stored: () => Promise<RegistryAuth | undefined>,
+    ): Promise<
+        Result<
+            { readonly image?: string; readonly imageDigest?: string; readonly registryAuth?: Buffer | null },
+            { readonly image: string; readonly error: ResolveError }
+        >
+    > => {
+        const registryAuth = authAfterChange(current, image, givenAuth);
+        if (image === undefined && registryAuth === undefined) {
+            return ok({});
+        }
+        const pulled = image ?? current.image;
+        const digest = await resolve(pulled, registryAuth === undefined ? await stored() : (registryAuth ?? undefined));
+        if (!digest.ok) {
+            return { ok: false, error: { image: pulled, error: digest.error } };
+        }
+        const sealed = registryAuth === undefined || registryAuth === null ? undefined : await sealAuthAs(current.projectId, boundTo, registryAuth);
+        if (sealed !== undefined && !sealed.ok) {
+            throw new Error(`cannot seal: ${sealed.error.kind}`);
+        }
+        return ok({
+            ...(image === undefined ? {} : { image }),
+            imageDigest: digest.value,
+            ...(registryAuth === undefined ? {} : { registryAuth: sealed?.value ?? null }),
+        });
+    };
 
     app.get('/v1/projects/:projectId/services', async (c) => {
         const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
@@ -799,7 +834,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             return unresolved(c, rest.image, digest.error);
         }
         const id = randomUUID();
-        const sealed = registryAuth === undefined ? undefined : await sealAuth(project.id, id, registryAuth);
+        const sealed = registryAuth === undefined ? undefined : await sealAuthAs(project.id, registryAuthName(id), registryAuth);
         if (sealed !== undefined && !sealed.ok) {
             return sealed.error.kind === 'project-not-found' ? c.json(notFound, 404) : Promise.reject(new Error(`cannot seal: ${sealed.error.kind}`));
         }
@@ -848,30 +883,17 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (!input.success) {
             return c.json(invalid(input.error.issues), 400);
         }
-        const { image, registryAuth: givenAuth, ...rest } = input.data;
-        const registryAuth = authAfterChange(service, image, givenAuth);
-        // A new image or new credentials: the tag is resolved again, with the credentials it will be pulled with.
-        const redeploy = image !== undefined || registryAuth !== undefined;
-        const auth = registryAuth === undefined ? await storedAuth(service) : (registryAuth ?? undefined);
-        const digest = redeploy ? await resolve(image ?? service.image, auth) : undefined;
-        if (digest !== undefined && !digest.ok) {
-            return unresolved(c, image ?? service.image, digest.error);
+        const { image, registryAuth, ...rest } = input.data;
+        const change = await imageChange(service, image, registryAuth, registryAuthName(service.id), () => storedAuth(service));
+        if (!change.ok) {
+            return unresolved(c, change.error.image, change.error.error);
         }
-        const sealed = registryAuth === undefined || registryAuth === null ? undefined : await sealAuth(service.projectId, service.id, registryAuth);
-        if (sealed !== undefined && !sealed.ok) {
-            throw new Error(`cannot seal: ${sealed.error.kind}`);
-        }
-        const changes: ServiceChanges = {
-            ...rest,
-            ...(image === undefined ? {} : { image }),
-            ...(digest === undefined ? {} : { imageDigest: digest.value }),
-            ...(registryAuth === undefined ? {} : { registryAuth: sealed?.value ?? null }),
-        };
+        const changes: ServiceChanges = { ...rest, ...change.value };
         const updated = await updateService(pool, service.projectId, service.id, changes);
         if (updated === undefined) {
             return c.json(notFound, 404);
         }
-        if (registryAuth !== undefined) {
+        if (change.value.registryAuth !== undefined) {
             syncSecrets(service.projectId);
         }
         return c.json(await serviceDetails(updated));
@@ -1027,31 +1049,16 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (shapeError !== undefined) {
             return c.json({ error: shapeError }, 400);
         }
-        const registryAuth = authAfterChange(job, image, givenAuth);
-        // A new image or new credentials: the tag is resolved again, with the credentials it will be pulled with.
-        const redeploy = image !== undefined || registryAuth !== undefined;
-        const auth = registryAuth === undefined ? await storedJobAuth(job) : (registryAuth ?? undefined);
-        const digest = redeploy ? await resolve(image ?? job.image, auth) : undefined;
-        if (digest !== undefined && !digest.ok) {
-            return unresolved(c, image ?? job.image, digest.error);
+        const change = await imageChange(job, image, givenAuth, jobRegistryAuthName(job.id), () => storedJobAuth(job));
+        if (!change.ok) {
+            return unresolved(c, change.error.image, change.error.error);
         }
-        const sealed =
-            registryAuth === undefined || registryAuth === null ? undefined : await sealAuthAs(job.projectId, jobRegistryAuthName(job.id), registryAuth);
-        if (sealed !== undefined && !sealed.ok) {
-            throw new Error(`cannot seal: ${sealed.error.kind}`);
-        }
-        const changes: JobChanges = {
-            ...rest,
-            timeZone,
-            ...(image === undefined ? {} : { image }),
-            ...(digest === undefined ? {} : { imageDigest: digest.value }),
-            ...(registryAuth === undefined ? {} : { registryAuth: sealed?.value ?? null }),
-        };
+        const changes: JobChanges = { ...rest, timeZone, ...change.value };
         const updated = await updateJob(pool, job.projectId, job.id, changes);
         if (updated === undefined) {
             return c.json(notFound, 404);
         }
-        if (registryAuth !== undefined) {
+        if (change.value.registryAuth !== undefined) {
             syncSecrets(job.projectId);
         }
         return c.json(await jobDetails(updated));

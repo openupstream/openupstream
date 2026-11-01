@@ -62,6 +62,10 @@ rules:
   - apiGroups: [apps]
     resources: [deployments]
     verbs: [get]
+  # A Job's state for the API: the spec version on its CronJob.
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    verbs: [get]
   # Every Project's Secret project-secrets, rendered from the encrypted store
   # (decision 91). Cluster-wide, since Project namespaces are created at run
   # time; server-side apply needs create and patch.
