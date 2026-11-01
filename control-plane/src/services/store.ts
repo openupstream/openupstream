@@ -9,7 +9,7 @@
  * Services operator removes its Deployment within one pass, as it does for
  * every object of its own no row asks for.
  */
-import type { Service, ServiceRow, Site } from '@openupstream/sdk';
+import type { RowDatabase, Service, ServiceRow, Site } from '@openupstream/sdk';
 import type pg from 'pg';
 import { ACCOUNT_HELD, FOREIGN_KEY_VIOLATION, UNIQUE_VIOLATION, unlessCodes } from '../db/errors.js';
 import { parseImageReference, pinnedImage } from '../registry.js';
@@ -206,12 +206,25 @@ export const siteOf = (t: string): string =>
         'hetzner-fsn1'
     )`;
 
+/**
+ * The live Databases of the Project of the row aliased `t`, oldest first, as
+ * a JSON array of `{id, name}`: a Service or Job gets a DATABASE_URL for
+ * each (decision 97).
+ */
+export const databasesOf = (t: string): string =>
+    `coalesce(
+        (select json_agg(json_build_object('id', d.id, 'name', d.name) order by d.created_at, d.id)
+         from databases d where d.project_id = ${t}.project_id and d.deleted_at is null),
+        '[]'::json
+    )`;
+
 interface OperatorRow extends Row {
     project_name: string;
     account_id: string;
     project_created_at: Date;
     site: Site;
     secrets_version: string;
+    databases: RowDatabase[];
 }
 
 /**
@@ -225,7 +238,8 @@ export async function listServiceRows(pool: pg.Pool, projectId?: string): Promis
         `select ${columns('s.')},
                 p.name as project_name, p.account_id, p.created_at as project_created_at,
                 ${siteOf('s')} as site,
-                coalesce(p.secrets_version, '') as secrets_version
+                coalesce(p.secrets_version, '') as secrets_version,
+                ${databasesOf('s')} as databases
          from services s join projects p on p.id = s.project_id
          where p.deleted_at is null and ($1::uuid is null or s.project_id = $1)
          order by s.project_id, s.created_at, s.id`,
@@ -254,6 +268,7 @@ export async function listServiceRows(pool: pg.Pool, projectId?: string): Promis
                 pinnedImage: pinnedImage(image.value, service.imageDigest),
                 site: row.site,
                 secretsVersion: row.secrets_version,
+                databases: row.databases,
             },
         ];
     });

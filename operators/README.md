@@ -38,6 +38,11 @@ Traefik already implements is configured, not reimplemented.
   pinned by digest under the `gvisor` RuntimeClass and a Kubernetes Service.
   `reconcileServices` applies them and deletes the objects labelled
   `openupstream.io/component=services` that are no longer wanted.
+- `databaseEnv` (`src/kubernetes.ts`, decision 97): the environment both
+  operators give a container for the Project's Databases,
+  `DATABASE_URL_<NAME>` per Database and `DATABASE_URL` for the oldest,
+  with the password from CloudNativePG's `db-<id>-app` Secret through a
+  `secretKeyRef`; no operator reads that Secret.
 - `src/jobs/`: the Jobs operator (ARCHITECTURE.md, decision 95,
   ADR-0003). `planJobs` (pure) turns the Jobs into, per Project, its
   namespace, its NetworkPolicy and `job-egress` (the egress of a Service's
