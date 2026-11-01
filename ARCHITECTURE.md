@@ -438,7 +438,12 @@ digest (#55).
   image, port, replicas, memory and CPU, `PATCH` to change it, `POST
   …/services/{id}/deploy` to resolve the same tag again, `DELETE` (409
   while a Route serves it). Its state (`deploying`, `running`, `degraded`)
-  is read live from its Deployment. The control plane resolves the tag to
+  is read live from its Deployment. The Services operator stamps the
+  Deployment with the spec version it applied (pinned image, replicas,
+  resources, port, Site, Secrets version; `serviceSpecVersion` in the sdk),
+  and until it carries the version the row asks for now, the Service is
+  `deploying`: a change is never reported `running` on the old version
+  before the operator's next pass (#94). The control plane resolves the tag to
   a digest while the request waits, with the registry's token flow: an image
   the registry does not have, or will not serve with the given credentials,
   is a 400, a registry that cannot be reached a 503, and nothing is written.

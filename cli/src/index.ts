@@ -299,6 +299,10 @@ async function secret(args: string[]): Promise<void> {
             if (value === undefined) {
                 return fail('cancelled');
             }
+            // Most likely a pipe that was forgotten (CI, </dev/null); an empty value would replace the real one.
+            if (value === '') {
+                return fail(`no value for ${name} on stdin; pipe it in, e.g. printf %s "$VALUE" | oup secret set ${name}`);
+            }
             const stored = await client.putSecret(project.id, { name: name as string, value });
             return stored.ok ? console.log(`Set ${name} in ${project.name}; its Services restart with it.`) : fail(stored.error.message);
         }

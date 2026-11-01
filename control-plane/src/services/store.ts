@@ -202,11 +202,12 @@ interface OperatorRow extends Row {
 }
 
 /**
- * Every Service of a live Project, as the Services operator needs it: the
+ * Every Service of a live Project (or of one Project), as the Services
+ * operator needs it, and as the API compares it with the Deployment: the
  * pinned image, where a single replica runs, and the version of the
  * Project's Secrets that is in the cluster (secrets/render.ts).
  */
-export async function listServiceRows(pool: pg.Pool): Promise<ServiceRow[]> {
+export async function listServiceRows(pool: pg.Pool, projectId?: string): Promise<ServiceRow[]> {
     const { rows } = await pool.query<OperatorRow>(
         `select ${columns('s.')},
                 p.name as project_name, p.account_id, p.created_at as project_created_at,
@@ -218,8 +219,9 @@ export async function listServiceRows(pool: pg.Pool): Promise<ServiceRow[]> {
                 ) as site,
                 coalesce(p.secrets_version, '') as secrets_version
          from services s join projects p on p.id = s.project_id
-         where p.deleted_at is null
+         where p.deleted_at is null and ($1::uuid is null or s.project_id = $1)
          order by s.project_id, s.created_at, s.id`,
+        [projectId ?? null],
     );
     return rows.flatMap((row) => {
         // Only an image that parsed was ever written; a row that does not is left out, not deployed wrongly.

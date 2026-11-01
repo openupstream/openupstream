@@ -28,9 +28,11 @@ import {
     type RouteInput,
     type Service,
     type ServiceDetails,
+    type ServiceRow,
     type ServiceState,
     clusterName,
     serviceObjectName,
+    serviceSpecVersion,
     poolerName,
     projectNamespace,
 } from '@openupstream/sdk';
@@ -57,6 +59,7 @@ import {
     createService,
     deleteService,
     getService,
+    listServiceRows,
     listServices,
     registryAuthName,
     sealedRegistryAuth,
@@ -619,16 +622,31 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         return c.body(null, 204);
     });
 
-    /** The state from the Deployment; `unknown` when Kubernetes cannot be asked, rather than failing the request. */
-    const serviceStateFor = async (service: Service): Promise<ServiceState> => {
+    /**
+     * The state from the Deployment, compared with the spec the row asks for
+     * now (`wanted`, from listServiceRows); `unknown` when Kubernetes cannot be
+     * asked, rather than failing the request.
+     */
+    const serviceStateFor = async (service: Service, wanted: ServiceRow | undefined): Promise<ServiceState> => {
         const deployment = await kube.readDeployment(projectNamespace(service.projectId), serviceObjectName(service));
         if (!deployment.ok) {
             deps.log?.({ msg: 'cannot read Deployment', service: service.id, error: deployment.error });
             return 'unknown';
         }
-        return serviceStateOf(deployment.value);
+        return serviceStateOf(deployment.value, wanted === undefined ? '' : serviceSpecVersion(wanted));
     };
-    const serviceDetails = async (service: Service): Promise<ServiceDetails> => ({ ...service, state: await serviceStateFor(service) });
+    /** The Services with their state; the rows they are compared with are read once for all of them. */
+    const servicesDetails = async (services: readonly Service[]): Promise<ServiceDetails[]> => {
+        const projectIds = [...new Set(services.map((service) => service.projectId))];
+        const rows = (await Promise.all(projectIds.map((projectId) => listServiceRows(pool, projectId)))).flat();
+        return Promise.all(
+            services.map(async (service) => ({
+                ...service,
+                state: await serviceStateFor(service, rows.find((row) => row.service.id === service.id)),
+            })),
+        );
+    };
+    const serviceDetails = async (service: Service): Promise<ServiceDetails> => (await servicesDetails([service]))[0] as ServiceDetails;
 
     /** The digest the image points at now, as the registry answers it with the Service's credentials. */
     const resolve = async (image: string, auth: RegistryAuth | undefined): Promise<Result<string, ResolveError>> => {
@@ -675,7 +693,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (project === undefined) {
             return c.json(notFound, 404);
         }
-        return c.json(await Promise.all((await listServices(pool, project.id)).map(serviceDetails)));
+        return c.json(await servicesDetails(await listServices(pool, project.id)));
     });
 
     app.post('/v1/projects/:projectId/services', async (c) => {

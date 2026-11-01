@@ -16,7 +16,14 @@
  * and waits for it to exist; the Secrets' version on the pod template rolls
  * the Service when they change.
  */
-import { PROJECT_REGISTRY_AUTH, PROJECT_SECRETS, type ServiceRow, serviceObjectName } from '@openupstream/sdk';
+import {
+    PROJECT_REGISTRY_AUTH,
+    PROJECT_SECRETS,
+    SPEC_VERSION_ANNOTATION,
+    type ServiceRow,
+    serviceObjectName,
+    serviceSpecVersion,
+} from '@openupstream/sdk';
 import type { KubeObject } from '../kube.js';
 import { LABELS, MANAGED_BY, ZONE_LABEL, projectNamespace, projectObjectsFor, requireComputeSite } from '../kubernetes.js';
 
@@ -119,7 +126,13 @@ const deployment = (row: ServiceRow): KubeObject => {
     return {
         apiVersion: 'apps/v1',
         kind: 'Deployment',
-        metadata: { name: serviceObjectName(service), namespace: projectNamespace(project.id), labels: podLabels },
+        metadata: {
+            name: serviceObjectName(service),
+            namespace: projectNamespace(project.id),
+            labels: podLabels,
+            // What the control plane compares with the row to tell whether this change is applied yet.
+            annotations: { [SPEC_VERSION_ANNOTATION]: serviceSpecVersion(row) },
+        },
         spec: {
             replicas: service.replicas,
             selector: { matchLabels: { [SERVICE_ID_LABEL]: service.id } },
