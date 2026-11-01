@@ -1012,7 +1012,21 @@ Decisions table once it is settled.
    `--registry-user` and the token on stdin (kubelet matched the
    repository key). Left: the log stream; Docker Hub's credential key form
    is untested, for lack of a private Docker Hub image.
-4. Containers, Cron job and One-off job modes.
+4. Containers, Cron job and One-off job modes. Done: Jobs API (#95,
+   ADR-0003), the Jobs operator and runs, `oup job` (#96). Tested on the
+   dev cluster (2026-11-01) with `oup job`: a Cron job every minute in
+   `Europe/Berlin` became `ready` once the operator applied it and ran on
+   schedule under `runsc` with a Secret in its environment; changing its
+   schedule and switching it off were `deploying` until applied. A One-off
+   job got its args and an added variable; a failing run made `oup job run`
+   exit 1, and a run over its timeout failed with `DeadlineExceeded`.
+   Stopping a run ended a waiting `oup job run` at once. A run reached the
+   internet, not the cluster's Service network, the control plane or the
+   metadata endpoint. Deleting a Job removed its CronJob and its runs, the
+   last one also `job-egress`; neither the control plane nor the operator
+   logged `Forbidden`. The test found that a run read as `pending` for a
+   moment while its pod was stopped at the deadline (fixed: the outcome
+   counts from `FailureTarget` and `SuccessCriteriaMet`).
 5. Demo apps run end to end on the platform (#30), including `notes`
    staying writable while a whole Site is switched off.
 
