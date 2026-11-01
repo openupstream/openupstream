@@ -15,12 +15,18 @@ const api = async (path, init) => {
     const response = await fetch(`/api${path}`, init);
     if (!response.ok) {
         const body = await response.json().catch(() => ({}));
-        throw new Error(body.error ?? `the API answered ${response.status}`);
+        throw new Error(body.error ?? (response.status === 404 ? 'no such file' : `the API answered ${response.status}`));
     }
     return response;
 };
 
 const alert = (error) => el('p', { role: 'alert' }, error.message);
+
+/** Shows the error after `node`, in place of an earlier one. */
+const showError = (node, error) => {
+    node.parentElement.querySelector('[role=alert]')?.remove();
+    node.after(alert(error));
+};
 
 async function listView() {
     const input = el('input', { type: 'file', required: true });
@@ -30,8 +36,8 @@ async function listView() {
         const file = input.files[0];
         const name = file.name.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^[._-]+/, '').slice(0, 100) || 'file';
         await api(`/files/${encodeURIComponent(name)}`, { method: 'PUT', body: file, headers: { 'content-type': file.type || 'application/octet-stream' } })
-            .then(() => navigate('/'))
-            .catch((error) => form.after(alert(error)));
+            .then(() => render())
+            .catch((error) => showError(form, error));
     });
     const files = await (await api('/files')).json();
     const list = files.length === 0
@@ -40,23 +46,25 @@ async function listView() {
     return [form, list];
 }
 
-async function fileView(name) {
+/** One file; `segment` is the name as it is in the path, decoded here so a bad escape is an error shown like any other. */
+async function fileView(segment) {
+    const name = decodeURIComponent(segment);
     const url = `/api/files/${encodeURIComponent(name)}`;
-    const response = await api(`/files/${encodeURIComponent(name)}`);
-    const type = response.headers.get('content-type') ?? '';
+    // HEAD for the type: an image loads once, in its <img>, and a file without a preview not at all.
+    const type = (await api(`/files/${encodeURIComponent(name)}`, { method: 'HEAD' })).headers.get('content-type') ?? '';
     const preview = type.startsWith('image/')
         ? el('img', { src: url, alt: name })
         : type.startsWith('text/') || type === 'application/json'
-            ? el('pre', {}, await response.text())
+            ? el('pre', {}, await (await api(`/files/${encodeURIComponent(name)}`)).text())
             : el('p', {}, `${type}, no preview`);
     const remove = el('button', {}, 'Delete');
-    remove.addEventListener('click', () => api(`/files/${encodeURIComponent(name)}`, { method: 'DELETE' }).then(() => navigate('/')).catch((error) => remove.after(alert(error))));
+    remove.addEventListener('click', () => api(`/files/${encodeURIComponent(name)}`, { method: 'DELETE' }).then(() => navigate('/')).catch((error) => showError(remove, error)));
     return [el('h2', {}, name), preview, el('p', {}, link(url, 'Download'), ' ', remove), el('p', {}, link('/', 'All files'))];
 }
 
 async function render() {
     const match = /^\/files\/([^/]+)$/.exec(location.pathname);
-    const children = await (match === null ? listView() : fileView(decodeURIComponent(match[1]))).catch((error) => [alert(error), el('p', {}, link('/', 'All files'))]);
+    const children = await (match === null ? listView() : fileView(match[1])).catch((error) => [alert(error), el('p', {}, link('/', 'All files'))]);
     view.replaceChildren(...children);
 }
 

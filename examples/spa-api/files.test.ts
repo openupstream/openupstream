@@ -71,6 +71,9 @@ test('files are stored, listed, downloaded and deleted', async () => {
     assert.equal(download.headers.get('content-disposition'), 'attachment; filename="a.png"');
     assert.equal(download.headers.get('content-security-policy'), 'sandbox');
     assert.deepEqual(new Uint8Array(await download.arrayBuffer()), png);
+    const head = await fetch(`${url}/api/files/a.png`, { method: 'HEAD' });
+    assert.equal(head.headers.get('content-type'), 'image/png');
+    assert.equal(head.headers.get('content-length'), String(png.length));
     assert.equal((await fetch(`${url}/api/files/a.png`, { method: 'DELETE' })).status, 204);
     assert.equal((await fetch(`${url}/api/files/a.png`)).status, 404);
     await close();

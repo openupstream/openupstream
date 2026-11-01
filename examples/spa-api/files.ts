@@ -92,6 +92,8 @@ export function filesHandler(store: FilesStore) {
             return sendJson(response, 400, { error: 'a file name has 1 to 100 letters, digits, dots, dashes or underscores' });
         }
         switch (request.method) {
+            // Node leaves out the body of a HEAD answer; the app reads a file's type that way.
+            case 'HEAD':
             case 'GET': {
                 const file = await store.get(name);
                 if (file === undefined) {
@@ -111,7 +113,7 @@ export function filesHandler(store: FilesStore) {
                 await store.delete(name);
                 return void response.writeHead(204).end();
             default:
-                response.setHeader('allow', 'GET, PUT, DELETE');
+                response.setHeader('allow', 'GET, HEAD, PUT, DELETE');
                 return sendJson(response, 405, { error: 'method not allowed' });
         }
     };

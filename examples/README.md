@@ -55,7 +55,7 @@ on unchanged:
 | --- | --- |
 | `GET /api/files` | the first 100 files by name: `[{name, size, lastModified}]` |
 | `PUT /api/files/{name}` | the body as the file, its `content-type` kept → 200; 400 for a bad name, 413 over 1 MiB |
-| `GET /api/files/{name}` | the file as a download (`attachment`, CSP `sandbox`); 404 if there is none |
+| `GET /api/files/{name}` | the file as a download (`attachment`, CSP `sandbox`), also as `HEAD`; 404 if there is none |
 | `DELETE /api/files/{name}` | 204 |
 | `GET /healthz` | 200 while the process runs |
 | `GET /readyz` | 200 while the Bucket answers, else 503 |

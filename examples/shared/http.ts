@@ -7,18 +7,21 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 export const log = (entry: Record<string, unknown>): void => console.log(JSON.stringify({ time: new Date().toISOString(), ...entry }));
 
-/** The body, or undefined when it is longer than `limit` bytes. */
+/**
+ * The body, or undefined when it is longer than `limit` bytes. A body over
+ * the limit is still read to its end, and dropped: leaving the loop early
+ * would destroy the socket, and the client would see a reset, not the 413.
+ */
 export async function readBytes(request: IncomingMessage, limit: number): Promise<Buffer | undefined> {
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const chunk of request) {
         size += (chunk as Buffer).length;
-        if (size > limit) {
-            return undefined;
+        if (size <= limit) {
+            chunks.push(chunk as Buffer);
         }
-        chunks.push(chunk as Buffer);
     }
-    return Buffer.concat(chunks);
+    return size > limit ? undefined : Buffer.concat(chunks);
 }
 
 /** The body as text, or undefined when it is longer than `limit` bytes. */
