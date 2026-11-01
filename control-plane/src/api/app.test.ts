@@ -980,7 +980,27 @@ describe('Services', () => {
         assert.equal((await call('POST', routes, 'alice', { pathPrefix: '/x', serviceId: service.id, spaFallback: true })).status, 400);
         assert.equal((await call('POST', routes, 'alice', { pathPrefix: '/x', serviceId: '00000000-0000-4000-8000-000000000099' })).status, 400);
         assert.equal((await call('DELETE', path(`/${service.id}`), 'alice')).status, 409);
+        assert.equal((await call('PATCH', path(`/${service.id}`), 'alice', { port: null })).status, 409, 'a routed Service keeps its port');
         assert.equal((await call('DELETE', `${routes}/${route.id}`, 'alice')).status, 204);
+    });
+
+    test('a worker has no port, and no Route can serve it until it gets one', async () => {
+        const { port: _port, ...withoutPort } = input;
+        const created = await call('POST', path(), 'alice', { ...withoutPort, name: 'worker' });
+        assert.equal(created.status, 201);
+        const worker = (await created.json()) as ServiceDetails;
+        assert.equal(worker.port, null);
+        const [domain] = (await (await call('GET', `/v1/projects/${projectId}/domains`, 'alice')).json()) as Domain[];
+        assert.ok(domain);
+        const routes = `/v1/projects/${projectId}/domains/${domain.id}/routes`;
+        assert.equal((await call('POST', routes, 'alice', { pathPrefix: '/jobs', serviceId: worker.id })).status, 409);
+        assert.equal((await call('PATCH', path(`/${worker.id}`), 'alice', { port: 9000 })).status, 200);
+        const route = await call('POST', routes, 'alice', { pathPrefix: '/jobs', serviceId: worker.id });
+        assert.equal(route.status, 201);
+        assert.equal((await call('DELETE', `${routes}/${((await route.json()) as Route).id}`, 'alice')).status, 204);
+        const removed = await call('PATCH', path(`/${worker.id}`), 'alice', { port: null });
+        assert.equal(((await removed.json()) as ServiceDetails).port, null);
+        assert.equal((await call('DELETE', path(`/${worker.id}`), 'alice')).status, 202);
     });
 
     test("another Account's Project: 404; deleted: 202, then gone", async () => {

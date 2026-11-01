@@ -157,6 +157,7 @@ const serviceFields = {
 const serviceInput = z.strictObject({
     name: z.string().regex(DNS_LABEL, 'a DNS label: lowercase letters, digits and hyphens'),
     ...serviceFields,
+    port: serviceFields.port.optional(),
     replicas: serviceFields.replicas.optional(),
     homeSite: z.enum(COMPUTE_SITES).optional(),
     registryAuth: registryAuthInput.optional(),
@@ -164,7 +165,7 @@ const serviceInput = z.strictObject({
 
 const servicePatch = z.strictObject({
     image: serviceFields.image.optional(),
-    port: serviceFields.port.optional(),
+    port: serviceFields.port.nullable().optional(),
     replicas: serviceFields.replicas.optional(),
     memoryMb: serviceFields.memoryMb.optional(),
     cpuMillicores: serviceFields.cpuMillicores.optional(),
@@ -607,6 +608,8 @@ export function createApi(deps: ApiDeps): Hono<Env> {
                     return c.json({ error: 'no such Bucket in this Project' }, 400);
                 case 'service-not-found':
                     return c.json({ error: 'no such Service in this Project' }, 400);
+                case 'service-without-port':
+                    return c.json({ error: 'the Service has no port: it serves no HTTP, so no Route can send to it' }, 409);
                 case 'prefix-taken':
                     return c.json({ error: `the Domain has a Route at ${created.error.pathPrefix}` }, 409);
                 case 'spa-conflict':
@@ -855,6 +858,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             ...rest,
             id,
             imageDigest: digest.value,
+            port: rest.port ?? null,
             replicas: replicas ?? 1,
             homeSite: homeSite ?? null,
             registryAuth: sealed?.value ?? null,
@@ -903,13 +907,15 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         const changes: ServiceChanges = { ...rest, ...change.value };
         const updated = await updateService(pool, service.projectId, service.id, changes);
-        if (updated === undefined) {
-            return c.json(notFound, 404);
+        if (!updated.ok) {
+            return updated.error === 'routed'
+                ? c.json({ error: 'a Route serves this Service, so it keeps a port; delete the Route first' }, 409)
+                : c.json(notFound, 404);
         }
         if (change.value.registryAuth !== undefined) {
             syncSecrets(service.projectId);
         }
-        return c.json(await serviceDetails(updated));
+        return c.json(await serviceDetails(updated.value));
     });
 
     app.post('/v1/projects/:projectId/services/:serviceId/deploy', async (c) => {
@@ -922,7 +928,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             return unresolved(c, service.image, digest.error);
         }
         const updated = await updateService(pool, service.projectId, service.id, { imageDigest: digest.value });
-        return updated === undefined ? c.json(notFound, 404) : c.json(await serviceDetails(updated));
+        return updated.ok ? c.json(await serviceDetails(updated.value)) : c.json(notFound, 404);
     });
 
     app.delete('/v1/projects/:projectId/services/:serviceId', async (c) => {

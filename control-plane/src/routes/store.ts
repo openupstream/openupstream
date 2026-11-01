@@ -49,6 +49,7 @@ export type CreateRouteError =
     | { readonly kind: 'domain-not-found' }
     | { readonly kind: 'bucket-not-found' }
     | { readonly kind: 'service-not-found' }
+    | { readonly kind: 'service-without-port' }
     | { readonly kind: 'prefix-taken'; readonly pathPrefix: string }
     | { readonly kind: 'spa-conflict'; readonly spaFallback: boolean }
     | { readonly kind: 'unavailable'; readonly reason: string };
@@ -92,8 +93,9 @@ const insertRoute = (client: pg.PoolClient, values: unknown[], pathPrefix: strin
         );
 
 /**
- * A Service needs nothing outside the database; its row is locked until the
- * Route is committed, so it cannot be deleted under the new Route.
+ * A Service needs nothing outside the database; its row is share-locked
+ * until the Route is committed, so it can neither be deleted nor lose its
+ * port under the new Route. A Service without a port serves no HTTP.
  */
 async function createServiceRoute(
     pool: pg.Pool,
@@ -107,9 +109,16 @@ async function createServiceRoute(
         if (domain.rowCount !== 1) {
             return err({ kind: 'domain-not-found' });
         }
-        const service = await client.query('select 1 from services where id = $1 and project_id = $2 for key share', [serviceId, projectId]);
-        if (service.rowCount !== 1) {
+        const service = await client.query<{ port: number | null }>('select port from services where id = $1 and project_id = $2 for share', [
+            serviceId,
+            projectId,
+        ]);
+        const found = service.rows[0];
+        if (found === undefined) {
             return err({ kind: 'service-not-found' });
+        }
+        if (found.port === null) {
+            return err({ kind: 'service-without-port' });
         }
         return insertRoute(client, [projectId, domainId, pathPrefix, null, serviceId, false], pathPrefix);
     }, (result) => result.ok);
@@ -226,7 +235,7 @@ export async function listDomainRoutings(pool: pg.Pool): Promise<DomainRouting[]
         join projects p on p.id = d.project_id and p.deleted_at is null
         left join buckets b on b.id = r.bucket_id and b.deleted_at is null
         left join services s on s.id = r.service_id
-        where d.verified_at is not null and (b.id is not null or s.id is not null)
+        where d.verified_at is not null and (b.id is not null or s.port is not null)
         order by d.created_at, d.id, length(r.path_prefix) desc, r.path_prefix`);
     const byDomain = new Map<string, DomainRouting>();
     for (const row of rows) {

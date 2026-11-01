@@ -56,6 +56,14 @@ test("a Project's namespace and NetworkPolicies first, then each Service's Deplo
     );
 });
 
+test('a worker without a port gets no Kubernetes Service, no container port and no readiness probe', () => {
+    const plan = planServices([row({ port: null })]);
+    assert.deepEqual(plan.filter((o) => o.kind === 'Service'), []);
+    const container = podOf(plan.find((o) => o.kind === 'Deployment')).spec.containers[0] as Record<string, unknown> | undefined;
+    assert.equal(container?.['ports'], undefined);
+    assert.equal(container?.['readinessProbe'], undefined);
+});
+
 test('the pod runs the pinned image under gVisor, with the Project Secrets and registry credentials, and no API token', () => {
     const pod = podOf(planServices([row()]).find((o) => o.kind === 'Deployment'));
     assert.equal(pod.spec.runtimeClassName, 'gvisor');

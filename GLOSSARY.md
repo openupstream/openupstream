@@ -51,8 +51,8 @@ of its own.
 _Avoid_: website, hosting
 
 **Service**:
-A customer container image running continuously as an HTTP service, with
-one or more replicas.
+A customer container image running continuously, with one or more
+replicas: an HTTP service with a port, or a worker without one.
 _Avoid_: app, deployment, function
 
 **Job**:

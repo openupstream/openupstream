@@ -116,11 +116,12 @@ const deployment = (row: ServiceRow): KubeObject => {
                         {
                             name: 'app',
                             image: row.pinnedImage,
-                            ports: [{ name: 'http', containerPort: service.port, protocol: 'TCP' }],
+                            // A worker has no port: nothing probes it, and it is ready once it runs.
+                            ...(service.port === null ? {} : { ports: [{ name: 'http', containerPort: service.port, protocol: 'TCP' }] }),
                             envFrom: [{ secretRef: { name: PROJECT_SECRETS } }],
                             // The limits are what is reserved and billed (memory_gb_hours); no Service takes another's CPU.
                             resources: { requests: resources, limits: resources },
-                            readinessProbe: { tcpSocket: { port: 'http' }, periodSeconds: 5 },
+                            ...(service.port === null ? {} : { readinessProbe: { tcpSocket: { port: 'http' }, periodSeconds: 5 } }),
                             securityContext: { allowPrivilegeEscalation: false },
                         },
                     ],
@@ -130,7 +131,7 @@ const deployment = (row: ServiceRow): KubeObject => {
     };
 };
 
-const kubernetesService = (row: ServiceRow): KubeObject => ({
+const kubernetesService = (row: ServiceRow, port: number): KubeObject => ({
     apiVersion: 'v1',
     kind: 'Service',
     metadata: {
@@ -140,11 +141,14 @@ const kubernetesService = (row: ServiceRow): KubeObject => ({
     },
     spec: {
         selector: { [SERVICE_ID_LABEL]: row.service.id },
-        ports: [{ name: 'http', port: row.service.port, targetPort: 'http', protocol: 'TCP' }],
+        ports: [{ name: 'http', port, targetPort: 'http', protocol: 'TCP' }],
     },
 });
 
-/** Applied in this order, per Project: its namespace, NetworkPolicies, then each Service's Deployment and Service. */
+/**
+ * Applied in this order, per Project: its namespace, NetworkPolicies, then
+ * each Service's Deployment and, when it has a port, its Kubernetes Service.
+ */
 export function planServices(rows: readonly ServiceRow[]): KubeObject[] {
     const projects = [...new Map(rows.map((row) => [row.project.id, row.project])).values()];
     return [
@@ -152,6 +156,6 @@ export function planServices(rows: readonly ServiceRow[]): KubeObject[] {
             ...projectObjectsFor(project),
             customerEgressPolicy(project.id, 'service-egress', SERVICES_COMPONENT, labels(project.id)),
         ]),
-        ...rows.flatMap((row) => [deployment(row), kubernetesService(row)]),
+        ...rows.flatMap((row) => [deployment(row), ...(row.service.port === null ? [] : [kubernetesService(row, row.service.port)])]),
     ];
 }

@@ -11,9 +11,9 @@
  */
 import type { Service, ServiceRow, Site } from '@openupstream/sdk';
 import type pg from 'pg';
-import { ACCOUNT_HELD, FOREIGN_KEY_VIOLATION, UNIQUE_VIOLATION, unlessCodes } from '../db/errors.js';
+import { ACCOUNT_HELD, FOREIGN_KEY_VIOLATION, SERVICE_ROUTED, UNIQUE_VIOLATION, unlessCodes } from '../db/errors.js';
 import { parseImageReference, pinnedImage } from '../registry.js';
-import { type Result, ok } from '../result.js';
+import { type Result, err, ok } from '../result.js';
 
 interface Row {
     id: string;
@@ -25,7 +25,7 @@ interface Row {
     replicas: number;
     memory_mb: number;
     cpu_millicores: number;
-    port: number;
+    port: number | null;
     home_site: Site | null;
     has_registry_auth: boolean;
     created_at: Date;
@@ -84,7 +84,8 @@ export interface ServiceRecord {
     readonly replicas: number;
     readonly memoryMb: number;
     readonly cpuMillicores: number;
-    readonly port: number;
+    /** null: a worker, which serves no HTTP. */
+    readonly port: number | null;
     readonly homeSite: Site | null;
     readonly registryAuth: Buffer | null;
 }
@@ -137,7 +138,7 @@ export interface ServiceChanges {
     readonly replicas?: number | undefined;
     readonly memoryMb?: number | undefined;
     readonly cpuMillicores?: number | undefined;
-    readonly port?: number | undefined;
+    readonly port?: number | null | undefined;
     readonly homeSite?: Site | null | undefined;
     readonly registryAuth?: Buffer | null | undefined;
 }
@@ -153,26 +154,37 @@ const COLUMN_OF: Record<keyof ServiceChanges, string> = {
     registryAuth: 'registry_auth',
 };
 
-/** The changed Service; undefined when there is no such Service. */
+export type UpdateServiceError = 'not-found' | 'routed';
+
+/** The changed Service; `routed` when the change removes the port of a Service a Route serves. */
 export async function updateService(
     pool: pg.Pool,
     projectId: string,
     id: string,
     changes: ServiceChanges,
-): Promise<Service | undefined> {
+): Promise<Result<Service, UpdateServiceError>> {
     const entries = (Object.keys(COLUMN_OF) as (keyof ServiceChanges)[]).filter((key) => changes[key] !== undefined);
     const assignments = [
         ...entries.map((key, i) => `${COLUMN_OF[key]} = $${i + 3}`),
         ...(changes.imageDigest === undefined ? [] : ['deployed_at = now()']),
     ];
-    if (assignments.length === 0) {
-        return getService(pool, projectId, id);
+    const updated =
+        assignments.length === 0
+            ? ok(await getService(pool, projectId, id))
+            : await unlessCodes(
+                  pool
+                      .query<Row>(`update services set ${assignments.join(', ')} where id = $1 and project_id = $2 returning ${COLUMNS}`, [
+                          id,
+                          projectId,
+                          ...entries.map((key) => changes[key]),
+                      ])
+                      .then(({ rows }) => rows.map(toService)[0]),
+                  { [SERVICE_ROUTED]: 'routed' as const },
+              );
+    if (!updated.ok) {
+        return updated;
     }
-    const { rows } = await pool.query<Row>(
-        `update services set ${assignments.join(', ')} where id = $1 and project_id = $2 returning ${COLUMNS}`,
-        [id, projectId, ...entries.map((key) => changes[key])],
-    );
-    return rows.map(toService)[0];
+    return updated.value === undefined ? err('not-found') : ok(updated.value);
 }
 
 export type DeleteServiceOutcome = 'deleted' | 'not-found' | 'routed';

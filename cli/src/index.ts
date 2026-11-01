@@ -65,7 +65,7 @@ const USAGE = `usage:
   oup link <project>
   oup service list
   oup service show <name>
-  oup service deploy <name> --image <ref> [--port <n>] [--replicas <n>] [--memory <MB>] [--cpu <millicores>]
+  oup service deploy <name> --image <ref> [--port <n> | --no-port] [--replicas <n>] [--memory <MB>] [--cpu <millicores>]
                      [--site hetzner-fsn1|ovh-lim] [--registry-user <user> --registry-password-stdin] [--no-wait]
   oup service delete <name>
   oup job list
@@ -216,6 +216,7 @@ async function service(args: string[]): Promise<void> {
             project: { type: 'string' },
             image: { type: 'string' },
             port: { type: 'string' },
+            'no-port': { type: 'boolean' },
             replicas: { type: 'string' },
             memory: { type: 'string' },
             cpu: { type: 'string' },
@@ -259,7 +260,7 @@ async function serviceDeploy(
     client: OpenUpstreamClient,
     project: Project,
     existing: Parameters<typeof planServiceDeploy>[0],
-    flags: { name: string; image?: string; port?: string; replicas?: string; memory?: string; cpu?: string; site?: string; 'registry-user'?: string; 'registry-password-stdin'?: boolean; 'no-wait'?: boolean },
+    flags: { name: string; image?: string; port?: string; 'no-port'?: boolean; replicas?: string; memory?: string; cpu?: string; site?: string; 'registry-user'?: string; 'registry-password-stdin'?: boolean; 'no-wait'?: boolean },
 ): Promise<void> {
     if (flags.image === undefined) {
         return fail('oup service deploy needs --image');
@@ -267,8 +268,11 @@ async function serviceDeploy(
     if (flags.site !== undefined && !isSite(flags.site)) {
         return fail(`--site is one of ${COMPUTE_SITES.join(', ')}`);
     }
+    if (flags.port !== undefined && flags['no-port'] === true) {
+        return fail('--port and --no-port exclude each other');
+    }
     const registryAuth = await registryAuthFrom(flags);
-    const port = count('port', flags.port);
+    const port = flags['no-port'] === true ? null : count('port', flags.port);
     const replicas = count('replicas', flags.replicas);
     const memoryMb = count('memory', flags.memory);
     const cpuMillicores = count('cpu', flags.cpu);

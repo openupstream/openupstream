@@ -27,11 +27,12 @@ oup site deploy dist --bucket my-site
   find it, as git finds `.git`. It holds no secret and may be committed.
   `--project <name|id>`, or `OUP_PROJECT` in CI, names another Project for
   one command.
-- `oup service deploy <name> --image <ref> [--port <n>] [--replicas <n>]
+- `oup service deploy <name> --image <ref> [--port <n> | --no-port] [--replicas <n>]
   [--memory <MB>] [--cpu <millicores>] [--site hetzner-fsn1|ovh-lim]
   [--registry-user <user> --registry-password-stdin] [--no-wait]`: brings
   the Service to what the flags say (ARCHITECTURE.md, decision 94). A new
-  one needs `--port`; memory, CPU and replicas default to 256 MB, 250
+  one needs `--port`, or `--no-port` for a worker that serves no HTTP
+  (decision 98), which also removes an existing Service's port; memory, CPU and replicas default to 256 MB, 250
   millicores and 1. An existing one gets what differs, and flags left out
   keep what it has. Either way the tag is resolved again, so every deploy
   runs what the tag points at now, pinned by digest. Then it waits until the

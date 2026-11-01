@@ -179,8 +179,9 @@ export const SERVICE_LIMITS = {
 } as const;
 
 /**
- * An HTTP container, always on, 1..N replicas (ARCHITECTURE.md,
- * "Containers"). Its image is pinned to a digest whenever it is deployed.
+ * A container, always on, 1..N replicas (ARCHITECTURE.md, "Containers"):
+ * an HTTP server, or a worker without a port. Its image is pinned to a
+ * digest whenever it is deployed.
  */
 export interface Service {
     id: Id;
@@ -196,8 +197,12 @@ export interface Service {
     replicas: number;
     memoryMb: number;
     cpuMillicores: number;
-    /** The HTTP port the container listens on. */
-    port: number;
+    /**
+     * The HTTP port the container listens on; null: a worker, which no Route
+     * can serve, gets no in-cluster address and counts as ready once it runs
+     * (decision 98).
+     */
+    port: number | null;
     /**
      * Where a single replica runs; null: the Home site of the Project's oldest
      * Database, or `hetzner-fsn1`. Two or more replicas run in both Sites.
@@ -212,7 +217,8 @@ export interface Service {
 export interface ServiceInput {
     name: string;
     image: string;
-    port: number;
+    /** Left out: a worker without a port. */
+    port?: number;
     /** Default 1. */
     replicas?: number;
     memoryMb: number;
@@ -223,11 +229,12 @@ export interface ServiceInput {
 
 /**
  * Changes a Service. A new `image` or `registryAuth` resolves the tag again;
- * `registryAuth: null` removes the credentials, `homeSite: null` the choice.
+ * `registryAuth: null` removes the credentials, `homeSite: null` the choice,
+ * `port: null` the port (refused while a Route serves the Service).
  */
 export interface ServicePatch {
     image?: string;
-    port?: number;
+    port?: number | null;
     replicas?: number;
     memoryMb?: number;
     cpuMillicores?: number;
