@@ -149,3 +149,8 @@ test('without the Services nothing is applied or deleted', async () => {
     const done = await servicesPass(async () => ok([row()]), kube);
     assert.equal(done['services'], 1);
 });
+
+test('the Deployment carries the spec version the control plane compares its row with', () => {
+    const deployment = planServices([row()]).find((o) => o.kind === 'Deployment');
+    assert.equal(deployment?.metadata.annotations?.['openupstream.io/spec-version'], `ghcr.io/acme/api@${digest}|1|256|250|8080|ovh-lim|v1`);
+});

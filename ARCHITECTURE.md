@@ -461,7 +461,12 @@ digest (#55).
   image, port, replicas, memory and CPU, `PATCH` to change it, `POST
   …/services/{id}/deploy` to resolve the same tag again, `DELETE` (409
   while a Route serves it). Its state (`deploying`, `running`, `degraded`)
-  is read live from its Deployment. The control plane resolves the tag to
+  is read live from its Deployment. The Services operator stamps the
+  Deployment with the spec version it applied (pinned image, replicas,
+  resources, port, Site, Secrets version; `serviceSpecVersion` in the sdk),
+  and until it carries the version the row asks for now, the Service is
+  `deploying`: a change is never reported `running` on the old version
+  before the operator's next pass (#94). The control plane resolves the tag to
   a digest while the request waits, with the registry's token flow: an image
   the registry does not have, or will not serve with the given credentials,
   is a 400, a registry that cannot be reached a 503, and nothing is written.
@@ -811,6 +816,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 91 | The control plane writes the Kubernetes Secret `project-secrets` per Project itself, after each change and in a 30 s pass; no Secrets operator. The public API: `GET …/secrets` (names), `PUT …/secrets/{name}` `{value}`, `DELETE …/secrets/{name}`; every Service of the Project gets all of them | a Secrets operator fed decrypted values by an internal API route (the earlier plan of decision 20); per-Service selection of Secrets | the control plane alone holds the key-encryption key, so plaintext never travels between processes and no operator can read every Project's Secrets; it needs `create` and `patch` on Secrets cluster-wide, which a Secrets operator would have needed as well. Project-wide Secrets match how they are described to customers; selecting per Service can come later without changing the API |
 | 92 | Services API: a Service is a row, created, changed (`PATCH`) and redeployed (`POST …/deploy`) through the API, its state read from its Deployment. The control plane resolves the tag to a digest at the registry while the request waits, over https and never at a private address; pull credentials are per Service, sealed with the Project's data key, and rendered into one dockerconfigjson Secret per Project keyed by repository | Deployments as immutable records with history and rollback; the operator resolving tags on its pass; named registry credentials shared by Services; a pull Secret per Service | the pattern of Buckets: a 201 means the image exists and can be pulled, and a bad tag or credentials is an answer, not a state to poll; the operator never needs credentials or the internet. One Secret per Project lives and dies with the namespace and needs no pruning by the control plane; kubelet's prefix match keeps credentials per repository. Rollback is a `PATCH` back to a digest (`image@sha256:…`) |
 | 93 | A Services operator (`OPERATOR=services`, own ServiceAccount) applies per Service a Deployment (gVisor, image by digest, requests = limits, no ServiceAccount token, `envFrom` `project-secrets` required, Secrets version on the pod template) and a Kubernetes Service, plus per Project the NetworkPolicy `service-egress`, and deletes what no row wants. Routes to a Service keep the path, dial with a 1 s timeout and retry GET and HEAD only | extending the Routes operator; `optional` Secrets; stripping the prefix as for Buckets; egress left open | each operator keeps only the rights it needs and one concern per pass; a pod that waited for its Secrets never runs without them; apps behind `/api` usually expect their full path; customer code must not reach Garage's admin API, the control plane or other Projects from inside the cluster, so only the internet and its own namespace are open |
+| 94 | `oup` acts on the Project linked to the directory (`oup link` writes its id to `.openupstream.json`, found upwards like `.git`; `--project` or `OUP_PROJECT` override); `oup service deploy` is one idempotent command (create, else change what differs, else deploy the tag again; always resolves the tag, then waits until running); Secret values and registry passwords come from stdin only | `--project` on every command; separate create/update/redeploy verbs mirroring the API; `NAME=value` arguments | the directory is where the code of one Project lives, as with Vercel or Railway, and the id survives renames; the same deploy line works for the first and every later deploy, locally and in CI; arguments end up in shell history and the process list |
 
 ## Open questions
 
@@ -963,9 +969,16 @@ Decisions table once it is settled.
    internal API; a Service's pod reached its own namespace, DNS and the
    internet, not the control plane, Garage's admin API or the metadata
    endpoint. The test found that the operators' Kubernetes client had
-   dropped every NetworkPolicy's peers (fixed, see "Operators"). Left: a
-   CLI for Services and Secrets, the log stream, private registries tried
-   against a real one (the Docker Hub credential key form included).
+   dropped every NetworkPolicy's peers (fixed, see "Operators"). `oup link`,
+   `oup service` and `oup secret` (#94), tested on the dev cluster
+   (2026-11-01): a deploy created the Service and waited until it ran, a
+   change of replicas was `deploying` until the operator had applied it,
+   the same deploy again only resolved the tag, a piped Secret value lost
+   its trailing line break and rolled both replicas; a private image on
+   GHCR was refused without credentials and pulled by digest with
+   `--registry-user` and the token on stdin (kubelet matched the
+   repository key). Left: the log stream; Docker Hub's credential key form
+   is untested, for lack of a private Docker Hub image.
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
    staying writable while a whole Site is switched off.

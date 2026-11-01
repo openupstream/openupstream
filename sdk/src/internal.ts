@@ -111,6 +111,18 @@ export interface ServiceRow {
     readonly secretsVersion: string;
 }
 
+/** On a Service's Deployment: the spec version it was applied from (serviceSpecVersion). */
+export const SPEC_VERSION_ANNOTATION = 'openupstream.io/spec-version';
+
+/**
+ * Everything of a Service's row that its Deployment is rendered from. The
+ * Services operator writes it on the Deployment; the control plane reports
+ * `deploying` until the Deployment carries the version its row asks for,
+ * so a change is not `running` before it has been applied and rolled out.
+ */
+export const serviceSpecVersion = (row: Pick<ServiceRow, 'service' | 'pinnedImage' | 'site' | 'secretsVersion'>): string =>
+    [row.pinnedImage, row.service.replicas, row.service.memoryMb, row.service.cpuMillicores, row.service.port, row.site, row.secretsVersion].join('|');
+
 export interface DatabaseRow {
     readonly project: Project;
     readonly database: Database;

@@ -13,6 +13,7 @@ import {
     type Secret,
     type ServiceDetails,
     type ServiceRow,
+    serviceSpecVersion,
 } from '@openupstream/sdk';
 import { getAccountRecord, liftHold, placeHold } from '../accounts/store.js';
 import { listDatabaseRows } from '../databases/rows.js';
@@ -835,12 +836,20 @@ describe('Services', () => {
         assert.equal(service.state, 'deploying');
     });
 
-    test('the state is read from the Deployment', async () => {
-        const status = { replicas: 1, generation: 1, observedGeneration: 1, updatedReplicas: 1, availableReplicas: 1 };
+    test("the state is read from the Deployment, and is deploying until it carries the row's current spec", async () => {
+        const stateNow = async () => ((await (await call('GET', path(`/${service.id}`), 'alice')).json()) as ServiceDetails).state;
+        const row = (await listServiceRows(db.pool, projectId)).find((candidate) => candidate.service.id === service.id);
+        assert.ok(row);
+        const status = { replicas: 1, generation: 1, observedGeneration: 1, updatedReplicas: 1, availableReplicas: 1, specVersion: serviceSpecVersion(row) };
         deployments.set(`svc-${service.id}`, status);
-        assert.equal(((await (await call('GET', path(`/${service.id}`), 'alice')).json()) as ServiceDetails).state, 'running');
+        assert.equal(await stateNow(), 'running');
         deployments.set(`svc-${service.id}`, { ...status, replicas: 2, updatedReplicas: 2 });
-        assert.equal(((await (await call('GET', path(`/${service.id}`), 'alice')).json()) as ServiceDetails).state, 'degraded');
+        assert.equal(await stateNow(), 'degraded');
+        // A change the operator has not applied yet: the old Deployment is fully available, but not what was asked for.
+        deployments.set(`svc-${service.id}`, { ...status, specVersion: 'an older spec' });
+        assert.equal(await stateNow(), 'deploying');
+        const listed = (await (await call('GET', path(), 'alice')).json()) as ServiceDetails[];
+        assert.equal(listed.find((candidate) => candidate.id === service.id)?.state, 'deploying');
         deployments.delete(`svc-${service.id}`);
     });
 

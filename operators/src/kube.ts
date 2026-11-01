@@ -16,6 +16,7 @@ export interface KubeObject {
         readonly name: string;
         readonly namespace?: string;
         readonly labels?: Readonly<Record<string, string>>;
+        readonly annotations?: Readonly<Record<string, string>>;
     };
     readonly [field: string]: unknown;
 }

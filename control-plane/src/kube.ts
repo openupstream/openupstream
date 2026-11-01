@@ -6,7 +6,7 @@
  * key-encryption key. Every other object is the operators' to create.
  */
 import { ApiException, type KubeConfig, KubernetesObjectApi, PatchStrategy } from '@kubernetes/client-node';
-import type { DatabaseState, ServiceState } from '@openupstream/sdk';
+import { SPEC_VERSION_ANNOTATION, type DatabaseState, type ServiceState } from '@openupstream/sdk';
 import { type Result, err, ok } from './result.js';
 
 export interface ObjectRef {
@@ -30,14 +30,17 @@ export interface DeploymentStatus {
     readonly observedGeneration: number;
     readonly updatedReplicas: number;
     readonly availableReplicas: number;
+    /** What the Services operator applied it from (serviceSpecVersion); undefined before it set one. */
+    readonly specVersion: string | undefined;
 }
 
 /**
- * No Deployment yet, none available, or a rollout under way: deploying;
- * every replica available on the current version: running; else degraded.
+ * No Deployment yet, none from the row's current spec (`wantedVersion`),
+ * none available, or a rollout under way: deploying; every replica
+ * available on the current version: running; else degraded.
  */
-export const serviceStateOf = (status: DeploymentStatus | undefined): ServiceState => {
-    if (status === undefined || status.availableReplicas === 0) {
+export const serviceStateOf = (status: DeploymentStatus | undefined, wantedVersion: string): ServiceState => {
+    if (status === undefined || status.specVersion !== wantedVersion || status.availableReplicas === 0) {
         return 'deploying';
     }
     if (status.observedGeneration < status.generation || status.updatedReplicas < status.replicas) {
@@ -112,7 +115,7 @@ interface ClusterObject {
 interface DeploymentObject {
     apiVersion: string;
     kind: string;
-    metadata: { name: string; namespace: string; generation?: number };
+    metadata: { name: string; namespace: string; generation?: number; annotations?: Record<string, string> };
     spec?: { replicas?: number };
     status?: { observedGeneration?: number; updatedReplicas?: number; availableReplicas?: number };
 }
@@ -150,6 +153,7 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
                 observedGeneration: deployment.status?.observedGeneration ?? 0,
                 updatedReplicas: deployment.status?.updatedReplicas ?? 0,
                 availableReplicas: deployment.status?.availableReplicas ?? 0,
+                specVersion: deployment.metadata.annotations?.[SPEC_VERSION_ANNOTATION],
             });
         },
         remove: async (ref) => {
