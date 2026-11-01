@@ -146,7 +146,8 @@ Germany.
   dropped and their DNS cache expires, about 2–3 minutes at worst. A Site
   that accepts connections but is broken is covered only by the health
   check (about 1–2.5 minutes). Plain Java `HttpClient` does not fail over
-  until DNS changes.
+  until DNS changes. A front with an address that outlives a Site is the
+  preferred way to shorten this after v1 (open question 2).
 
 ## Control plane (`control-plane/`)
 
@@ -855,11 +856,41 @@ Decisions table once it is settled.
    really is Limburg and measure FSN1↔Limburg RTT with WireGuard over a few
    days (order the RISE-2 monthly first); check netcup's traffic allowance;
    check Hetzner "LTD" stock.
-2. **Fewer slow failovers.** Chrome and Firefox switch addresses at once
-   only when a Site refuses connections. Can partial failures be made to
-   refuse instead of time out (host firewalls that reject rather than drop on
-   80/443 when Traefik is down)? A Site that goes fully dark still waits for
-   the health check.
+2. **Fewer slow failovers, less dependence on bunny.net.** Chrome and
+   Firefox switch addresses at once only when a Site refuses connections.
+   Can partial failures be made to refuse instead of time out (host
+   firewalls that reject rather than drop on 80/443 when Traefik is down)?
+   A Site that goes fully dark still waits for the health check and the
+   TTL, 2–3 minutes at worst; to measure: whether reloading the page gets
+   there sooner (probably not, the cached answer is reused).
+   - **Preferred direction, after v1:** a front in front of both Sites
+     whose address does not die with a Site: a Hetzner Load Balancer in
+     Nuremberg (`nbg1`, not Falkenstein, so one location outage cannot take
+     the front and `hetzner-fsn1` together) forwards TCP with PROXY protocol
+     to a pair of proxy VMs (HAProxy in TCP mode, TLS passed through), which
+     forward to Traefik in both Sites, retrying the other Site when a
+     connection fails. Hetzner's Load Balancer only reaches Hetzner servers,
+     so the proxy VMs are what reach `ovh-lim`. About €15/month. A Site that
+     fails or reboots then costs clients about a second, a dead proxy VM a
+     few health checks; certificates and plaintext stay ours. Costs: one
+     more component to run, a few ms of extra hop, Traefik must accept PROXY
+     protocol from the proxies only, and the "accepts connections but is
+     broken" case still needs the proxies to health-check a real path.
+   - **Still open with it:** if the front's location fails, clients need DNS
+     failover to a second front at another provider, so DNS failover stays,
+     only for that rare case. And bunny.net remains the single DNS
+     provider; options: a second provider with its own health checks (e.g.
+     Gcore, checks every 10 s on paid plans) listed alongside bunny.net, or
+     an own health watcher outside the Sites writing records to two plain
+     DNS providers (the alternative decision 32 turned down).
+   - **Considered and set aside:** anycast with an own /24 and ASN (about
+     €150/month plus BGP from providers that offer it; Hetzner, OVHcloud
+     and netcup do not for our server types); AWS Global Accelerator
+     (anycast, but endpoints only in AWS) and Cloudflare Spectrum (US
+     company in the path); a CDN, which terminates TLS for every customer
+     domain (decision 34); hardware load balancers (own hardware, a
+     non-goal); a provider's managed load balancer alone (each only reaches
+     its own provider's servers).
 3. **SSE-C for backups.** Does Hetzner Object Storage accept SSE-C keys passed
    to Barman Cloud?
 4. **Metering Service-initiated egress.** Needs per-pod accounting (nftables
