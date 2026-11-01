@@ -937,9 +937,15 @@ Decisions table once it is settled.
    internet, not the control plane, Garage's admin API or the metadata
    endpoint. The test found that the operators' Kubernetes client had
    dropped every NetworkPolicy's peers (fixed, see "Operators"). `oup link`,
-   `oup service` and `oup secret` (2026-11-01, #94), run against a fake API
-   only so far. Left: the log stream, private registries tried against a
-   real one (the Docker Hub credential key form included).
+   `oup service` and `oup secret` (#94), tested on the dev cluster
+   (2026-11-01): a deploy created the Service and waited until it ran, a
+   change of replicas was `deploying` until the operator had applied it,
+   the same deploy again only resolved the tag, a piped Secret value lost
+   its trailing line break and rolled both replicas; a private image on
+   GHCR was refused without credentials and pulled by digest with
+   `--registry-user` and the token on stdin (kubelet matched the
+   repository key). Left: the log stream; Docker Hub's credential key form
+   is untested, for lack of a private Docker Hub image.
 4. Containers, Cron job and One-off job modes.
 5. Demo apps run end to end on the platform (#30), including `notes`
    staying writable while a whole Site is switched off.
