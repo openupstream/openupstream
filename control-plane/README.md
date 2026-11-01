@@ -252,7 +252,10 @@ operator has created it.
 ## Tests
 
 The schema and store tests run against a real Postgres. Each test file
-creates its own database and drops it afterwards.
+creates its own database and drops it afterwards, once every connection of
+its pool has closed: `pg`'s `pool.end()` returns before they have, and
+`drop database … with (force)` would terminate one still closing, an error
+that ends the test run.
 
 - With `TEST_DATABASE_URL` set (CI does this), they use that server.
 - Otherwise they start `postgres:17-alpine` in Docker with

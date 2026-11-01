@@ -45,6 +45,33 @@ async function onServer(serverUrl: string, sql: string): Promise<void> {
     await client.end();
 }
 
+export interface ClosingPool {
+    readonly pool: pg.Pool;
+    /** Ends the pool; resolves once every connection it opened has closed. */
+    end(): Promise<void>;
+}
+
+/**
+ * A pool whose end waits for its connections to close. `pool.end()` alone
+ * resolves as soon as it has asked them to: a backend still open then is
+ * terminated by `drop database … with (force)`, and its client reports that
+ * on the pool's 'error' event, which crashes the test run.
+ */
+export function closingPool(url: string): ClosingPool {
+    const pool = new pg.Pool({ connectionString: url });
+    const closed: Promise<void>[] = [];
+    pool.on('connect', (client) => {
+        closed.push(new Promise((resolve) => client.once('end', () => resolve())));
+    });
+    return {
+        pool,
+        end: async () => {
+            await pool.end();
+            await Promise.all(closed);
+        },
+    };
+}
+
 export async function createTestDatabase(): Promise<TestDatabase> {
     const server = await startServer();
     const name = `openupstream_test_${randomBytes(6).toString('hex')}`;
@@ -53,13 +80,13 @@ export async function createTestDatabase(): Promise<TestDatabase> {
     const url = new URL(server.url);
     url.pathname = `/${name}`;
     await migrate(url.toString());
-    const pool = new pg.Pool({ connectionString: url.toString() });
+    const { pool, end } = closingPool(url.toString());
 
     return {
         url: url.toString(),
         pool,
         close: async () => {
-            await pool.end();
+            await end();
             await onServer(server.url, `drop database ${name} with (force)`);
             await server.stop();
         },
