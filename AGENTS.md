@@ -11,6 +11,24 @@ CONTRIBUTING.md. The repository layout is in README.md.
   user which approach they prefer before writing code.
 - Ask clarifying questions whenever requirements, scope, or expected behavior
   are ambiguous — don't guess silently.
+- **Make sure the user understands the consequences of each choice before
+  they answer.** For every option of a non-trivial decision (simple yes/no
+  confirmations stay short), state what it changes and what it costs or
+  rules out (migration effort, irreversibility, price, performance,
+  maintenance, user-visible behavior). Name your recommendation and why.
+  - **Offer an "Explain in more detail" option** alongside the answers, so
+    the user can ask for a deeper explanation instead of having to pick an
+    answer or type one. In Claude Code, ask with AskUserQuestion, not the
+    next-step box, whose two buttons leave no room for it. If the question
+    tool's option limit is already used by real alternatives, keep the
+    alternatives and say in the question that answering "explain" asks for
+    more detail. When chosen, explain the trade-offs in depth, then ask the
+    question again.
+  - **Where it helps the decision, research first how similar products or
+    libraries solve it** (other cloud providers, Kubernetes operators,
+    established open-source projects, platform conventions) and summarize
+    the relevant approaches with links in the question. Skip this for
+    project-internal choices where no outside comparison exists.
 - After completing a task, recommend one concrete next step, usually the next
   item in the build order in `ARCHITECTURE.md` or a follow-up the task turned
   up.
