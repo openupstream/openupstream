@@ -1,0 +1,7 @@
+body{font:16px/1.5 system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem}
+h1 a{color:inherit;text-decoration:none}
+li{margin:.25rem 0}
+small,time{color:#666;font-size:.85em}
+img{max-width:100%}
+pre{white-space:pre-wrap;background:#f4f4f4;padding:.5rem}
+[role=alert]{color:#b00}

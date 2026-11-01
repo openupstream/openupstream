@@ -5,6 +5,6 @@
     "outDir": "dist",
     "declaration": false
   },
-  "include": ["shared", "notes"],
+  "include": ["shared", "notes", "spa-api"],
   "exclude": ["**/*.test.ts", "dist", "node_modules"]
 }
