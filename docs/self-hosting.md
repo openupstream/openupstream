@@ -37,15 +37,16 @@ npm ci && npm run build
 
 ## 2. Container images
 
-GitHub Actions builds the control plane and operators images on every push
-and publishes them to the GitHub Container Registry of the repository's
+GitHub Actions builds the control plane and operators images, and the demo
+apps' (`example-notes` …, decision 99), on every push and publishes them to the GitHub Container Registry of the repository's
 owner (`.github/workflows/images.yml`, #55). The cluster pulls them without
 credentials, so the packages must be public:
 
-1. Push once, so that the Images workflow creates both packages.
+1. Push once, so that the Images workflow creates the packages.
 2. On GitHub, open your organization's (or account's) **Packages**, then
-   `control-plane` and `operators`, each: **Package settings → Danger Zone →
-   Change visibility → Public**.
+   `control-plane`, `operators` and each `example-…`: **Package settings →
+   Danger Zone → Change visibility → Public**. A demo app added later is a
+   new package, private until this is done for it.
 
 In a fork, the images are `ghcr.io/<your owner>/…`; the deploy manifests and
 `infra/dev-cluster/platform.sh` still say `openupstream`, so adjust them.
