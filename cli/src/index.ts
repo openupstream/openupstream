@@ -7,15 +7,19 @@
  *   oup link <project>                       this directory's Project (.openupstream.json)
  *   oup service list | show <name> | delete <name>
  *   oup service deploy <name> --image <ref> [--port …] …
+ *   oup job list | show <name> | runs <name> | delete <name>
+ *   oup job deploy <name> --image <ref> [--schedule …] … [-- command…]
+ *   oup job run <name> [--env NAME=value] [-- args…]   waits for the outcome
+ *   oup job stop <name> <run>
  *   oup secret list | set <NAME> | delete <NAME>   a value is read from stdin
  *   oup site deploy <dir> --bucket <name> [--keep] [--force]
  *   oup version
  *
- * Service and secret commands act on the linked Project; `--project` or
- * `OUP_PROJECT` names another.
+ * Service, job and secret commands act on the linked Project; `--project`
+ * or `OUP_PROJECT` names another.
  *
- * Planned (ARCHITECTURE.md build order): oup pg, oup bucket, oup run, oup
- * cron, oup routes, oup logs, oup usage.
+ * Planned (ARCHITECTURE.md build order): oup pg, oup bucket, oup routes,
+ * oup logs, oup usage.
  *
  * `OUP_API_KEY` (a madAuth API key) replaces `oup login`, e.g. in CI, with
  * `OUP_API_URL` for another API than https://api.openupstream.com.
@@ -23,14 +27,37 @@
 import { spawn } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { S3Client } from '@aws-sdk/client-s3';
-import { COMPUTE_SITES, DEFAULT_API_URL, OpenUpstreamClient, type Project, SDK_VERSION, type Site, cliLogin } from '@openupstream/sdk';
+import {
+    COMPUTE_SITES,
+    DEFAULT_API_URL,
+    type JobDetails,
+    OpenUpstreamClient,
+    type Project,
+    type RegistryAuth,
+    SDK_VERSION,
+    type Site,
+    cliLogin,
+} from '@openupstream/sdk';
 import { credentialsPath, readCredentials, removeCredentials, writeCredentials } from './credentials.js';
 import { deploy } from './deploy.js';
 import { discover, emailOf, startDeviceSignIn, waitForApproval } from './oidc.js';
 import { projectFor, resolveProject, writeLink } from './project.js';
+import {
+    type DesiredJob,
+    JOB_FLAGS,
+    formatJobs,
+    formatRuns,
+    isFinished,
+    outcomeOf,
+    parseEnv,
+    planJobDeploy,
+    splitAtDashes,
+    strayFlag,
+} from './jobs.js';
 import { type DesiredService, formatServices, planServiceDeploy, waitUntilRunning } from './services.js';
 import { apiAccess } from './session.js';
 import { readSecretValue } from './stdin.js';
+import { waitUntil } from './wait.js';
 
 const USAGE = `usage:
   oup login [--api <url>] [--no-browser]
@@ -41,13 +68,22 @@ const USAGE = `usage:
   oup service deploy <name> --image <ref> [--port <n>] [--replicas <n>] [--memory <MB>] [--cpu <millicores>]
                      [--site hetzner-fsn1|ovh-lim] [--registry-user <user> --registry-password-stdin] [--no-wait]
   oup service delete <name>
+  oup job list
+  oup job show <name>
+  oup job deploy <name> --image <ref> [--schedule <cron> | --no-schedule] [--time-zone <IANA name>]
+                 [--timeout <seconds>] [--memory <MB>] [--cpu <millicores>] [--site hetzner-fsn1|ovh-lim]
+                 [--registry-user <user> --registry-password-stdin] [--no-wait] [--no-command | -- <command> <arg>…]
+  oup job run <name> [--env NAME=value]… [--no-wait] [-- <arg>…]
+  oup job runs <name>
+  oup job stop <name> <run>
+  oup job delete <name>
   oup secret list
   oup secret set <NAME>        (the value from stdin)
   oup secret delete <NAME>
   oup site deploy <dir> --bucket <name> [--keep] [--force]
   oup version
 
-Service and secret commands take --project <name|id>; without it, the
+Service, job and secret commands take --project <name|id>; without it, the
 Project linked to this directory (oup link) or OUP_PROJECT.`;
 
 const fail = (message: string): never => {
@@ -231,13 +267,7 @@ async function serviceDeploy(
     if (flags.site !== undefined && !isSite(flags.site)) {
         return fail(`--site is one of ${COMPUTE_SITES.join(', ')}`);
     }
-    if ((flags['registry-user'] === undefined) !== (flags['registry-password-stdin'] !== true)) {
-        return fail('--registry-user and --registry-password-stdin go together');
-    }
-    const password = flags['registry-user'] === undefined ? undefined : await readSecretValue('Registry password: ');
-    if (flags['registry-user'] !== undefined && (password === undefined || password === '')) {
-        return fail('no registry password on stdin');
-    }
+    const registryAuth = await registryAuthFrom(flags);
     const port = count('port', flags.port);
     const replicas = count('replicas', flags.replicas);
     const memoryMb = count('memory', flags.memory);
@@ -250,7 +280,7 @@ async function serviceDeploy(
         ...(memoryMb === undefined ? {} : { memoryMb }),
         ...(cpuMillicores === undefined ? {} : { cpuMillicores }),
         ...(flags.site === undefined || !isSite(flags.site) ? {} : { homeSite: flags.site }),
-        ...(flags['registry-user'] === undefined || password === undefined ? {} : { registryAuth: { username: flags['registry-user'], password } }),
+        ...(registryAuth === undefined ? {} : { registryAuth }),
     };
     const plan = planServiceDeploy(existing, desired);
     const deployed =
@@ -275,6 +305,204 @@ async function serviceDeploy(
         report: (state) => console.log(`  ${state}`),
     });
     return running.ok ? undefined : fail(`${flags.name} is not running: ${running.error}`);
+}
+
+/** Registry credentials from `--registry-user` and the password on stdin; undefined without them. */
+async function registryAuthFrom(flags: { 'registry-user'?: string; 'registry-password-stdin'?: boolean }): Promise<RegistryAuth | undefined> {
+    const username = flags['registry-user'];
+    if ((username === undefined) !== (flags['registry-password-stdin'] !== true)) {
+        return fail('--registry-user and --registry-password-stdin go together');
+    }
+    if (username === undefined) {
+        return undefined;
+    }
+    const password = await readSecretValue('Registry password: ');
+    return password === undefined || password === '' ? fail('no registry password on stdin') : { username, password };
+}
+
+async function job(args: string[]): Promise<void> {
+    const [verb, ...rest] = args;
+    // After `--`: the command of `deploy`, the args of `run`; never flags.
+    const { flags, rest: trailing } = splitAtDashes(rest);
+    const { values, positionals } = parseArgs({
+        args: flags,
+        allowPositionals: true,
+        options: {
+            project: { type: 'string' },
+            image: { type: 'string' },
+            schedule: { type: 'string' },
+            'no-schedule': { type: 'boolean' },
+            'time-zone': { type: 'string' },
+            timeout: { type: 'string' },
+            memory: { type: 'string' },
+            cpu: { type: 'string' },
+            site: { type: 'string' },
+            'no-command': { type: 'boolean' },
+            env: { type: 'string', multiple: true },
+            'registry-user': { type: 'string' },
+            'registry-password-stdin': { type: 'boolean' },
+            'no-wait': { type: 'boolean' },
+        },
+    });
+    const [name, runId] = positionals;
+    if (verb === undefined || !Object.hasOwn(JOB_FLAGS, verb) || (verb !== 'list' && name === undefined)) {
+        return fail(USAGE);
+    }
+    const stray = strayFlag(verb as keyof typeof JOB_FLAGS, values);
+    if (stray !== undefined || (trailing !== undefined && verb !== 'deploy' && verb !== 'run')) {
+        return fail(`oup job ${verb} does not take ${stray === undefined ? 'arguments after --' : `--${stray}`}`);
+    }
+    const { client, project } = await inProject(values.project);
+    const jobs = await client.listJobs(project.id);
+    if (!jobs.ok) {
+        return fail(jobs.error.message);
+    }
+    const existing = jobs.value.find((candidate) => candidate.name === name);
+    const found = (): JobDetails => existing ?? fail(`no Job ${name} in ${project.name}`);
+    switch (verb) {
+        case 'list':
+            console.log(jobs.value.length === 0 ? `No Jobs in ${project.name}.` : formatJobs(jobs.value).join('\n'));
+            return;
+        case 'show':
+            return console.log(JSON.stringify(found(), null, 2));
+        case 'runs': {
+            const runs = await client.listJobRuns(project.id, found().id);
+            if (!runs.ok) {
+                return fail(runs.error.message);
+            }
+            console.log(runs.value.length === 0 ? `No runs of ${name} in the last day.` : formatRuns(runs.value).join('\n'));
+            return;
+        }
+        case 'stop': {
+            if (runId === undefined) {
+                return fail(USAGE);
+            }
+            const stopped = await client.deleteJobRun(project.id, found().id, runId);
+            return stopped.ok ? console.log(`Stopped and removed ${runId}.`) : fail(stopped.error.message);
+        }
+        case 'delete': {
+            const deleted = await client.deleteJob(project.id, found().id);
+            return deleted.ok ? console.log(`Deleted ${name}; its runs stop within a minute.`) : fail(deleted.error.message);
+        }
+        case 'deploy':
+            return jobDeploy(client, project, existing, { ...values, name: name as string, command: trailing });
+        case 'run':
+            return jobRun(client, project, found(), { env: values.env ?? [], args: trailing, wait: values['no-wait'] !== true });
+        default:
+            return fail(USAGE);
+    }
+}
+
+async function jobDeploy(
+    client: OpenUpstreamClient,
+    project: Project,
+    existing: JobDetails | undefined,
+    flags: {
+        name: string;
+        command: string[] | undefined;
+        image?: string;
+        schedule?: string;
+        'no-schedule'?: boolean;
+        'time-zone'?: string;
+        timeout?: string;
+        memory?: string;
+        cpu?: string;
+        site?: string;
+        'no-command'?: boolean;
+        'registry-user'?: string;
+        'registry-password-stdin'?: boolean;
+        'no-wait'?: boolean;
+    },
+): Promise<void> {
+    if (flags.image === undefined) {
+        return fail('oup job deploy needs --image');
+    }
+    if (flags.command !== undefined && flags['no-command'] === true) {
+        return fail('a command after -- and --no-command exclude each other');
+    }
+    if (flags.schedule !== undefined && flags['no-schedule'] === true) {
+        return fail('--schedule and --no-schedule exclude each other');
+    }
+    if (flags.site !== undefined && !isSite(flags.site)) {
+        return fail(`--site is one of ${COMPUTE_SITES.join(', ')}`);
+    }
+    if (flags.command !== undefined && flags.command.length === 0) {
+        return fail('nothing after --; leave it out to keep the command');
+    }
+    const registryAuth = await registryAuthFrom(flags);
+    const timeoutSeconds = count('timeout', flags.timeout);
+    const memoryMb = count('memory', flags.memory);
+    const cpuMillicores = count('cpu', flags.cpu);
+    const schedule = flags['no-schedule'] === true ? null : flags.schedule;
+    const desired: DesiredJob = {
+        name: flags.name,
+        image: flags.image,
+        ...(flags['no-command'] === true ? { command: null } : flags.command === undefined ? {} : { command: flags.command }),
+        ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
+        ...(memoryMb === undefined ? {} : { memoryMb }),
+        ...(cpuMillicores === undefined ? {} : { cpuMillicores }),
+        ...(schedule === undefined ? {} : { schedule }),
+        ...(flags['time-zone'] === undefined ? {} : { timeZone: flags['time-zone'] }),
+        ...(flags.site === undefined || !isSite(flags.site) ? {} : { homeSite: flags.site }),
+        ...(registryAuth === undefined ? {} : { registryAuth }),
+    };
+    const plan = planJobDeploy(existing, desired);
+    const deployed =
+        plan.kind === 'create'
+            ? await client.createJob(project.id, plan.input)
+            : plan.kind === 'update'
+              ? await client.updateJob(project.id, plan.jobId, plan.patch)
+              : await client.deployJob(project.id, plan.jobId);
+    if (!deployed.ok) {
+        return fail(deployed.error.message);
+    }
+    const verb = plan.kind === 'create' ? 'Created' : plan.kind === 'update' ? 'Changed' : 'Deployed';
+    const when = deployed.value.schedule === null ? 'on demand' : `on ${deployed.value.schedule} (${deployed.value.timeZone ?? 'UTC'})`;
+    console.log(`${verb} ${flags.name}, ${when}: ${deployed.value.image} at ${deployed.value.imageDigest}`);
+    if (flags['no-wait'] === true) {
+        return;
+    }
+    const ready = await waitUntil(() => client.getJob(project.id, deployed.value.id), (current) => current.state === 'ready', {
+        timeoutMs: 2 * 60_000,
+        intervalMs: 3_000,
+        report: (state) => console.log(`  ${state}`),
+    });
+    return ready.ok ? undefined : fail(`${flags.name} is not ready: ${ready.error}`);
+}
+
+/** Starts a One-off job and, unless told not to, waits for its outcome: exit 1 when it failed. */
+async function jobRun(
+    client: OpenUpstreamClient,
+    project: Project,
+    target: JobDetails,
+    options: { readonly env: readonly string[]; readonly args: readonly string[] | undefined; readonly wait: boolean },
+): Promise<void> {
+    const env = parseEnv(options.env);
+    if (!env.ok) {
+        return fail(env.error);
+    }
+    const started = await client.startJobRun(project.id, target.id, {
+        ...(options.args === undefined ? {} : { args: [...options.args] }),
+        ...(Object.keys(env.value).length === 0 ? {} : { env: env.value }),
+    });
+    if (!started.ok) {
+        return fail(started.error.message);
+    }
+    console.log(`Started ${started.value.id}`);
+    if (!options.wait) {
+        return;
+    }
+    // Pulling the image and scheduling the pod come before the Job's own timeout starts.
+    const finished = await waitUntil(() => client.getJobRun(project.id, target.id, started.value.id), isFinished, {
+        timeoutMs: (target.timeoutSeconds + 5 * 60) * 1000,
+        intervalMs: 2_000,
+        report: (state) => console.log(`  ${state}`),
+    });
+    if (!finished.ok) {
+        return fail(`${started.value.id}: ${finished.error}`);
+    }
+    const outcome = outcomeOf(finished.value);
+    return finished.value.state === 'succeeded' ? console.log(outcome) : fail(`${started.value.id} ${outcome}`);
 }
 
 async function secret(args: string[]): Promise<void> {
@@ -367,6 +595,8 @@ const run = async (): Promise<void> => {
             return link(rest);
         case 'service':
             return service(rest);
+        case 'job':
+            return job(rest);
         case 'secret':
             return secret(rest);
         case 'site':

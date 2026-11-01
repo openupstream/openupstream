@@ -850,6 +850,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 93 | A Services operator (`OPERATOR=services`, own ServiceAccount) applies per Service a Deployment (gVisor, image by digest, requests = limits, no ServiceAccount token, `envFrom` `project-secrets` required, Secrets version on the pod template) and a Kubernetes Service, plus per Project the NetworkPolicy `service-egress`, and deletes what no row wants. Routes to a Service keep the path, dial with a 1 s timeout and retry GET and HEAD only | extending the Routes operator; `optional` Secrets; stripping the prefix as for Buckets; egress left open | each operator keeps only the rights it needs and one concern per pass; a pod that waited for its Secrets never runs without them; apps behind `/api` usually expect their full path; customer code must not reach Garage's admin API, the control plane or other Projects from inside the cluster, so only the internet and its own namespace are open |
 | 94 | `oup` acts on the Project linked to the directory (`oup link` writes its id to `.openupstream.json`, found upwards like `.git`; `--project` or `OUP_PROJECT` override); `oup service deploy` is one idempotent command (create, else change what differs, else deploy the tag again; always resolves the tag, then waits until running); Secret values and registry passwords come from stdin only | `--project` on every command; separate create/update/redeploy verbs mirroring the API; `NAME=value` arguments | the directory is where the code of one Project lives, as with Vercel or Railway, and the id survives renames; the same deploy line works for the first and every later deploy, locally and in CI; arguments end up in shell history and the process list |
 | 95 | Jobs ([ADR-0003](docs/adr/0003-jobs.md)): one `…/jobs` resource (image pinned at deploy, command, args, resources, timeout, optional `schedule` and `timeZone`); a schedule makes it a Cron job, `POST …/jobs/{id}/runs` (args, env) starts a One-off job. The control plane creates that Kubernetes Job while the request waits, as a copy of the `jobTemplate` of the Job's CronJob, which the Jobs operator applies (suspended without a schedule). Runs are read from Kubernetes only, kept 24 h. No retries, no overlap, timeout default 1 h, at most 24 h, UTC unless a time zone is given | a One-off job running a Service's image with another command (Render, Heroku); self-contained runs that carry their image; the operator creating runs from rows; run rows in the control plane; the pod template in the sdk; Kubernetes' defaults, or retries and overlap per Job | runs start in seconds and from the pinned digest, without a registry call; the pod rules are written once, in the operator, and deleting a Job deletes its runs by garbage collection; no table to keep in step with Kubernetes. Costs: a run is refused for up to one operator pass after a change, no history beyond a day, and the control plane may create and delete Jobs in every Project namespace |
+| 96 | `oup job` is one group for Jobs and their runs: `oup job deploy` is idempotent like `oup service deploy` (the command after `--` or `--no-command`, `--schedule` or `--no-schedule`, waits until ready); `oup job run` starts a One-off job (args after `--`, `--env NAME=value`) and waits for its outcome, exiting 1 when it failed, unless `--no-wait`; `oup job runs`, `stop`, `list`, `show`, `delete` | `oup cron` and `oup run` as two commands (the earlier plan); `oup job run` returning at once with `--wait` to opt in | one noun, as in the API and the glossary, for a Job that is scheduled and started by hand alike; a CI step that runs a migration fails when the migration does, without a flag to remember |
 
 ## Open questions
 
@@ -1043,7 +1044,21 @@ Decisions table once it is settled.
    `--registry-user` and the token on stdin (kubelet matched the
    repository key). Left: the log stream; Docker Hub's credential key form
    is untested, for lack of a private Docker Hub image.
-4. Containers, Cron job and One-off job modes.
+4. Containers, Cron job and One-off job modes. Done: Jobs API (#95,
+   ADR-0003), the Jobs operator and runs, `oup job` (#96). Tested on the
+   dev cluster (2026-11-01) with `oup job`: a Cron job every minute in
+   `Europe/Berlin` became `ready` once the operator applied it and ran on
+   schedule under `runsc` with a Secret in its environment; changing its
+   schedule and switching it off were `deploying` until applied. A One-off
+   job got its args and an added variable; a failing run made `oup job run`
+   exit 1, and a run over its timeout failed with `DeadlineExceeded`.
+   Stopping a run ended a waiting `oup job run` at once. A run reached the
+   internet, not the cluster's Service network, the control plane or the
+   metadata endpoint. Deleting a Job removed its CronJob and its runs, the
+   last one also `job-egress`; neither the control plane nor the operator
+   logged `Forbidden`. The test found that a run read as `pending` for a
+   moment while its pod was stopped at the deadline (fixed: the outcome
+   counts from `FailureTarget` and `SuccessCriteriaMet`).
 5. Demo apps run end to end on the platform (#30), including `notes`
    staying writable while a whole Site is switched off.
 
