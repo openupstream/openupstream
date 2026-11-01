@@ -53,6 +53,18 @@ export interface Config {
     /** Our own hostnames live under it (decision 67); like the customer domain, no Account may claim it. */
     readonly platformDomain: string;
     readonly cleanupIntervalMs: number;
+    /** The waitlist page while hosted sign-up is closed (decision 86); undefined: not served. */
+    readonly waitlist?: WaitlistConfig;
+}
+
+export interface WaitlistConfig {
+    /** Its public URL, without a trailing slash; the e-mails link here. */
+    readonly url: string;
+    readonly port: number;
+    /** The Impressum shown at /imprint, plain text. */
+    readonly imprint: string;
+    /** How its e-mails go out: SES as `from` in `region`, or to the log (dev cluster). */
+    readonly mail: { readonly kind: 'ses'; readonly from: string; readonly region: string } | { readonly kind: 'log' };
 }
 
 /** The ServiceAccounts the internal API answers by default. */
@@ -146,6 +158,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
     if (!Number.isFinite(cleanupSeconds) || cleanupSeconds < 1) {
         problems.push('CLEANUP_INTERVAL_SECONDS must be a number of seconds, at least 1');
     }
+    const waitlist = waitlistFrom(env, problems);
     if (
         problems.length > 0 ||
         retention === undefined ||
@@ -179,5 +192,52 @@ export function configFrom(env: Env): Result<Config, string[]> {
         customerDomain,
         platformDomain,
         cleanupIntervalMs: cleanupSeconds * 1000,
+        ...(waitlist === undefined ? {} : { waitlist }),
     });
+}
+
+/**
+ * WAITLIST_URL turns the waitlist on. It then needs WAITLIST_IMPRINT, as a
+ * German page needs an Impressum, and WAITLIST_MAIL (`ses` with MAIL_FROM,
+ * SES_REGION and the send-only key, or `log`), as double opt-in needs an
+ * e-mail. Problems are added to `problems`.
+ */
+function waitlistFrom(env: Env, problems: string[]): WaitlistConfig | undefined {
+    const url = (env['WAITLIST_URL'] ?? '').replace(/\/+$/, '');
+    if (url === '') {
+        return undefined;
+    }
+    const before = problems.length;
+    if (!URL.canParse(url) || !/^https?:$/.test(new URL(url).protocol)) {
+        problems.push('WAITLIST_URL must be an http(s) URL, e.g. https://openupstream.com');
+    }
+    const imprint = (env['WAITLIST_IMPRINT'] ?? '').trim();
+    if (imprint === '') {
+        problems.push('WAITLIST_IMPRINT is not set: the Impressum the waitlist page shows');
+    }
+    const waitlistPort = port(env['WAITLIST_PORT'], 8082);
+    if (waitlistPort === undefined) {
+        problems.push('WAITLIST_PORT must be a port number');
+    }
+    const mail = ((): WaitlistConfig['mail'] | undefined => {
+        switch (env['WAITLIST_MAIL']) {
+            case 'ses': {
+                const from = env['MAIL_FROM'] ?? '';
+                const region = env['SES_REGION'] ?? '';
+                if (from === '' || region === '' || !env['AWS_ACCESS_KEY_ID'] || !env['AWS_SECRET_ACCESS_KEY']) {
+                    problems.push('WAITLIST_MAIL=ses needs MAIL_FROM, SES_REGION and AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY');
+                    return undefined;
+                }
+                return { kind: 'ses', from, region };
+            }
+            case 'log':
+                return { kind: 'log' };
+            default:
+                problems.push('WAITLIST_MAIL must be ses or log: double opt-in sends an e-mail');
+                return undefined;
+        }
+    })();
+    return problems.length > before || mail === undefined || waitlistPort === undefined
+        ? undefined
+        : { url, port: waitlistPort, imprint, mail };
 }

@@ -42,7 +42,11 @@ egress GB (HTTP responses served to the internet). Copies in other Sites are
 included in the unit price, not billed separately.
 
 Anyone can sign up; a payment method (card, PayPal or SEPA direct debit) is needed
-before the first Database, Bucket or Service is created.
+before the first Database, Bucket or Service is created. Until the hosted
+service can invoice, its sign-up is closed: `openupstream.com` says it is
+coming soon and takes e-mail addresses for a waitlist (double opt-in), to
+tell them when it opens. Whoever runs openupstream themselves has open
+sign-up by default and can close it the same way.
 
 ## Deliberately not offered
 

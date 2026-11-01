@@ -96,6 +96,49 @@ test("an inline JWKS replaces madAuth's; MADAUTH_URL must be a URL", () => {
     assert.deepEqual(url.ok ? [] : url.error, ['MADAUTH_URL must be a URL']);
 });
 
+const waitlistEnv = {
+    ...env,
+    WAITLIST_URL: 'https://openupstream.com/',
+    WAITLIST_IMPRINT: 'Dora Example\nExample Street 1\n12345 Berlin\nhello@openupstream.test\n',
+    WAITLIST_MAIL: 'ses',
+    MAIL_FROM: 'no-reply@openupstream.com',
+    SES_REGION: 'eu-central-1',
+    AWS_ACCESS_KEY_ID: 'AKIA',
+    AWS_SECRET_ACCESS_KEY: 'secret',
+};
+
+test('the waitlist is off unless WAITLIST_URL is set', () => {
+    const config = configFrom(env);
+    assert.ok(config.ok);
+    assert.equal(config.value.waitlist, undefined);
+});
+
+test('the waitlist: its URL without the trailing slash, its port, Impressum and SES', () => {
+    const config = configFrom(waitlistEnv);
+    assert.ok(config.ok);
+    assert.deepEqual(config.value.waitlist, {
+        url: 'https://openupstream.com',
+        port: 8082,
+        imprint: 'Dora Example\nExample Street 1\n12345 Berlin\nhello@openupstream.test',
+        mail: { kind: 'ses', from: 'no-reply@openupstream.com', region: 'eu-central-1' },
+    });
+    const logged = configFrom({ ...env, WAITLIST_URL: 'http://localhost:8082', WAITLIST_IMPRINT: 'x', WAITLIST_MAIL: 'log' });
+    assert.ok(logged.ok);
+    assert.deepEqual(logged.value.waitlist?.mail, { kind: 'log' });
+});
+
+test('a waitlist needs an Impressum and a way to send its e-mails', () => {
+    const bad = configFrom({ ...env, WAITLIST_URL: 'openupstream.com', WAITLIST_PORT: 'x' });
+    assert.deepEqual(bad.ok ? [] : bad.error, [
+        'WAITLIST_URL must be an http(s) URL, e.g. https://openupstream.com',
+        'WAITLIST_IMPRINT is not set: the Impressum the waitlist page shows',
+        'WAITLIST_PORT must be a port number',
+        'WAITLIST_MAIL must be ses or log: double opt-in sends an e-mail',
+    ]);
+    const noKey = configFrom({ ...waitlistEnv, AWS_SECRET_ACCESS_KEY: '' });
+    assert.deepEqual(noKey.ok ? [] : noKey.error, ['WAITLIST_MAIL=ses needs MAIL_FROM, SES_REGION and AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY']);
+});
+
 test('the key-encryption key with its id; a malformed key is reported', () => {
     const config = configFrom(env);
     assert.ok(config.ok);

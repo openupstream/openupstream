@@ -1,0 +1,42 @@
+# The waitlist page at PLATFORM_DOMAIN (ARCHITECTURE.md, decision 86), while
+# sign-up on the hosted service is closed: every path of the host that
+# madAuth does not serve goes to the control plane's waitlist port. Applied
+# by infra/dev-cluster/platform.sh with SIGNUP=closed only, and removed
+# again with SIGNUP=open; the dashboard takes these paths once it exists.
+# It uses the Certificate, hsts and retry Middlewares of
+# platform-routes.yaml.
+#
+# The low priorities keep madAuth's routes (/auth/*, /.well-known/*), whose
+# rules are longer, in front.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: waitlist-rate-limit
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  # Per IP: a few form posts a minute. Each address also gets at most one
+  # e-mail an hour, so the form cannot be used to flood a mailbox.
+  rateLimit:
+    average: 5
+    period: 1m
+    burst: 5
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: waitlist
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`PLATFORM_DOMAIN`) && (Method(`GET`) || Method(`HEAD`))
+      kind: Rule
+      priority: 2
+      middlewares: [{name: hsts}, {name: madauth-rate-limit}, {name: retry-other-pod}]
+      services: [{name: control-plane, port: 8082, serversTransport: fail-fast}]
+    - match: Host(`PLATFORM_DOMAIN`)
+      kind: Rule
+      priority: 1
+      middlewares: [{name: hsts}, {name: waitlist-rate-limit}]
+      services: [{name: control-plane, port: 8082, serversTransport: fail-fast}]
+  tls: {secretName: platform-tls}

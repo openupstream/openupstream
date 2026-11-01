@@ -2,6 +2,8 @@
  * Carries out deletes (ARCHITECTURE.md, decisions 48, 58 and 60). The API
  * only marks rows deleted; each pass then, in this order:
  *
+ * 0. deletes the waitlist's addresses nobody confirmed in time (decision
+ *    86), first, so a failing later step does not keep them;
  * 1. removes a deleted Database's Cluster, Pooler and ScheduledBackup (with
  *    the Cluster go its volumes); it records that only once the deletion is
  *    older than OPERATOR_GRACE, because an operator pass that fetched its
@@ -23,6 +25,7 @@ import type pg from 'pg';
 import type { BackupStore } from './backups.js';
 import type { ObjectStorage } from './garage.js';
 import type { ControlPlaneKube, ObjectRef } from './kube.js';
+import { purgeUnconfirmed } from './waitlist/store.js';
 
 export interface CleanupDeps {
     readonly pool: pg.Pool;
@@ -149,6 +152,10 @@ async function purgeEmptyProjects(deps: CleanupDeps): Promise<void> {
 
 /** One pass over everything that is marked deleted. A database error rejects; the runner logs it. */
 export async function cleanupPass(deps: CleanupDeps): Promise<void> {
+    const unconfirmed = await purgeUnconfirmed(deps.pool);
+    if (unconfirmed > 0) {
+        deps.log({ msg: 'cleanup: unconfirmed waitlist addresses deleted', count: unconfirmed });
+    }
     await removeRunningObjects(deps);
     await purgeExpiredDatabases(deps);
     await purgeDeletedBuckets(deps);

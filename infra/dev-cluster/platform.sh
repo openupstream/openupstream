@@ -14,7 +14,8 @@
 #    with a key-encryption key generated once (secrets-kek);
 # 4. the public hostnames (after ingress.sh): madAuth at
 #    https://$PLATFORM_DOMAIN/auth, the API at https://api.$PLATFORM_DOMAIN,
-#    with a certificate from CLUSTER_ISSUER;
+#    with a certificate from CLUSTER_ISSUER; with SIGNUP=closed also the
+#    waitlist page at https://$PLATFORM_DOMAIN;
 # 5. the Databases operator, reconciling every 30 s with rows from the
 #    control plane;
 # 6. the Routes operator, turning the routing table into Traefik objects
@@ -51,6 +52,22 @@ SES_PROFILE=${SES_PROFILE:-openupstream-ses}
 # ServiceAccount (ARCHITECTURE.md, decision 78).
 NEW_ACCOUNT_HOLDS=${NEW_ACCOUNT_HOLDS:-}
 BILLING_CALLERS=${BILLING_CALLERS:-}
+# Who may sign up (decision 86). Open by default, as for anyone running
+# openupstream themselves. The hosted service sets SIGNUP=closed until it
+# can invoice: madAuth then refuses new users except the addresses and
+# @domains in SIGNUP_ALLOW, and https://$PLATFORM_DOMAIN serves the
+# waitlist, which needs IMPRINT_FILE, a text file with the Impressum, and
+# MAIL=ses or log for its confirmation e-mails.
+SIGNUP=${SIGNUP:-open}
+SIGNUP_ALLOW=${SIGNUP_ALLOW:-}
+IMPRINT_FILE=${IMPRINT_FILE:-}
+case $SIGNUP in
+  open) ;;
+  closed)
+    [[ -f $IMPRINT_FILE ]] || { echo "SIGNUP=closed needs IMPRINT_FILE, the Impressum the waitlist shows" >&2; exit 1; }
+    [[ $MAIL == ses || $MAIL == log ]] || { echo "SIGNUP=closed needs MAIL=ses or MAIL=log for the waitlist's e-mails" >&2; exit 1; } ;;
+  *) echo "SIGNUP must be open or closed" >&2; exit 1 ;;
+esac
 # INITIAL_ADMIN_EMAIL makes that user madAuth's first admin once they sign
 # in; an admin registers the CLI (infra/madauth/register-cli.sh), whose
 # client ID then goes into CLI_CLIENT_ID for `oup login` (decision 87).
@@ -93,10 +110,13 @@ fi
 kubectl -n "$PLATFORM_NS" create configmap madauth-config --dry-run=client -o yaml \
   --from-literal=MADAUTH_ISSUER="$MADAUTH_ISSUER" \
   --from-literal=ALLOWED_ORIGINS="$MADAUTH_ISSUER" \
-  --from-literal=WEBHOOK_EVENTS=email.send_verification,email.send_password_reset,email.send_already_registered,email.send_password_reset_no_password \
+  --from-literal=WEBHOOK_EVENTS=email.send_verification,email.send_password_reset,email.send_already_registered,email.send_password_reset_no_password,user.signing_up \
   --from-literal=MAIL="$MAIL" \
   --from-literal=MAIL_FROM="$MAIL_FROM" \
   --from-literal=SES_REGION="${SES_REGION:-eu-central-1}" \
+  --from-literal=SIGNUP="$SIGNUP" \
+  --from-literal=SIGNUP_ALLOW="$SIGNUP_ALLOW" \
+  --from-literal=SIGNUP_MESSAGE="Sign-up is not open yet. Leave your e-mail address at https://$PLATFORM_DOMAIN to hear when it is." \
   ${INITIAL_ADMIN_EMAIL:+--from-literal=INITIAL_ADMIN_EMAIL="$INITIAL_ADMIN_EMAIL"} | kubectl apply -f - >/dev/null
 if [[ $MAIL == ses ]]; then
   # The send-only key (docs/self-hosting.md, section 6), straight from the
@@ -132,6 +152,18 @@ if ! kubectl -n "$PLATFORM_NS" get secret secrets-kek >/dev/null 2>&1; then
     --from-literal=SECRETS_KEK="$(openssl rand -base64 32)" | kubectl apply -f - >/dev/null
 fi
 
+# The waitlist's settings (control-plane/src/config.ts); its e-mails use
+# madAuth's send-only key from the Secret madauth-ses.
+WAITLIST_CONFIG=()
+if [[ $SIGNUP == closed ]]; then
+  WAITLIST_CONFIG=(
+    --from-literal=WAITLIST_URL="https://$PLATFORM_DOMAIN"
+    --from-literal=WAITLIST_MAIL="$MAIL"
+    --from-literal=MAIL_FROM="$MAIL_FROM"
+    --from-literal=SES_REGION="${SES_REGION:-eu-central-1}"
+    --from-file=WAITLIST_IMPRINT="$IMPRINT_FILE"
+  )
+fi
 kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client -o yaml \
   --from-literal=AUTH_ISSUER="$MADAUTH_ISSUER" \
   --from-literal=MADAUTH_URL="http://madauth.$PLATFORM_NS.svc:8787" \
@@ -143,7 +175,8 @@ kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client
   --from-literal=GARAGE_S3_URL=http://garage.garage.svc:3900 \
   --from-literal=CUSTOMER_DOMAIN="$CUSTOMER_DOMAIN" \
   --from-literal=PLATFORM_DOMAIN="$PLATFORM_DOMAIN" \
-  --from-literal=CLI_CLIENT_ID="${CLI_CLIENT_ID:-}" | kubectl apply -f - >/dev/null
+  --from-literal=CLI_CLIENT_ID="${CLI_CLIENT_ID:-}" \
+  ${WAITLIST_CONFIG[@]+"${WAITLIST_CONFIG[@]}"} | kubectl apply -f - >/dev/null
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/control-plane/deploy/control-plane.yaml" |
   kubectl apply -f - >/dev/null
 config_rollout control-plane control-plane-config
@@ -152,6 +185,11 @@ kubectl -n "$PLATFORM_NS" rollout status deployment/control-plane --timeout=5m
 sed -e "s#PLATFORM_DOMAIN#$PLATFORM_DOMAIN#g" -e "s#CLUSTER_ISSUER#$CLUSTER_ISSUER#g" "$ROOT/infra/ingress/platform-routes.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n "$PLATFORM_NS" wait certificate/platform --for=condition=Ready --timeout=10m
+if [[ $SIGNUP == closed ]]; then
+  sed "s#PLATFORM_DOMAIN#$PLATFORM_DOMAIN#g" "$ROOT/infra/ingress/waitlist-route.yaml" | kubectl apply -f - >/dev/null
+else
+  kubectl delete -f "$ROOT/infra/ingress/waitlist-route.yaml" --ignore-not-found >/dev/null
+fi
 
 kubectl apply -f "$ROOT/operators/deploy/databases-rbac.yaml" >/dev/null
 kubectl -n openupstream-system create configmap databases-operator-config --dry-run=client -o yaml \

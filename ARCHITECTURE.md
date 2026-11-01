@@ -247,6 +247,29 @@ the billing service lifts that Hold once the Account has a mandate. Without
 a billing service nothing is held, which is what someone who runs
 openupstream themselves gets by default (Open question 16).
 
+Until the hosted service can invoice (see "Gate before the first
+invoice"), its sign-up is closed and `openupstream.com` serves a waitlist
+instead (#86). madAuth asks the sidecar before it creates a user (its
+`user.signing_up` webhook); with `SIGNUP=closed` the sidecar refuses every
+address but those in `SIGNUP_ALLOW` (addresses or `@domains`, for us), and
+madAuth shows the refusal, which points to the waitlist. Users who exist
+keep signing in. Sign-up is open by default, so someone who runs
+openupstream themselves changes nothing. The waitlist page is served by the
+control plane on a port of its own (8082, with `WAITLIST_URL` only), plain
+HTML without script or cookies, routed at `openupstream.com` for every path
+madAuth does not take (`infra/ingress/waitlist-route.yaml`). An address
+joins with a consent box and is stored as pending with the hash of a random
+token, one per e-mail, so someone else asking for it breaks no link its
+owner has; the control plane mails the token's link through SES with madAuth's
+send-only key, and only that link puts the address on the list (double
+opt-in), recording when and to which consent text. Every e-mail also has a
+link that deletes the address at once; a link only shows a button, so a
+mail scanner opening it changes nothing. An address gets at most one e-mail
+an hour, and the page answers alike whether it is on the list already. The
+cleanup loop deletes addresses unconfirmed 48 hours after their e-mail. The
+page has a privacy notice and the Impressum, whose text the operator sets
+(`WAITLIST_IMPRINT`).
+
 The public API (Hono, zod validation, `control-plane/src/api`) serves
 Projects and their Databases, Buckets, Services, Domains, Routes and
 Secrets in the caller's Accounts; another Account's
@@ -494,7 +517,8 @@ digest (#55).
 - `openupstream.com` is only for our own services (#67): the dashboard and
   madAuth at `openupstream.com` (madAuth under `/auth/*` and
   `/.well-known/*`, on the same site as the dashboard, as it requires), the
-  API at `api.openupstream.com`.
+  API at `api.openupstream.com`. Until the hosted service opens for
+  sign-up, the waitlist page takes the dashboard's place (#86).
 - Both zones are hosted on bunny.net DNS (see Ingress and failover).
 - A custom domain is routed and gets a certificate only after the Account
   proves ownership with a TXT record at `_openupstream.<domain>`. A Domain
@@ -758,7 +782,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 62 | A signed-in madAuth user creates an Account with `POST /v1/accounts` and becomes its first Member; a user may have several | creating it on the first API call; madAuth's `user.signed_up` webhook | explicit and repeatable, no webhook to lose (madAuth does not retry), no stray Accounts from sign-ins; the dashboard calls it on first visit |
 | 63 | madAuth runs as its published image on a Postgres Database of the platform Project, two replicas; a sidecar from the control plane's image serves it the API key scopes and receives its webhooks on 127.0.0.1 | embedding madAuth in an own Node service; the image with SQLite (one replica); in-cluster TLS; changing madAuth to allow in-cluster http | no madAuth code in openupstream to build and patch; the users are in a Database with failover and backups like any other; madAuth only calls https or localhost, and the sidecar ships with the API it describes |
 | 64 | madAuth session tokens (ES256, `typ: madauth-session+jwt`, no audience) verified against its JWKS; API keys checked with madAuth (`/auth/api-keys/verify`), cached for a minute; scopes `openupstream:read` (GET) and `openupstream:write` (everything) | per-resource scopes; one full-access scope | madAuth has no audience and no OAuth flows; its API keys are opaque; two scopes allow read-only keys now and finer scopes later without breaking existing keys |
-| 65 | Anyone may sign up; an Account needs a payment method (card or SEPA, and PayPal since #75; a Mollie mandate since #74, first decided as Stripe) before it creates its first Resource; enforced with a Hold since #78 | an allow-list or invitations; free limits per Account until billing exists | no hand-picking of customers, and no unpaid resources: memory is reserved from the first Database on. Self-hosted installations will need other rules (Open question 16) |
+| 65 | Anyone may sign up; an Account needs a payment method (card or SEPA, and PayPal since #75; a Mollie mandate since #74, first decided as Stripe) before it creates its first Resource; enforced with a Hold since #78 | an allow-list or invitations; free limits per Account until billing exists | no hand-picking of customers, and no unpaid resources: memory is reserved from the first Database on. Self-hosted installations will need other rules (Open question 16). "Anyone may sign up" is suspended on the hosted service until it can invoice (#86) |
 | 66 | madAuth's e-mails (sign-up, password reset) are sent through Amazon SES in an EU region, by the madAuth sidecar | an EU provider (Scaleway TEM, Brevo) | the maintainer already has it set up; the addresses stay in the EU region; AWS becomes a subprocessor. This is a US company, which decision 34 avoided for ingress: there Cloudflare would see every customer's traffic, here SES sees only a Member's address and the sign-in e-mails we send, never a Project's data; an EU provider remains a drop-in replacement in the sidecar |
 | 67 | Our own hostnames: dashboard and madAuth at `openupstream.com` (madAuth under `/auth/*` and `/.well-known/*`), the API at `api.openupstream.com` | dashboard at `app.openupstream.com`; everything on one host | madAuth must be on the same site as the dashboard; the API on its own host keeps its routes and limits apart, and the session cookie (Domain `openupstream.com`) reaches both |
 | 68 | The customer domain is `openupstream.app`: Projects' default hostnames and `<bucket>.s3.openupstream.app`, on the Public Suffix List | `openupstream.dev`; deciding later | short and clearly ours; `.app` is HTTPS-only (HSTS preloaded), like everything we serve |
@@ -779,6 +803,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 83 | Garage runs from our own manifests: a StatefulSet with one node per Site, Kubernetes discovery with its CustomResourceDefinition installed by us, the layout assigned once by the setup script | Garage's Helm chart (not published to a chart repository, only in Garage's git repository); letting Garage create its CustomResourceDefinition; connecting nodes by hand | a hundred lines of YAML we can read in one go, like the rest of `infra/`; Garage only needs rights on its own GarageNode objects, not to create any CustomResourceDefinition; nodes find each other again after restarts without a script |
 | 84 | Static sites: Garage's website endpoint behind Traefik. The control plane sets a Bucket's website settings (index, SPA fallback) in Garage when a Route is created; a Routes operator applies an IngressRoute per Domain with per-Route Middlewares (Host header = Bucket name, prefix stripped) and an ExternalName Service to Garage, and deletes its objects the routing table no longer has; default Domains share one wildcard certificate in Traefik's default TLS store; SPA fallback is per Bucket, so Routes to one Bucket must agree | the control plane writing the Traefik objects itself; keeping the prefix in object keys; SPA fallback in Traefik's errors middleware; a certificate per default Domain | the operator pattern of the Databases, with Garage's admin token staying in the control plane only; one site mounts at any prefix; Garage already has the routing rule; a wildcard needs no issuance per Project. Contradicts the earlier plan of an operator writing Garage's website settings. Traefik must allow ExternalName Services, which only the Routes operator creates |
 | 85 | Custom domains: a claim gets a random token, published by the Account as TXT at `_openupstream.<domain>` and looked up when it calls verify, once, through the cluster's resolver; hostnames under the customer and platform domains, or verified by another Project, cannot be claimed; the Routes operator gives a verified custom domain with Routes a cert-manager Certificate (HTTP-01, selected by label on the existing ClusterIssuers) and deletes it with the Domain, its Secret garbage-collected through cert-manager's owner references | the control plane polling pending claims; re-checking the TXT record periodically; a separate HTTP-01 ClusterIssuer; DNS-01 by CNAME-delegating `_acme-challenge` to us | verification while the request waits, like Buckets, gives the Account its answer at once; a removed record does not take a site down, the claim is what was proven; one issuer per environment keeps the platform's and customers' certificates on the same account; HTTP-01 needs nothing from the customer beyond the CNAME the traffic needs anyway. Traefik's Ingress provider is enabled, limited to cert-manager's solver Ingresses, and its port-80 redirect drops to the lowest priority |
+| 86 | Until a company exists and the hosted service can invoice ("Gate before the first invoice"), its sign-up is closed and `openupstream.com` serves a waitlist. This suspends decision 65's "anyone may sign up" there, not its payment-method gate; sign-up opens again (`SIGNUP=open`) once the gate is passed, and the waitlist is mailed once and deleted. Closed by the madAuth sidecar answering `user.signing_up` (`SIGNUP=closed`, `SIGNUP_ALLOW` for us), open by default. The waitlist: a page served by the control plane on its own port, its addresses in a table of the control plane's Database, double opt-in with a token link per e-mail, mailed through SES with madAuth's send-only key, a removal link in every e-mail, unconfirmed addresses deleted after 48 hours, at most one e-mail per address an hour, Traefik's per-IP limit on the form; English, with a consent text, privacy notice and an Impressum the operator sets | open sign-up with every new Account held (`NEW_ACCOUNT_HOLDS`); invitations only; a static page in a Bucket through the routing table, or an nginx container, posting to the API; single opt-in; a mailing-list provider | no Accounts to clean up or disappoint, and nobody signs up for something they cannot use; madAuth has no switch of its own, and the webhook covers every sign-up method, OAuth included. The page needs no dashboard, no CORS and no second image; a Bucket would need a Domain at `openupstream.com` in the platform Project. Double opt-in and a removal link are what German law (UWG § 7, Art. 7 GDPR) expects as proof of consent; no list provider means no further subprocessor. Self-hosters keep open sign-up without setting anything |
 | 87 | `oup login` uses madAuth's device authorization grant (RFC 8628, madAuth 0.7) as the public client `oup CLI`, asking for `openid email offline_access`; the control plane accepts madAuth access tokens (`at+jwt`, `aud` = `CLI_CLIENT_ID`) with a session's rights and tells the CLI the issuer and client ID at `GET /v1/login`; the refresh token is kept in `~/.config/openupstream/credentials.json` (mode 600) and each new one stored before use; `OUP_API_KEY` for CI | authorization code with PKCE and a loopback redirect; both flows; e-mail and password in the terminal turned into an API key; pasting an API key | the flow RFC 8628 wrote for command-line tools, as `gh auth login` and `az login` use: it works over SSH, in containers and on headless machines, with every sign-in method, passkeys included; `verification_uri_complete` makes it one click when a browser is at hand, so a loopback flow would add code for no gain; a password in the terminal would leave out passkey users. madAuth refuses clients without `deviceFlow`, and only an admin with a fresh sign-in registers one |
 | 88 | `oup site deploy` makes the Bucket mirror the directory: changed files only (MD5 against the ETag), `index.html` files after the rest, then stale objects deleted (`--keep` to leave them); cache headers and content types from the file name | upload only, never delete | a deploy should leave exactly the build behind, or deleted pages stay reachable; uploading the index last keeps a client from loading an index whose assets are not there yet; hashed assets of the previous build go with it, so a page open from before the deploy may miss a lazily loaded chunk; `--keep` is for sites that need that |
 | 89 | Every Project namespace gets one NetworkPolicy, `project-isolation`: ingress from the Project's own pods, Traefik's namespace and `cnpg-system`, nothing else; egress open. The operators apply it right after the namespace; the platform namespace's exception for the operators (port 8081) is a static policy next to the control plane | a policy per Database and per Service; a deny-all policy plus one allow policy per source; Calico instead of k3s's built-in policy controller | one object that every operator applies identically under the shared field manager, so whichever operator creates the namespace isolates it before anything runs there; same-namespace traffic is what a Project needs inside (Services to Poolers, CloudNativePG replication); k3s enforces it without another CNI. Egress for customer containers is decided with the Services operator |
@@ -841,11 +866,12 @@ Decisions table once it is settled.
     AWS KMS, means an AWS dependency. And until the first admin exists,
     madAuth logs a setup token, which Loki would collect.
 16. **Sign-up for those who run openupstream themselves.** The hosted
-    service lets anyone sign up and requires a payment method (decision 65).
-    Without a billing service nothing is held (decision 78), so a
-    self-hosted installation needs no payment method. Invitations only or
-    an allow-list of domains (madAuth's `user.signing_up` webhook, in the
-    sidecar) are not configurable yet.
+    service lets anyone sign up and requires a payment method (decision 65),
+    closed for now behind a waitlist (decision 86). Without a billing
+    service nothing is held (decision 78), so a self-hosted installation
+    needs no payment method. Sign-up can be closed with an allow-list of
+    addresses and domains (`SIGNUP=closed`, `SIGNUP_ALLOW`, decision 86);
+    invitations are not there yet.
 17. **The bunny.net API key in the cluster.** cert-manager's DNS-01 webhook
     needs it, and bunny.net has one key per account with full access (no
     DNS-only key, checked 2026-10-18): whoever reads the Secret
@@ -909,6 +935,13 @@ Decisions table once it is settled.
    #85): claim, TXT proof, a certificate of their own through HTTP-01,
    issued within 30 s of the first Route and served in both compute Sites;
    deleting the Domain removed its Certificate and Secret in the next pass.
+   Closed sign-up and the waitlist on `openupstream.com` until the gate
+   before the first invoice is passed (#86): the control plane's page and
+   the sidecar's switch. On the dev cluster (2026-10-31): other addresses
+   refused with the waitlist message, an allowed `@domain` signed up, the
+   page behind madAuth's routes, its e-mail sent through SES, confirm and
+   remove through the public route, form posts limited to 5 a minute per
+   IP; `SIGNUP=open` and a restart removed the page and opened sign-up.
    `oup site deploy` with its cache headers (2026-10-31, #88): a second
    deploy uploaded nothing, a new build only its changed files with the
    index last and deleted the old bundle, and the served headers matched.
@@ -961,3 +994,8 @@ of subprocessors (Hetzner, OVHcloud, netcup, bunny.net, Mollie, lexoffice
 for invoices, Amazon Web Services for SES). Before the first invoice the
 billing run must also exist: the monthly rating, invoices through lexoffice
 and collection through Mollie, in the billing service (#74, #77).
+
+Until then sign-up on the hosted service is closed and `openupstream.com`
+serves the waitlist (#86). Passing the gate means: `SIGNUP=open`, the
+waitlist route removed, one e-mail to every confirmed address on the list,
+then the list deleted, as its privacy notice promises.

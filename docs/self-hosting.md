@@ -237,7 +237,9 @@ the domain's DNS is (ours: domaindiscount24).
 
 5. `infra/dev-cluster/platform.sh` copies this profile into the cluster as
    the Secret `madauth-ses`, which the madAuth sidecar sends with
-   (`MAIL=ses`, the default there).
+   (`MAIL=ses`, the default there), and the control plane too, for the
+   waitlist's e-mails when sign-up is closed (section 9). Both send as
+   the same address, so the policy needs nothing more.
 6. **Send a test mail** with that profile, then check the headers (in
    Gmail: **Show original**) for SPF, DKIM and DMARC **PASS**:
 
@@ -301,6 +303,43 @@ decision 87), as a client an admin registers once per madAuth:
 3. Set `CLI_CLIENT_ID` for the control plane (`platform.sh` takes it from
    the environment) and roll it out. `GET /v1/login` then answers, and
    `oup login --api https://api.openupstream.com` works.
+
+## 9. Sign-up and the waitlist
+
+Sign-up is **open by default**: anyone who reaches your madAuth can create
+a user, and with no billing service every Account may create Resources.
+To keep it that way, set nothing: `platform.sh` runs with `SIGNUP=open`,
+and the sidecar lets every new user in (ARCHITECTURE.md, decision 86).
+
+To close it, as the hosted service does until it can invoice:
+
+1. **Write the Impressum** into a text file outside this repository (who
+   runs the service, a postal address, an e-mail address; § 5 DDG), e.g.
+   `~/.config/openupstream/imprint.txt`. The waitlist page shows it, and its
+   privacy notice names that party as the controller. Read the privacy
+   notice (`control-plane/src/waitlist/site.ts`) and change what is not
+   true for you, such as the providers it names.
+2. **Run `platform.sh` with sign-up closed**, your own address allowed so
+   you can still create users:
+
+   ```bash
+   SIGNUP=closed SIGNUP_ALLOW=you@example.com IMPRINT_FILE=~/.config/openupstream/imprint.txt ./platform.sh
+   ```
+
+   `SIGNUP_ALLOW` takes addresses and `@domains`, comma-separated. madAuth
+   now refuses everyone else, with a message that points to
+   `https://$PLATFORM_DOMAIN`, where the waitlist page takes e-mail
+   addresses (double opt-in, through SES as in section 6; `MAIL=log`
+   writes the confirmation links to the control plane's log instead). It
+   rolls out madAuth and the control plane when their settings changed.
+3. **Check it**: a sign-up with another address is refused, and
+   `https://$PLATFORM_DOMAIN` shows the waitlist; confirm an address of
+   your own with the link it mails you.
+
+To open sign-up again, run `platform.sh` with `SIGNUP=open` (it removes the
+waitlist route). The addresses stay in the table
+`waitlist` of the control plane's Database: write to the confirmed ones
+once, then delete them, as the privacy notice promises.
 
 ## Coming with build step 2
 

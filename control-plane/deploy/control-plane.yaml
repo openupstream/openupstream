@@ -2,17 +2,22 @@
 # sdk/src/internal.ts): it runs next to its own Database, whose connection
 # Secret CloudNativePG creates in this namespace. Two replicas, one per
 # compute Site. Port 8080 is the public API, 8081 the internal API for the
-# operators and the billing service (never routed by ingress).
+# operators and the billing service (never routed by ingress), 8082 the
+# waitlist page while hosted sign-up is closed (decision 86; only served
+# with WAITLIST_URL, routed by infra/ingress/waitlist-route.yaml).
 #
 # The image is pinned by digest when applied (infra/dev-cluster/platform.sh).
 # Needs the ConfigMap control-plane-config (AUTH_ISSUER,
 # MADAUTH_URL, BACKUP_BUCKET, BACKUP_RETENTION, GARAGE_ADMIN_URL,
 # GARAGE_S3_URL, CUSTOMER_DOMAIN, PLATFORM_DOMAIN; optionally NEW_ACCOUNT_HOLDS and
-# BILLING_CALLERS), the backup credentials Secret backup-s3, which the
-# Databases operator copies into this namespace, the Secret
-# garage-admin with Garage's admin token (infra/dev-cluster/garage.sh), and
+# BILLING_CALLERS, and for the waitlist WAITLIST_URL, WAITLIST_IMPRINT,
+# WAITLIST_MAIL, MAIL_FROM and SES_REGION), the backup credentials Secret
+# backup-s3, which the Databases operator copies into this namespace, the
+# Secret garage-admin with Garage's admin token (infra/dev-cluster/garage.sh),
 # the Secret secrets-kek with the key-encryption key for Secrets
-# (SECRETS_KEK_ID, SECRETS_KEK; infra/dev-cluster/platform.sh creates it once).
+# (SECRETS_KEK_ID, SECRETS_KEK; infra/dev-cluster/platform.sh creates it once)
+# and, for the waitlist's e-mails with WAITLIST_MAIL=ses, madAuth's
+# send-only SES key in the Secret madauth-ses.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -120,9 +125,11 @@ spec:
             - secretRef: {name: backup-s3}
             - secretRef: {name: garage-admin}
             - secretRef: {name: secrets-kek}
+            - secretRef: {name: madauth-ses, optional: true}
           ports:
             - {name: http, containerPort: 8080}
             - {name: internal, containerPort: 8081}
+            - {name: waitlist, containerPort: 8082}
           readinessProbe:
             httpGet: {path: /v1/health, port: http}
             periodSeconds: 5
@@ -144,6 +151,7 @@ spec:
   ports:
     - {name: http, port: 8080, targetPort: http}
     - {name: internal, port: 8081, targetPort: internal}
+    - {name: waitlist, port: 8082, targetPort: waitlist}
 ---
 # The platform Project's namespace is isolated like every Project's (the
 # operators' NetworkPolicy project-isolation); this one also admits the

@@ -8,8 +8,11 @@
  *   (API_KEY_SCOPES_URL);
  * - `POST /webhooks`: madAuth's webhook (WEBHOOK_URL). E-mails are handed to
  *   the configured sender; without one they are refused, so a sign-up fails
- *   visibly instead of waiting for an e-mail that never comes. Events are
- *   acknowledged.
+ *   visibly instead of waiting for an e-mail that never comes.
+ *   `user.signing_up`, which madAuth sends before it creates a user when
+ *   WEBHOOK_EVENTS lists it, is answered by the sign-up policy: while
+ *   sign-up is closed (decision 86) only allowed addresses get in. Other
+ *   events are acknowledged.
  */
 import { WEBHOOK_TOLERANCE_SECONDS, verifyWebhook } from '@madauth/server/webhook';
 import { API_KEY_SCOPES } from '@openupstream/sdk';
@@ -57,10 +60,43 @@ const parseCall = (body: string): { type: string; data: Record<string, unknown> 
     return { type: parsed.type, data: data as Record<string, unknown> };
 };
 
+/**
+ * Who may sign up (ARCHITECTURE.md, decision 86). Open by default; the
+ * hosted service is closed until it can invoice, except for `allow`:
+ * lowercased addresses (`dora@example.com`) and domains (`@example.com`).
+ */
+export type SignupPolicy =
+    | { readonly open: true }
+    | { readonly open: false; readonly allow: readonly string[]; readonly message: string };
+
+export const DEFAULT_SIGNUP_MESSAGE = 'Sign-up is closed for now.';
+
+/** SIGNUP_ALLOW: comma-separated addresses and `@domains`, case-insensitive. */
+export const signupAllowList = (value: string): string[] =>
+    value
+        .split(',')
+        .map((entry) => entry.trim().toLowerCase())
+        .filter((entry) => entry !== '');
+
+/** Whether `email` may sign up; without an address, only while sign-up is open. */
+export const signupAllowed = (policy: SignupPolicy, email: unknown): boolean => {
+    if (policy.open) {
+        return true;
+    }
+    if (typeof email !== 'string' || !email.includes('@')) {
+        return false;
+    }
+    const address = email.trim().toLowerCase();
+    const domain = address.slice(address.lastIndexOf('@'));
+    return policy.allow.includes(address) || policy.allow.includes(domain);
+};
+
 export interface SidecarDeps {
     readonly webhookSecret: string;
     /** undefined: no mail sender configured; e-mails are refused. */
     readonly sendMail: SendMail | undefined;
+    /** Open when not given. */
+    readonly signup?: SignupPolicy;
     readonly log: (entry: Record<string, unknown>) => void;
     /** Milliseconds, like Date.now. */
     readonly now?: () => number;
@@ -69,6 +105,7 @@ export interface SidecarDeps {
 export function createSidecar(deps: SidecarDeps): Hono {
     const app = new Hono();
     const now = deps.now ?? Date.now;
+    const signup = deps.signup ?? { open: true };
     /**
      * webhook-ids seen within the tolerance window: a signed call is only
      * valid that long, so remembering it that long refuses every replay.
@@ -107,6 +144,15 @@ export function createSidecar(deps: SidecarDeps): Hono {
             return c.json({ error: 'malformed call' }, 400);
         }
         const { type, data } = call;
+        if (type === 'user.signing_up') {
+            // madAuth refuses on `allow: false` and shows `message` to whoever tried.
+            if (signup.open || signupAllowed(signup, data['email'])) {
+                return c.json({ allow: true });
+            }
+            // The address is personal data; the log only needs the fact.
+            deps.log({ msg: 'madauth webhook: sign-up refused, sign-up is closed', method: data['method'] });
+            return c.json({ allow: false, message: signup.message });
+        }
         if (!type.startsWith('email.send_')) {
             // Events (user.*) and anything newer: acknowledged, nothing to do yet.
             return c.body(null, 204);
