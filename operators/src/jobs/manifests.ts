@@ -22,6 +22,7 @@ import {
     MANAGED_BY,
     ZONE_LABEL,
     customerEgressPolicy,
+    databaseEnv,
     projectNamespace,
     projectObjectsFor,
     requireComputeSite,
@@ -108,6 +109,7 @@ const cronJob = (row: JobRow): KubeObject => {
                                     ...(job.command === null ? {} : { command: job.command }),
                                     ...(job.args === null ? {} : { args: job.args }),
                                     envFrom: [{ secretRef: { name: PROJECT_SECRETS } }],
+                                    ...(row.databases.length === 0 ? {} : { env: databaseEnv(row.project.id, row.databases) }),
                                     // As for a Service: the limits are what is reserved and billed.
                                     resources: { requests: resources, limits: resources },
                                     securityContext: { allowPrivilegeEscalation: false },

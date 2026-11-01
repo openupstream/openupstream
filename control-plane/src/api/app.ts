@@ -38,12 +38,12 @@ import {
     type ServiceRow,
     type ServiceState,
     clusterName,
+    databaseConnection,
     jobObjectName,
     jobSpecVersion,
+    projectNamespace,
     serviceObjectName,
     serviceSpecVersion,
-    poolerName,
-    projectNamespace,
 } from '@openupstream/sdk';
 import { randomUUID } from 'node:crypto';
 import { type Context, Hono } from 'hono';
@@ -248,13 +248,6 @@ const routeInput = z.union([
 ]);
 
 /** In-cluster connection through the Database's PgBouncer; CloudNativePG's application user and database. */
-const connectionOf = (database: Database) => ({
-    host: `${poolerName(database)}.${projectNamespace(database.projectId)}.svc.cluster.local`,
-    port: 5432,
-    database: 'app',
-    user: 'app',
-});
-
 type Env = { Variables: { identity: Identity; accountIds: string[] } };
 
 export function createApi(deps: ApiDeps): Hono<Env> {
@@ -273,7 +266,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     const details = async (database: Database): Promise<DatabaseDetails> => ({
         ...database,
         state: await stateFor(database),
-        connection: connectionOf(database),
+        connection: databaseConnection(database),
     });
 
     app.get('/v1/health', (c) => c.json({ ok: true }));
@@ -388,7 +381,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         c.header('location', `/v1/projects/${project.id}/databases/${created.value.id}`);
         // The operator creates the Cluster within one pass.
-        const response: DatabaseDetails = { ...created.value, state: 'provisioning', connection: connectionOf(created.value) };
+        const response: DatabaseDetails = { ...created.value, state: 'provisioning', connection: databaseConnection(created.value) };
         return c.json(response, 201);
     });
 

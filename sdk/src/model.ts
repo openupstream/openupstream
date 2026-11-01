@@ -97,9 +97,11 @@ export interface DatabaseInput {
 export type DatabaseState = 'provisioning' | 'ready' | 'degraded' | 'unknown';
 
 /**
- * Where the Project's Services reach the Database: through its PgBouncer
- * (transaction pooling), inside the cluster only. The password is never
- * returned; it is given to Services as DATABASE_URL.
+ * Where the Project's Services and Jobs reach the Database: through its
+ * PgBouncer (transaction pooling), inside the cluster only. The password is
+ * never returned; every Service and Job of the Project gets the whole URL as
+ * `DATABASE_URL_<NAME>` (the name upper-cased, `-` as `_`), and the oldest
+ * Database's also as `DATABASE_URL` (decision 97).
  */
 export interface DatabaseConnection {
     host: string;
