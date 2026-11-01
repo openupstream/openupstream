@@ -39,6 +39,7 @@ import { ok } from './result.js';
 import { listDomainRoutings } from './routes/store.js';
 import { secretsPass } from './secrets/render.js';
 import { listServiceRows } from './services/store.js';
+import { listJobRows } from './jobs/store.js';
 import { createWaitlistSite } from './waitlist/site.js';
 
 const log = (entry: Record<string, unknown>): void =>
@@ -124,9 +125,11 @@ async function main(): Promise<void> {
         billingCallers: config.value.billingCallers,
         routesCallers: config.value.routesCallers,
         servicesCallers: config.value.servicesCallers,
+        jobsCallers: config.value.jobsCallers,
         listDatabaseRows: () => listDatabaseRows(pool),
         listDomainRoutings: () => listDomainRoutings(pool),
         listServiceRows: () => listServiceRows(pool),
+        listJobRows: () => listJobRows(pool),
         getAccount: (id) => getAccountRecord(pool, id),
         placeHold: (accountId, reason) => placeHold(pool, accountId, reason),
         liftHold: (accountId, reason) => liftHold(pool, accountId, reason),

@@ -11,8 +11,10 @@ import {
     DNS_LABEL,
     type DatabaseRow,
     type DomainRouting,
+    type JobRow,
     INTERNAL_ACCOUNTS_PATH,
     INTERNAL_DATABASES_PATH,
+    INTERNAL_JOBS_PATH,
     INTERNAL_ROUTES_PATH,
     INTERNAL_SERVICES_PATH,
     type ServiceRow,
@@ -30,9 +32,12 @@ export interface InternalApi {
     readonly routesCallers: ReadonlySet<string>;
     /** Usernames allowed to list Services: the Services operator. */
     readonly servicesCallers: ReadonlySet<string>;
+    /** Usernames allowed to list Jobs: the Jobs operator. */
+    readonly jobsCallers: ReadonlySet<string>;
     readonly listDatabaseRows: () => Promise<readonly DatabaseRow[]>;
     readonly listDomainRoutings: () => Promise<readonly DomainRouting[]>;
     readonly listServiceRows: () => Promise<readonly ServiceRow[]>;
+    readonly listJobRows: () => Promise<readonly JobRow[]>;
     readonly getAccount: (id: string) => Promise<AccountRecord | undefined>;
     /** False if there is no such Account. */
     readonly placeHold: (accountId: string, reason: string) => Promise<boolean>;
@@ -91,6 +96,13 @@ function routeFor(api: InternalApi, path: string): Route | undefined {
             methods: ['GET'],
             callers: api.servicesCallers,
             handle: async () => ({ status: 200, body: await api.listServiceRows() }),
+        };
+    }
+    if (path === INTERNAL_JOBS_PATH) {
+        return {
+            methods: ['GET'],
+            callers: api.jobsCallers,
+            handle: async () => ({ status: 200, body: await api.listJobRows() }),
         };
     }
     const account = accountPath.exec(path);

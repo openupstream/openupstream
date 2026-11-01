@@ -55,13 +55,22 @@ A customer container image running continuously as an HTTP service, with
 one or more replicas.
 _Avoid_: app, deployment, function
 
+**Job**:
+A customer container image that runs to completion, with its command,
+resources and timeout. A Cron job or the source of One-off jobs, or both.
+_Avoid_: task, function
+
 **Cron job**:
-A customer container image started on a schedule and run to completion.
+A Job with a schedule: it is started at the times the schedule names.
 
 **One-off job**:
-A customer container image started once through the API and run to
-completion.
-_Avoid_: task, run
+One run of a Job started through the API, with its own arguments.
+_Avoid_: task
+
+**Run**:
+One execution of a Job, scheduled or started through the API, from start
+to completion.
+_Avoid_: execution, invocation
 
 **Secret**:
 A named value stored encrypted and handed to a Project's Services and jobs

@@ -48,7 +48,8 @@ which like `CUSTOMER_DOMAIN` cannot be claimed as custom domains; optionally
 `NEW_ACCOUNT_HOLDS`, the Holds every new Account starts with, e.g.
 `payment-method`, and `BILLING_CALLERS`, the billing service's
 ServiceAccount; `ROUTES_CALLERS`, default the Routes operator's;
-`SERVICES_CALLERS`, default the Services operator's; `WAITLIST_*` for the
+`SERVICES_CALLERS`, default the Services operator's; `JOBS_CALLERS`,
+default the Jobs operator's; `WAITLIST_*` for the
 waitlist, see below). At startup it applies pending migrations, seeds the
 platform's own Account, Project and Database rows (`src/platform.ts`) and
 gives every Project without one its default Domain, then listens on `PORT`
@@ -104,6 +105,12 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `PATCH /v1/projects/{id}/services/{id}` | any of `image, port, replicas, memoryMb, cpuMillicores, homeSite, registryAuth` (`null` removes the last two); a new image or new credentials resolve the tag again; a new image at another registry without new credentials drops the stored ones |
 | `POST /v1/projects/{id}/services/{id}/deploy` | resolves the same tag again and pins what it points at now |
 | `DELETE /v1/projects/{id}/services/{id}` | 202: the row goes at once, the Deployment with the next Services operator pass; 409 while a Route serves it |
+| `GET /v1/projects/{id}/jobs` | with each Job's `state`, read live from its CronJob |
+| `POST /v1/projects/{id}/jobs` | `{name, image, memoryMb, cpuMillicores, command?, args?, timeoutSeconds?, schedule?, timeZone?, homeSite?, registryAuth?}` → 201, `state: deploying`, the image pinned as for a Service, with the same 400, 503, 409 and 402. `command` replaces the image's entrypoint, `args` its command; `timeoutSeconds` defaults to 3600, at most 86400; `schedule` is five cron fields or `@hourly`, `@daily`, `@weekly`, `@monthly`, `@yearly` (`src/jobs/schedule.ts`), read in `timeZone` (an IANA name, only with a schedule; default UTC) |
+| `GET /v1/projects/{id}/jobs/{id}` | `state`: `deploying` until the Jobs operator has applied the latest change (its CronJob carries the spec version of the row), then `ready`; `unknown` when Kubernetes cannot be asked |
+| `PATCH /v1/projects/{id}/jobs/{id}` | any of `image, command, args, memoryMb, cpuMillicores, timeoutSeconds, schedule, timeZone, homeSite, registryAuth` (`null` removes all but the image and the numbers; removing the schedule removes its time zone); the tag and the credentials as for a Service |
+| `POST /v1/projects/{id}/jobs/{id}/deploy` | resolves the same tag again; later runs start what it points at now |
+| `DELETE /v1/projects/{id}/jobs/{id}` | 202: the row goes at once, the CronJob and its runs with the next Jobs operator pass |
 | `GET /v1/projects/{id}/secrets` | the Project's Secrets, names and times only |
 | `PUT /v1/projects/{id}/secrets/{name}` | `{value}` → 201 for a new Secret, 200 for a new value; written into the Project's Kubernetes Secret right after the answer (or by the next secrets pass, before the Project has a namespace). The name is an environment variable name; 400 for a value over 64 KiB, or if the Project's values together would pass 512 KiB |
 | `DELETE /v1/projects/{id}/secrets/{name}` | 204 |
@@ -206,6 +213,10 @@ valid token, 403 for anyone else, 503 when the token cannot be checked.
   image pinned by digest, the Site a single replica runs in and a version of
   the Project's Secrets that changes with them (`ServiceRow`). For
   `SERVICES_CALLERS` (default: the Services operator).
+- `GET /internal/v1/jobs`: every Job of a live Project with the image
+  pinned by digest, the Site its runs go to and the version of the
+  Project's Secrets (`JobRow`). For `JOBS_CALLERS` (default: the Jobs
+  operator).
 - `GET /internal/v1/databases`: every Database with its Project
   (`DatabaseRow` in `sdk/src/internal.ts`). For `ALLOWED_CALLERS`
   (default: the Databases operator).
@@ -226,11 +237,11 @@ key is 32 random bytes, base64 encoded, with an id
 (`parseKeyEncryptionKey`); the wrapped data keys record that id.
 
 `src/secrets/render.ts` writes a Project's values into the Kubernetes
-Secret `project-secrets` in its namespace, and its Services' registry
-credentials into the dockerconfigjson Secret `project-registry-auth`, with server-side apply under the
+Secret `project-secrets` in its namespace, and its Services' and Jobs'
+registry credentials into the dockerconfigjson Secret `project-registry-auth`, with server-side apply under the
 field manager `openupstream-control-plane`: the API does so after every
 change, and the secrets pass every `CLEANUP_INTERVAL_SECONDS` for every
-live Project that has a data key, on one replica at a time (its own
+live Project that has a data key, a Service or a Job, on one replica at a time (its own
 advisory lock). A Project without a namespace yet is skipped until an
 operator has created it.
 
