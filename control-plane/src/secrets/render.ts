@@ -117,7 +117,7 @@ export async function syncProjectSecrets(
     if (!registry.ok || registry.value === 'no-namespace') {
         return registry;
     }
-    // Only now may the Services roll and the Jobs change: their pods will read these values.
+    // Only now may the Services roll: their pods will read these values.
     await deps.pool.query('update projects set secrets_version = $2 where id = $1 and secrets_version is distinct from $2', [projectId, version]);
     return registry;
 }

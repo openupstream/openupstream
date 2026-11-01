@@ -28,7 +28,9 @@ import {
     type Job,
     type JobDetails,
     type JobRow,
+    type JobRun,
     type JobState,
+    JOB_ID_LABEL,
     type RegistryAuth,
     type RouteInput,
     type Service,
@@ -54,6 +56,7 @@ import type { TxtLookup } from '../domains/dns.js';
 import { createCustomDomain, deleteDomain, getDomain, isReserved, listDomains, verifyDomain } from '../domains/store.js';
 import { GARAGE_REGION, type ObjectStorage } from '../garage.js';
 import { type JobChanges, createJob, deleteJob, getJob, jobRegistryAuthName, listJobRows, listJobs, sealedJobRegistryAuth, updateJob } from '../jobs/store.js';
+import { byNewest, isRunOf, runManifest, runOf } from '../jobs/runs.js';
 import { isTimeZone, scheduleError } from '../jobs/schedule.js';
 import { type ControlPlaneKube, jobStateOf, serviceStateOf, stateOf } from '../kube.js';
 import { type RegistryDeps, type ResolveError, parseImageReference, resolveDigest } from '../registry.js';
@@ -219,9 +222,19 @@ const jobPatch = z.strictObject({
     registryAuth: registryAuthInput.nullable().optional(),
 });
 
+const runInput = z.strictObject({
+    args: argList.optional(),
+    env: z
+        .record(z.string().regex(SECRET_NAME, 'an environment variable name'), z.string())
+        .refine((env) => Object.keys(env).length <= JOB_LIMITS.maxArgs, `at most ${JOB_LIMITS.maxArgs} variables`)
+        .optional(),
+});
+
+const bytesOf = (texts: readonly string[]): number => texts.reduce((sum, text) => sum + Buffer.byteLength(text, 'utf8'), 0);
+
 /** Why a Job's command, args and time zone do not fit together; undefined when they do. */
 const jobShapeError = (job: Pick<Job, 'command' | 'args' | 'schedule' | 'timeZone'>): string | undefined => {
-    const bytes = [...(job.command ?? []), ...(job.args ?? [])].reduce((sum, arg) => sum + Buffer.byteLength(arg, 'utf8'), 0);
+    const bytes = bytesOf([...(job.command ?? []), ...(job.args ?? [])]);
     if (bytes > JOB_LIMITS.maxArgsTotalBytes) {
         return `command and args take ${bytes} bytes, more than ${JOB_LIMITS.maxArgsTotalBytes}`;
     }
@@ -1087,6 +1100,101 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         // The Jobs operator removes the CronJob, and with it its runs, within one pass.
         return c.body(null, 202);
+    });
+
+    /** The Job's runs, scheduled and started, newest first; undefined when Kubernetes cannot be asked. */
+    const runsOf = async (job: Job): Promise<JobRun[] | undefined> => {
+        const listed = await kube.listJobs(projectNamespace(job.projectId), `${JOB_ID_LABEL}=${job.id}`);
+        if (!listed.ok) {
+            deps.log?.({ msg: 'cannot list runs', job: job.id, error: listed.error });
+            return undefined;
+        }
+        return listed.value.map(runOf).sort(byNewest);
+    };
+    const kubernetesDown = (c: Context<Env>) => c.json({ error: 'cannot reach Kubernetes now' }, 503);
+
+    app.post('/v1/projects/:projectId/jobs/:jobId/runs', async (c) => {
+        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
+        const job = project === undefined || !UUID.test(c.req.param('jobId')) ? undefined : await getJob(pool, project.id, c.req.param('jobId'));
+        if (project === undefined || job === undefined) {
+            return c.json(notFound, 404);
+        }
+        const input = runInput.safeParse((await body(c)) ?? {});
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const { args, env } = input.data;
+        const bytes = bytesOf([...(job.command ?? []), ...(args ?? job.args ?? []), ...Object.entries(env ?? {}).flat()]);
+        if (bytes > JOB_LIMITS.maxArgsTotalBytes) {
+            return c.json({ error: `command, args and env take ${bytes} bytes, more than ${JOB_LIMITS.maxArgsTotalBytes}` }, 400);
+        }
+        // A run costs like a Resource: a held Account starts none. Its Cron jobs go on, like its other Resources.
+        const holds = await holdsOf(pool, project.accountId);
+        if (holds.length > 0) {
+            return c.json({ error: `this Account may not start runs now: ${holds.join(', ')}`, holds }, 402);
+        }
+        const cronJob = await kube.readCronJob(projectNamespace(job.projectId), jobObjectName(job));
+        if (!cronJob.ok) {
+            deps.log?.({ msg: 'cannot read CronJob', job: job.id, error: cronJob.error });
+            return kubernetesDown(c);
+        }
+        const wanted = (await listJobRows(pool, job.projectId)).find((row) => row.job.id === job.id);
+        // Started from an older template, the run would not be what the Job says now.
+        if (cronJob.value === undefined || wanted === undefined || jobStateOf(cronJob.value, jobSpecVersion(wanted)) !== 'ready') {
+            return c.json({ error: 'the Job is still deploying; start the run once it is ready' }, 409);
+        }
+        const manifest = runManifest(job.projectId, job.id, cronJob.value, { args, env });
+        if (manifest === undefined) {
+            throw new Error(`the CronJob of Job ${job.id} has no container to copy`);
+        }
+        const created = await kube.createJob(manifest);
+        if (!created.ok) {
+            deps.log?.({ msg: 'cannot start a run', job: job.id, error: created.error });
+            return kubernetesDown(c);
+        }
+        if (created.value === 'exists') {
+            // A random name taken already: as unlikely as it is harmless to ask again.
+            return c.json({ error: 'a run of that name exists; start it again' }, 409);
+        }
+        c.header('location', `/v1/projects/${job.projectId}/jobs/${job.id}/runs/${manifest.metadata.name}`);
+        return c.json(runOf(created.value), 201);
+    });
+
+    app.get('/v1/projects/:projectId/jobs/:jobId/runs', async (c) => {
+        const job = await jobOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('jobId'));
+        if (job === undefined) {
+            return c.json(notFound, 404);
+        }
+        const runs = await runsOf(job);
+        return runs === undefined ? kubernetesDown(c) : c.json(runs);
+    });
+
+    app.get('/v1/projects/:projectId/jobs/:jobId/runs/:runId', async (c) => {
+        const job = await jobOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('jobId'));
+        const runId = c.req.param('runId');
+        if (job === undefined || !isRunOf(job.id, runId)) {
+            return c.json(notFound, 404);
+        }
+        const runs = await runsOf(job);
+        if (runs === undefined) {
+            return kubernetesDown(c);
+        }
+        const run = runs.find((candidate) => candidate.id === runId);
+        return run === undefined ? c.json(notFound, 404) : c.json(run);
+    });
+
+    app.delete('/v1/projects/:projectId/jobs/:jobId/runs/:runId', async (c) => {
+        const job = await jobOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('jobId'));
+        const runId = c.req.param('runId');
+        if (job === undefined || !isRunOf(job.id, runId)) {
+            return c.json(notFound, 404);
+        }
+        const deleted = await kube.deleteJob(projectNamespace(job.projectId), runId);
+        if (!deleted.ok) {
+            deps.log?.({ msg: 'cannot delete a run', job: job.id, run: runId, error: deleted.error });
+            return kubernetesDown(c);
+        }
+        return deleted.value === 'not-found' ? c.json(notFound, 404) : c.body(null, 204);
     });
 
     app.notFound((c) => c.json(notFound, 404));

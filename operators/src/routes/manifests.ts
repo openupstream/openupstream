@@ -24,10 +24,10 @@
  */
 import { type DomainRouting, type RoutedPath, ingressRouteName, serviceObjectName } from '@openupstream/sdk';
 import type { KubeObject } from '../kube.js';
-import { LABELS, MANAGED_BY, projectNamespace, projectObjectsFor } from '../kubernetes.js';
+import { COMPONENT_LABEL, LABELS, MANAGED_BY, projectNamespace, projectObjectsFor } from '../kubernetes.js';
 
 /** Carried by every object this operator applies, so it can find and delete the ones no longer wanted. */
-export const COMPONENT_LABEL = 'openupstream.io/component';
+export { COMPONENT_LABEL } from '../kubernetes.js';
 export const ROUTES_COMPONENT = 'routes';
 
 /** Where Garage's website endpoint is (infra/garage). */

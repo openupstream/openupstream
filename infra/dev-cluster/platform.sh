@@ -209,3 +209,8 @@ kubectl apply -f "$ROOT/operators/deploy/services-rbac.yaml" >/dev/null
 sed "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" "$ROOT/operators/deploy/services-operator.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n openupstream-system rollout status deployment/services-operator --timeout=5m
+
+kubectl apply -f "$ROOT/operators/deploy/jobs-rbac.yaml" >/dev/null
+sed "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" "$ROOT/operators/deploy/jobs-operator.yaml" |
+  kubectl apply -f - >/dev/null
+kubectl -n openupstream-system rollout status deployment/jobs-operator --timeout=5m

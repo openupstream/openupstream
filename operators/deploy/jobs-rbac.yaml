@@ -1,0 +1,45 @@
+# What the Jobs reconcile pass (src/jobs/reconcile.ts) may do: apply a
+# Project's namespace and NetworkPolicies, and each Job's CronJob, and
+# delete those of its objects that are no longer wanted (ARCHITECTURE.md,
+# decision 95). Server-side apply is a PATCH that creates missing objects,
+# so every applied kind needs `patch` and `create`; pruning lists by label
+# and deletes. It never touches a run (a Kubernetes Job): the control plane
+# starts One-off jobs, the CronJob controller scheduled ones, and deleting a
+# CronJob deletes its runs. Namespaces are only created, never deleted: the
+# control plane's cleanup removes them. It reads no Secret.
+#
+# Cluster-wide because Project namespaces are created at run time and RBAC
+# cannot select namespaces by name pattern.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jobs-operator
+  namespace: openupstream-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openupstream-jobs-operator
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [create, patch]
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    verbs: [create, patch, list, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [create, patch, list, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openupstream-jobs-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: openupstream-jobs-operator
+subjects:
+  - kind: ServiceAccount
+    name: jobs-operator
+    namespace: openupstream-system

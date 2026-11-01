@@ -111,6 +111,10 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `PATCH /v1/projects/{id}/jobs/{id}` | any of `image, command, args, memoryMb, cpuMillicores, timeoutSeconds, schedule, timeZone, homeSite, registryAuth` (`null` removes all but the image and the numbers; removing the schedule removes its time zone); the tag and the credentials as for a Service |
 | `POST /v1/projects/{id}/jobs/{id}/deploy` | resolves the same tag again; later runs start what it points at now |
 | `DELETE /v1/projects/{id}/jobs/{id}` | 202: the row goes at once, the CronJob and its runs with the next Jobs operator pass |
+| `POST /v1/projects/{id}/jobs/{id}/runs` | `{args?, env?}` → 201, a One-off job: a Kubernetes Job copied from the jobTemplate of the Job's CronJob (`src/jobs/runs.ts`), `args` replacing the Job's, `env` added over the Secrets; 409 while the Job is `deploying`; 402 if the Account has a Hold; 400 when command, args and env take more than 16 KiB; 503 if Kubernetes cannot be reached |
+| `GET /v1/projects/{id}/jobs/{id}/runs` | the Job's runs, scheduled (`trigger: schedule`) and started (`api`), newest first, read live from Kubernetes: `state` `pending`, `running`, `succeeded` or `failed` with Kubernetes' `reason` (`BackoffLimitExceeded`, `DeadlineExceeded`); kept 24 h after they finish |
+| `GET /v1/projects/{id}/jobs/{id}/runs/{runId}` | one run; `runId` is its Kubernetes Job's name |
+| `DELETE /v1/projects/{id}/jobs/{id}/runs/{runId}` | 204: stops it if it still runs, and removes it with its pod |
 | `GET /v1/projects/{id}/secrets` | the Project's Secrets, names and times only |
 | `PUT /v1/projects/{id}/secrets/{name}` | `{value}` → 201 for a new Secret, 200 for a new value; written into the Project's Kubernetes Secret right after the answer (or by the next secrets pass, before the Project has a namespace). The name is an environment variable name; 400 for a value over 64 KiB, or if the Project's values together would pass 512 KiB |
 | `DELETE /v1/projects/{id}/secrets/{name}` | 204 |

@@ -9,6 +9,7 @@ import {
     type DatabaseDetails,
     type Domain,
     type JobDetails,
+    type JobRun,
     type Project,
     type Route,
     type Secret,
@@ -21,7 +22,7 @@ import { getAccountRecord, liftHold, placeHold } from '../accounts/store.js';
 import { listDatabaseRows } from '../databases/rows.js';
 import { ensureDefaultDomains } from '../domains/store.js';
 import { listDomainRoutings } from '../routes/store.js';
-import { type ClusterStatus, type ControlPlaneKube, type CronJobStatus, type DeploymentStatus, type SecretManifest } from '../kube.js';
+import { type ClusterStatus, type ControlPlaneKube, type CronJobStatus, type DeploymentStatus, type KubeJob, type SecretManifest } from '../kube.js';
 import type { RegistryDeps } from '../registry.js';
 import { listServiceRows } from '../services/store.js';
 import { listJobRows } from '../jobs/store.js';
@@ -97,6 +98,10 @@ const deployments = new Map<string, DeploymentStatus>();
 /** What the fake Kubernetes reports per CronJob name. */
 const cronJobs = new Map<string, CronJobStatus>();
 
+/** The Kubernetes Jobs (runs) the fake Kubernetes holds, by name; `kubeDown` makes run calls fail. */
+const runs = new Map<string, KubeJob>();
+let kubeDown = false;
+
 /** What the fake Kubernetes reports per Cluster name; a string is an error. */
 const clusters = new Map<string, ClusterStatus | string>();
 
@@ -111,6 +116,25 @@ const kube: ControlPlaneKube = {
     },
     readDeployment: async (_namespace, name) => ok(deployments.get(name)),
     readCronJob: async (_namespace, name) => ok(cronJobs.get(name)),
+    createJob: async (manifest) => {
+        if (kubeDown) {
+            return err('connection refused');
+        }
+        if (runs.has(manifest.metadata.name)) {
+            return ok('exists');
+        }
+        const created = { ...manifest, metadata: { ...manifest.metadata, creationTimestamp: new Date() } };
+        runs.set(manifest.metadata.name, created);
+        return ok(created);
+    },
+    listJobs: async (namespace, selector) => {
+        if (kubeDown) {
+            return err('connection refused');
+        }
+        const [key = '', value] = selector.split('=');
+        return ok([...runs.values()].filter((run) => run.metadata.namespace === namespace && run.metadata.labels?.[key] === value));
+    },
+    deleteJob: async (_namespace, name) => ok(runs.delete(name) ? 'deleted' : 'not-found'),
     remove: async () => ok(undefined),
     applySecret: async (secret) => {
         if (missingNamespaces.has(secret.metadata.namespace)) {
@@ -1001,9 +1025,9 @@ describe('Jobs', () => {
         const stateNow = async () => ((await (await call('GET', path(`/${job.id}`), 'alice')).json()) as JobDetails).state;
         const row = (await listJobRows(db.pool, projectId)).find((candidate) => candidate.job.id === job.id);
         assert.ok(row);
-        cronJobs.set(`job-${job.id}`, { specVersion: jobSpecVersion(row) });
+        cronJobs.set(`job-${job.id}`, { specVersion: jobSpecVersion(row), uid: 'u', jobTemplate: undefined });
         assert.equal(await stateNow(), 'ready');
-        cronJobs.set(`job-${job.id}`, { specVersion: 'an older spec' });
+        cronJobs.set(`job-${job.id}`, { specVersion: 'an older spec', uid: 'u', jobTemplate: undefined });
         assert.equal(await stateNow(), 'deploying');
         const listed = (await (await call('GET', path(), 'alice')).json()) as JobDetails[];
         assert.deepEqual(listed.map((candidate) => [candidate.name, candidate.state]), [['nightly', 'deploying']]);
@@ -1103,6 +1127,88 @@ describe('Jobs', () => {
         assert.equal(row?.site, 'hetzner-fsn1');
         assert.equal((await call('PATCH', path(`/${job.id}`), 'alice', { homeSite: 'ovh-lim' })).status, 200);
         assert.equal((await listJobRows(db.pool)).find((candidate) => candidate.job.id === job.id)?.site, 'ovh-lim');
+    });
+
+    test('a run starts only once the CronJob has the current template; a One-off job copies it with its own args and env', async () => {
+        const runsPath = path(`/${job.id}/runs`);
+        assert.equal((await call('POST', runsPath, 'alice')).status, 409, 'no CronJob yet');
+        const row = (await listJobRows(db.pool, projectId)).find((candidate) => candidate.job.id === job.id);
+        assert.ok(row);
+        const jobTemplate = {
+            metadata: { labels: { 'openupstream.io/job-id': job.id, 'openupstream.io/component': 'jobs' } },
+            spec: { template: { spec: { containers: [{ name: 'job', image: row.pinnedImage, args: ['--full'] }] } } },
+        };
+        cronJobs.set(`job-${job.id}`, { specVersion: 'an older spec', uid: 'cron-uid', jobTemplate });
+        assert.equal((await call('POST', runsPath, 'alice')).status, 409, 'an older template');
+        cronJobs.set(`job-${job.id}`, { specVersion: jobSpecVersion(row), uid: 'cron-uid', jobTemplate });
+        const started = await call('POST', runsPath, 'alice', { args: ['--only', '42'], env: { ORDER_ID: '42' } });
+        assert.equal(started.status, 201);
+        const run = (await started.json()) as JobRun;
+        assert.deepEqual([run.jobId, run.trigger, run.state], [job.id, 'api', 'pending']);
+        assert.equal(started.headers.get('location'), `/v1/projects/${projectId}/jobs/${job.id}/runs/${run.id}`);
+        const container = (runs.get(run.id)?.spec as { template: { spec: { containers: { args: string[]; env: unknown }[] } } }).template.spec
+            .containers[0];
+        assert.deepEqual(container?.args, ['--only', '42']);
+        assert.deepEqual(container?.env, [{ name: 'ORDER_ID', value: '42' }]);
+        // Without a body the run takes the Job's args.
+        assert.equal((await call('POST', runsPath, 'alice')).status, 201);
+    });
+
+    test('runs list newest first, scheduled ones included; one can be read and deleted', async () => {
+        const runsPath = path(`/${job.id}/runs`);
+        runs.set(`job-${job.id}-29384756`, {
+            apiVersion: 'batch/v1',
+            kind: 'Job',
+            metadata: {
+                name: `job-${job.id}-29384756`,
+                namespace: `project-${projectId}`,
+                labels: { 'openupstream.io/job-id': job.id },
+                creationTimestamp: new Date('2026-01-01T03:00:00Z'),
+            },
+            status: { conditions: [{ type: 'Complete', status: 'True' }], completionTime: new Date('2026-01-01T03:01:00Z') },
+        });
+        const listed = (await (await call('GET', runsPath, 'alice')).json()) as JobRun[];
+        assert.equal(listed.length, 3);
+        assert.deepEqual(listed.at(-1), {
+            id: `job-${job.id}-29384756`,
+            jobId: job.id,
+            trigger: 'schedule',
+            state: 'succeeded',
+            reason: null,
+            createdAt: '2026-01-01T03:00:00.000Z',
+            startedAt: null,
+            finishedAt: '2026-01-01T03:01:00.000Z',
+        });
+        const [newest] = listed;
+        assert.ok(newest);
+        assert.equal(((await (await call('GET', `${runsPath}/${newest.id}`, 'alice')).json()) as JobRun).id, newest.id);
+        assert.equal((await call('GET', `${runsPath}/job-${job.id}-nothere`, 'alice')).status, 404);
+        assert.equal((await call('GET', `${runsPath}/svc-${job.id}-abc`, 'alice')).status, 404);
+        assert.equal((await call('GET', runsPath, 'bob')).status, 404);
+        assert.equal((await call('DELETE', `${runsPath}/${newest.id}`, 'bob')).status, 404);
+        assert.equal((await call('DELETE', `${runsPath}/${newest.id}`, 'alice')).status, 204);
+        assert.equal((await call('DELETE', `${runsPath}/${newest.id}`, 'alice')).status, 404);
+        kubeDown = true;
+        assert.equal((await call('GET', runsPath, 'alice')).status, 503);
+        assert.equal((await call('POST', runsPath, 'alice')).status, 503);
+        kubeDown = false;
+    });
+
+    test('a run is checked before it starts; an Account with a Hold starts none', async () => {
+        const runsPath = path(`/${job.id}/runs`);
+        const before = runs.size;
+        assert.equal((await call('POST', runsPath, 'alice', { env: { 'NOT-A-NAME': 'x' } })).status, 400);
+        assert.equal((await call('POST', runsPath, 'alice', { args: [] })).status, 400);
+        assert.equal((await call('POST', runsPath, 'alice', { image: 'nginx' })).status, 400);
+        const big = await call('POST', runsPath, 'alice', { env: { A: 'x'.repeat(9000), B: 'y'.repeat(9000) } });
+        assert.equal(big.status, 400);
+        assert.match(JSON.stringify(await big.json()), /more than 16384/);
+        assert.equal(await placeHold(db.pool, accountA, 'unpaid'), true);
+        const held = await call('POST', runsPath, 'alice');
+        assert.equal(held.status, 402);
+        assert.deepEqual(((await held.json()) as { holds: string[] }).holds, ['unpaid']);
+        assert.equal(await liftHold(db.pool, accountA, 'unpaid'), true);
+        assert.equal(runs.size, before);
     });
 
     test("another Account's Project: 404; deleted: 202, then gone", async () => {

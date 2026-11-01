@@ -38,6 +38,12 @@ export const serviceObjectName = (service: Pick<Service, 'id'>): string => `svc-
 /** The Job's CronJob, in its Project's namespace; its runs are Kubernetes Jobs named after it. */
 export const jobObjectName = (job: Pick<Job, 'id'>): string => `job-${job.id}`;
 
+/** On a Job's CronJob and its runs: the Job's id, by which the control plane lists the runs. */
+export const JOB_ID_LABEL = 'openupstream.io/job-id';
+
+/** On a run the control plane started (a One-off job): `api`. Scheduled runs do not have it. */
+export const RUN_TRIGGER_LABEL = 'openupstream.io/trigger';
+
 /** The folder under the backup bucket that holds one Database's base backups and WAL. */
 export const backupPrefix = (projectId: Id, databaseId: Id): string =>
     `${projectNamespace(projectId)}/${clusterName({ id: databaseId })}/`;
@@ -140,17 +146,16 @@ export interface JobRow {
     readonly pinnedImage: string;
     /** Where its runs go: the Job's homeSite, else the Project's oldest Database's, else `hetzner-fsn1`. */
     readonly site: Site;
-    /** As for a Service: the version of the Project's Secrets in its Kubernetes Secret. */
-    readonly secretsVersion: string;
 }
 
 /**
  * Everything of a Job's row that its CronJob is rendered from. The Jobs
  * operator writes it on the CronJob; until the CronJob carries the version
  * the row asks for, the Job is `deploying` and no run starts from the old
- * template.
+ * template. The Secrets are not part of it: a run's pod reads them when it
+ * starts, so nothing needs to change when they do.
  */
-export const jobSpecVersion = (row: Pick<JobRow, 'job' | 'pinnedImage' | 'site' | 'secretsVersion'>): string =>
+export const jobSpecVersion = (row: Pick<JobRow, 'job' | 'pinnedImage' | 'site'>): string =>
     JSON.stringify([
         row.pinnedImage,
         row.job.command,
@@ -161,7 +166,6 @@ export const jobSpecVersion = (row: Pick<JobRow, 'job' | 'pinnedImage' | 'site' 
         row.job.schedule,
         row.job.timeZone,
         row.site,
-        row.secretsVersion,
     ]);
 
 export interface DatabaseRow {

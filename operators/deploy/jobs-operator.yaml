@@ -1,0 +1,56 @@
+# The Jobs operator: one reconcile pass every 30 s with the Jobs
+# from the control plane's internal API (ARCHITECTURE.md, decision 95).
+# One replica: the pass is idempotent, and a restart in the other Site only
+# delays changes to Jobs; the CronJobs it applied keep running.
+#
+# Needs jobs-rbac.yaml. The image is the operators' image, pinned by
+# digest when applied (infra/dev-cluster/platform.sh).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jobs-operator
+  namespace: openupstream-system
+  labels: {app.kubernetes.io/name: jobs-operator}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: jobs-operator}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: jobs-operator}
+    spec:
+      serviceAccountName: jobs-operator
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: jobs-operator
+          image: ghcr.io/openupstream/operators:main
+          env:
+            - {name: OPERATOR, value: jobs}
+            - {name: CONTROL_PLANE_URL, value: "http://control-plane.project-00000000-0000-4000-8000-000000000002.svc:8081"}
+            - {name: TOKEN_PATH, value: /var/run/secrets/openupstream/control-plane/token}
+          volumeMounts:
+            - {name: control-plane-token, mountPath: /var/run/secrets/openupstream/control-plane, readOnly: true}
+          resources:
+            requests: {cpu: 20m, memory: 96Mi}
+            limits: {memory: 192Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+      volumes:
+        # A token only the control plane accepts (audience), rotated by the
+        # kubelet; the operator reads it before every pass.
+        - name: control-plane-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: openupstream-control-plane
+                  expirationSeconds: 3600
+                  path: token

@@ -4,7 +4,7 @@
  * ServiceAccount, so each has only the rights it needs.
  *
  * Environment:
- * - OPERATOR: `databases` (default), `routes` or `services`
+ * - OPERATOR: `databases` (default), `routes`, `services` or `jobs`
  * - CONTROL_PLANE_URL: the control plane's internal API, e.g.
  *   http://control-plane.project-<id>.svc:8081
  * - TOKEN_PATH: the projected ServiceAccount token for the control plane's
@@ -18,9 +18,10 @@
  */
 import { readFile } from 'node:fs/promises';
 import { KubeConfig } from '@kubernetes/client-node';
-import { controlPlaneRoutings, controlPlaneRows, controlPlaneServices } from './control-plane.js';
+import { controlPlaneJobs, controlPlaneRoutings, controlPlaneRows, controlPlaneServices } from './control-plane.js';
 import { type PassLog, databasesPass, runPasses } from './databases/loop.js';
 import type { DatabaseConfig } from './databases/manifests.js';
+import { jobsPass } from './jobs/loop.js';
 import { kubeFrom } from './kube.js';
 import { routesPass } from './routes/loop.js';
 import { servicesPass } from './services/loop.js';
@@ -38,8 +39,8 @@ const required = (name: string): string => {
 };
 
 const operator = process.env['OPERATOR'] ?? 'databases';
-if (operator !== 'databases' && operator !== 'routes' && operator !== 'services') {
-    log({ msg: 'OPERATOR must be databases, routes or services', operator });
+if (operator !== 'databases' && operator !== 'routes' && operator !== 'services' && operator !== 'jobs') {
+    log({ msg: 'OPERATOR must be databases, routes, services or jobs', operator });
     process.exit(1);
 }
 const controlPlaneUrl = required('CONTROL_PLANE_URL');
@@ -80,7 +81,13 @@ const services = (): (() => Promise<PassLog>) => {
     return () => servicesPass(fetchServices, kube);
 };
 
-const pass = operator === 'databases' ? await databases() : operator === 'routes' ? routes() : services();
+const jobs = (): (() => Promise<PassLog>) => {
+    const fetchJobs = controlPlaneJobs(controlPlaneUrl, token);
+    return () => jobsPass(fetchJobs, kube);
+};
+
+const passes = { databases, routes, services, jobs } as const;
+const pass = await passes[operator]();
 const stop = new AbortController();
 process.once('SIGTERM', () => stop.abort());
 log({ msg: `${operator} operator started`, controlPlaneUrl, intervalMs });

@@ -20,6 +20,9 @@ const fakes = () => {
         readCluster: async () => ok(undefined),
         readDeployment: async () => ok(undefined),
         readCronJob: async () => ok(undefined),
+        createJob: async () => err('not in this test'),
+        listJobs: async () => ok([]),
+        deleteJob: async () => ok('not-found'),
         remove: async (ref: ObjectRef) => {
             if (failKinds.has(ref.kind)) {
                 return err('forbidden');

@@ -62,10 +62,15 @@ rules:
   - apiGroups: [apps]
     resources: [deployments]
     verbs: [get]
-  # A Job's state for the API: the spec version on its CronJob.
+  # A Job's state for the API: the spec version on its CronJob, whose
+  # jobTemplate a One-off job copies (decision 95). Runs are Kubernetes Jobs
+  # the control plane starts, lists and stops in Project namespaces.
   - apiGroups: [batch]
     resources: [cronjobs]
     verbs: [get]
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [create, list, delete]
   # Every Project's Secret project-secrets, rendered from the encrypted store
   # (decision 91). Cluster-wide, since Project namespaces are created at run
   # time; server-side apply needs create and patch.

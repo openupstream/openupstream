@@ -346,6 +346,46 @@ export interface JobDetails extends Job {
     state: JobState;
 }
 
+/**
+ * Read live from its Kubernetes Job: `pending` until its container runs
+ * (e.g. while the image is pulled), `running`, then `succeeded` (exit 0) or
+ * `failed` (another exit code, or stopped at the timeout).
+ */
+export type JobRunState = 'pending' | 'running' | 'succeeded' | 'failed';
+
+/**
+ * One run of a Job, scheduled or started through the API. Kept for 24 hours
+ * after it finished; a Cron job keeps at most its last 3 successful and 3
+ * failed scheduled runs.
+ */
+export interface JobRun {
+    /** Unique within the Project; the name of its Kubernetes Job. */
+    id: string;
+    jobId: Id;
+    /** `schedule` for a Cron job's run, `api` for a One-off job. */
+    trigger: 'schedule' | 'api';
+    state: JobRunState;
+    /**
+     * Why it failed, as Kubernetes says: `BackoffLimitExceeded` (it exited
+     * with an error), `DeadlineExceeded` (stopped at the timeout); null
+     * otherwise.
+     */
+    reason: string | null;
+    createdAt: Timestamp;
+    startedAt: Timestamp | null;
+    finishedAt: Timestamp | null;
+}
+
+/**
+ * Starts a One-off job. `args` replaces the Job's args for this run; `env`
+ * adds variables to it, over Secrets of the same name. Together with the
+ * Job's command and args at most JOB_LIMITS.maxArgsTotalBytes.
+ */
+export interface JobRunInput {
+    args?: string[];
+    env?: Record<string, string>;
+}
+
 /** A Secret's name is an environment variable name (the schema checks the same). */
 export const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,254}$/;
 
