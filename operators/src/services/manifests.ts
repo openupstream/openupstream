@@ -31,6 +31,7 @@ import {
     MANAGED_BY,
     ZONE_LABEL,
     customerEgressPolicy,
+    databaseEnv,
     projectNamespace,
     projectObjectsFor,
     requireComputeSite,
@@ -42,6 +43,8 @@ export const SERVICE_ID_LABEL = 'openupstream.io/service-id';
 export const SERVICE_NAME_LABEL = 'openupstream.io/service-name';
 export const SECRETS_VERSION_ANNOTATION = 'openupstream.io/secrets-version';
 export const RUNTIME_CLASS = 'gvisor';
+/** How long a worker (a Service without a port) runs before it counts as available. */
+export const WORKER_MIN_READY_SECONDS = 10;
 
 /** The kinds this operator prunes, a Deployment before the Service that fronts it. */
 export const PRUNED_KINDS = [
@@ -104,6 +107,8 @@ const deployment = (row: ServiceRow): KubeObject => {
             selector: { matchLabels: { [SERVICE_ID_LABEL]: service.id } },
             // A new version starts before an old one stops, so a single replica is never down for a rollout.
             strategy: { type: 'RollingUpdate', rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } },
+            // Nothing probes a worker: it must run for 10 s before it replaces an old pod, so one that crashes at start does not.
+            ...(service.port === null ? { minReadySeconds: WORKER_MIN_READY_SECONDS } : {}),
             template: {
                 metadata: { labels: podLabels, annotations: { [SECRETS_VERSION_ANNOTATION]: row.secretsVersion } },
                 spec: {
@@ -116,11 +121,13 @@ const deployment = (row: ServiceRow): KubeObject => {
                         {
                             name: 'app',
                             image: row.pinnedImage,
-                            ports: [{ name: 'http', containerPort: service.port, protocol: 'TCP' }],
+                            // A worker has no port: nothing probes it (minReadySeconds below stands in).
+                            ...(service.port === null ? {} : { ports: [{ name: 'http', containerPort: service.port, protocol: 'TCP' }] }),
                             envFrom: [{ secretRef: { name: PROJECT_SECRETS } }],
+                            ...(row.databases.length === 0 ? {} : { env: databaseEnv(row.project.id, row.databases) }),
                             // The limits are what is reserved and billed (memory_gb_hours); no Service takes another's CPU.
                             resources: { requests: resources, limits: resources },
-                            readinessProbe: { tcpSocket: { port: 'http' }, periodSeconds: 5 },
+                            ...(service.port === null ? {} : { readinessProbe: { tcpSocket: { port: 'http' }, periodSeconds: 5 } }),
                             securityContext: { allowPrivilegeEscalation: false },
                         },
                     ],
@@ -130,7 +137,7 @@ const deployment = (row: ServiceRow): KubeObject => {
     };
 };
 
-const kubernetesService = (row: ServiceRow): KubeObject => ({
+const kubernetesService = (row: ServiceRow, port: number): KubeObject => ({
     apiVersion: 'v1',
     kind: 'Service',
     metadata: {
@@ -140,11 +147,14 @@ const kubernetesService = (row: ServiceRow): KubeObject => ({
     },
     spec: {
         selector: { [SERVICE_ID_LABEL]: row.service.id },
-        ports: [{ name: 'http', port: row.service.port, targetPort: 'http', protocol: 'TCP' }],
+        ports: [{ name: 'http', port, targetPort: 'http', protocol: 'TCP' }],
     },
 });
 
-/** Applied in this order, per Project: its namespace, NetworkPolicies, then each Service's Deployment and Service. */
+/**
+ * Applied in this order, per Project: its namespace, NetworkPolicies, then
+ * each Service's Deployment and, when it has a port, its Kubernetes Service.
+ */
 export function planServices(rows: readonly ServiceRow[]): KubeObject[] {
     const projects = [...new Map(rows.map((row) => [row.project.id, row.project])).values()];
     return [
@@ -152,6 +162,6 @@ export function planServices(rows: readonly ServiceRow[]): KubeObject[] {
             ...projectObjectsFor(project),
             customerEgressPolicy(project.id, 'service-egress', SERVICES_COMPONENT, labels(project.id)),
         ]),
-        ...rows.flatMap((row) => [deployment(row), kubernetesService(row)]),
+        ...rows.flatMap((row) => [deployment(row), ...(row.service.port === null ? [] : [kubernetesService(row, row.service.port)])]),
     ];
 }

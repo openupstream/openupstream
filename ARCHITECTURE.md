@@ -277,7 +277,8 @@ Secrets in the caller's Accounts; another Account's
 Project answers 404 (#61). A Database's state (`provisioning`, `ready`,
 `degraded`, `unknown`) is read live from its Cluster. Its connection details
 (the Pooler's in-cluster address, database and user `app`) are returned,
-the password never. Members are not added through the API yet.
+the password never: the Project's Services and Jobs get the whole URL in
+their environment instead (#97). Members are not added through the API yet.
 
 Deleting a Project or Database only marks its row; a cleanup loop in the
 control plane carries the delete out (#58): every 30 s, on one replica at a
@@ -493,7 +494,11 @@ digest (#55).
   the Project's oldest live Database, else in `hetzner-fsn1`.
 - The Services operator (#93) runs each Service as a Deployment `svc-<id>`
   with the image by digest and `runtimeClassName: gvisor`, and a Kubernetes
-  Service of the same name for its Routes. A single replica has a
+  Service of the same name for its Routes. A Service without a port is a
+  worker (#98), such as a queue consumer on `SKIP LOCKED` (#8): no
+  Kubernetes Service, no readiness probe (it is ready once it has run for
+  10 s, so one that crashes at start does not replace the old pods), and
+  no Route may serve it, nor may a routed Service drop its port. A single replica has a
   preferred node affinity for its Site, so it moves to the other when that
   one fails; two or more have a hard topology spread over the compute
   Sites that leaves out a dark Site's tainted node (as in decision 46).
@@ -505,6 +510,20 @@ digest (#55).
   template rolls the Service when they change. The control plane records
   that version only after it wrote the new values, so pods never restart
   into the old ones.
+- Every Service and Job gets a URL per live Database of its Project
+  (#97): `DATABASE_URL_<NAME>` (the name upper-cased, `-` as `_`) and the
+  oldest Database's also as `DATABASE_URL`, pointing at its Pooler. The
+  operator writes only a `secretKeyRef` to CloudNativePG's `db-<id>-app`
+  Secret (as `OUP_DATABASE_PASSWORD_<NAME>`, also in the environment) and
+  a `$(VAR)` reference in the URL, so the password stays in the Project's
+  namespace. A pod waits for that Secret, so a Service created with its
+  Database starts once the Database is up. A Database added or deleted
+  changes the Service's and Job's spec version: the Service rolls and is
+  `deploying` until the new Database is up (its old pods keep serving
+  meanwhile; a Database that never comes up holds the rollout until it is
+  deleted), and the Job is `deploying` until its CronJob has the new URLs;
+  a run started before the new Database is up waits for it, within its
+  timeout. These variables win over a Project Secret of the same name.
 - A Job (#95, [ADR-0003](docs/adr/0003-jobs.md)) is a row like a Service:
   `POST …/jobs` with its image, optional `command` (the entrypoint) and
   `args`, memory, CPU, a timeout (default 1 h, at most 24 h) and an
@@ -524,7 +543,8 @@ digest (#55).
 - The Jobs operator applies one CronJob `job-<id>` per Job, suspended when
   the Job has no schedule, with the pod rules of a Service (gVisor, image
   by digest, requests = limits, no ServiceAccount token, `envFrom`
-  `project-secrets`, the egress policy), in the Job's Site by preference.
+  `project-secrets`, the Databases' URLs, the egress policy), in the Job's
+  Site by preference.
   It carries the spec version of the row (`jobSpecVersion` in the sdk);
   until it carries the current one the Job is `deploying` and a run is
   refused with 409, so no run starts from an old template. A run is never
@@ -851,6 +871,8 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 94 | `oup` acts on the Project linked to the directory (`oup link` writes its id to `.openupstream.json`, found upwards like `.git`; `--project` or `OUP_PROJECT` override); `oup service deploy` is one idempotent command (create, else change what differs, else deploy the tag again; always resolves the tag, then waits until running); Secret values and registry passwords come from stdin only | `--project` on every command; separate create/update/redeploy verbs mirroring the API; `NAME=value` arguments | the directory is where the code of one Project lives, as with Vercel or Railway, and the id survives renames; the same deploy line works for the first and every later deploy, locally and in CI; arguments end up in shell history and the process list |
 | 95 | Jobs ([ADR-0003](docs/adr/0003-jobs.md)): one `…/jobs` resource (image pinned at deploy, command, args, resources, timeout, optional `schedule` and `timeZone`); a schedule makes it a Cron job, `POST …/jobs/{id}/runs` (args, env) starts a One-off job. The control plane creates that Kubernetes Job while the request waits, as a copy of the `jobTemplate` of the Job's CronJob, which the Jobs operator applies (suspended without a schedule). Runs are read from Kubernetes only, kept 24 h. No retries, no overlap, timeout default 1 h, at most 24 h, UTC unless a time zone is given | a One-off job running a Service's image with another command (Render, Heroku); self-contained runs that carry their image; the operator creating runs from rows; run rows in the control plane; the pod template in the sdk; Kubernetes' defaults, or retries and overlap per Job | runs start in seconds and from the pinned digest, without a registry call; the pod rules are written once, in the operator, and deleting a Job deletes its runs by garbage collection; no table to keep in step with Kubernetes. Costs: a run is refused for up to one operator pass after a change, no history beyond a day, and the control plane may create and delete Jobs in every Project namespace |
 | 96 | `oup job` is one group for Jobs and their runs: `oup job deploy` is idempotent like `oup service deploy` (the command after `--` or `--no-command`, `--schedule` or `--no-schedule`, waits until ready); `oup job run` starts a One-off job (args after `--`, `--env NAME=value`) and waits for its outcome, exiting 1 when it failed, unless `--no-wait`; `oup job runs`, `stop`, `list`, `show`, `delete` | `oup cron` and `oup run` as two commands (the earlier plan); `oup job run` returning at once with `--wait` to opt in | one noun, as in the API and the glossary, for a Job that is scheduled and started by hand alike; a CI step that runs a migration fails when the migration does, without a flag to remember |
+| 97 | Every Service and Job gets `DATABASE_URL_<NAME>` per live Database of its Project and the oldest one's as `DATABASE_URL`, built by Kubernetes from a `secretKeyRef` to CloudNativePG's `db-<id>-app` Secret; the Databases are part of the spec version | binding Databases to Services and Jobs explicitly (as Render and Railway reference them); the user copying a URL into a Secret (as `fly postgres attach` writes one); the control plane writing the URL into `project-secrets` | Heroku's model: no API or CLI field, nothing to bind before the first deploy, and the right default for one Database per Project; the password never leaves the namespace or passes through the control plane, which never sees it; a Project's pods can already reach all its Databases (decision 89), so a binding would add no isolation. Explicit binding can come later as a filter |
+| 98 | A Service's `port` is optional: without one it is a worker, with no Kubernetes Service and no readiness probe, and no Route may serve it (refused on the Route, and a trigger refuses removing a routed Service's port); `oup service deploy` needs `--no-port` for one | workers as a mode of their own; keeping the port required and having workers serve a health endpoint | Render's background workers, Heroku's worker dynos and Fly processes without services work the same way; ProjectMatch's SQS consumers become such workers; a fake listener would make readiness mean nothing; `--no-port` keeps a forgotten `--port` from silently making a worker |
 | 99 | The demo apps (#30) are one npm workspace, `examples/`, a folder per app on plain `node:http` and `pg`, built by the Images workflow from one Dockerfile (`APP` build argument) into `ghcr.io/openupstream/example-<app>`, public | a repository of their own; one image for all apps; a web framework | they change with the platform in the same PR and are built for the commit under test; the workspace puts their tests under the repo's CI; one image per app keeps each deploy line the customer's (`oup service deploy notes --image …/example-notes`); a framework would hide what the platform needs from a container |
 
 ## Open questions

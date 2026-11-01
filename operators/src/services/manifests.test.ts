@@ -27,6 +27,7 @@ const row = (overrides: Partial<ServiceRow['service']> = {}, site: ServiceRow['s
     pinnedImage: `ghcr.io/acme/api@${digest}`,
     site,
     secretsVersion: 'v1',
+    databases: [],
 });
 
 type PodSpec = {
@@ -35,7 +36,7 @@ type PodSpec = {
     imagePullSecrets: unknown;
     affinity: { nodeAffinity: Record<string, unknown> };
     topologySpreadConstraints?: unknown[];
-    containers: { image: string; envFrom: unknown; resources: unknown; ports: unknown }[];
+    containers: { image: string; env?: unknown; envFrom: unknown; resources: unknown; ports: unknown }[];
 };
 const podOf = (object: KubeObject | undefined) =>
     (object?.['spec'] as { template: { metadata: { annotations: Record<string, string> }; spec: PodSpec } }).template;
@@ -54,6 +55,34 @@ test("a Project's namespace and NetworkPolicies first, then each Service's Deplo
             'Service svc-33333333-3333-4333-8333-333333333333',
         ],
     );
+});
+
+test('a worker without a port gets no Kubernetes Service, no container port and no readiness probe', () => {
+    const plan = planServices([row({ port: null })]);
+    assert.deepEqual(plan.filter((o) => o.kind === 'Service'), []);
+    const container = podOf(plan.find((o) => o.kind === 'Deployment')).spec.containers[0] as Record<string, unknown> | undefined;
+    assert.equal(container?.['ports'], undefined);
+    assert.equal(container?.['readinessProbe'], undefined);
+    const spec = plan.find((o) => o.kind === 'Deployment')?.['spec'] as { minReadySeconds?: number };
+    assert.equal(spec.minReadySeconds, 10, 'a worker that crashes at start does not replace the old pods');
+    assert.equal((planServices([row()]).find((o) => o.kind === 'Deployment')?.['spec'] as { minReadySeconds?: number }).minReadySeconds, undefined);
+});
+
+test("the container gets a DATABASE_URL per Database of the Project, the oldest's also as DATABASE_URL, without a password in the manifest", () => {
+    assert.equal(podOf(planServices([row()]).find((o) => o.kind === 'Deployment')).spec.containers[0]?.env, undefined);
+    const databases = [
+        { id: '44444444-4444-4444-8444-444444444444', name: 'main' },
+        { id: '55555555-5555-4555-8555-555555555555', name: 'events-db' },
+    ];
+    const pod = podOf(planServices([{ ...row(), databases }]).find((o) => o.kind === 'Deployment'));
+    const pooler = (id: string) => `db-${id}-pooler.${namespace}.svc.cluster.local:5432`;
+    assert.deepEqual(pod.spec.containers[0]?.env, [
+        { name: 'OUP_DATABASE_PASSWORD_MAIN', valueFrom: { secretKeyRef: { name: `db-${databases[0]?.id}-app`, key: 'password' } } },
+        { name: 'DATABASE_URL_MAIN', value: `postgres://app:$(OUP_DATABASE_PASSWORD_MAIN)@${pooler(databases[0]?.id ?? '')}/app` },
+        { name: 'OUP_DATABASE_PASSWORD_EVENTS_DB', valueFrom: { secretKeyRef: { name: `db-${databases[1]?.id}-app`, key: 'password' } } },
+        { name: 'DATABASE_URL_EVENTS_DB', value: `postgres://app:$(OUP_DATABASE_PASSWORD_EVENTS_DB)@${pooler(databases[1]?.id ?? '')}/app` },
+        { name: 'DATABASE_URL', value: `postgres://app:$(OUP_DATABASE_PASSWORD_MAIN)@${pooler(databases[0]?.id ?? '')}/app` },
+    ]);
 });
 
 test('the pod runs the pinned image under gVisor, with the Project Secrets and registry credentials, and no API token', () => {

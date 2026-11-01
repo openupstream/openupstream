@@ -9,11 +9,11 @@
  * Services operator removes its Deployment within one pass, as it does for
  * every object of its own no row asks for.
  */
-import type { Service, ServiceRow, Site } from '@openupstream/sdk';
+import type { RowDatabase, Service, ServiceRow, Site } from '@openupstream/sdk';
 import type pg from 'pg';
-import { ACCOUNT_HELD, FOREIGN_KEY_VIOLATION, UNIQUE_VIOLATION, unlessCodes } from '../db/errors.js';
+import { ACCOUNT_HELD, FOREIGN_KEY_VIOLATION, SERVICE_ROUTED, UNIQUE_VIOLATION, unlessCodes } from '../db/errors.js';
 import { parseImageReference, pinnedImage } from '../registry.js';
-import { type Result, ok } from '../result.js';
+import { type Result, err, ok } from '../result.js';
 
 interface Row {
     id: string;
@@ -25,7 +25,7 @@ interface Row {
     replicas: number;
     memory_mb: number;
     cpu_millicores: number;
-    port: number;
+    port: number | null;
     home_site: Site | null;
     has_registry_auth: boolean;
     created_at: Date;
@@ -84,7 +84,8 @@ export interface ServiceRecord {
     readonly replicas: number;
     readonly memoryMb: number;
     readonly cpuMillicores: number;
-    readonly port: number;
+    /** null: a worker, which serves no HTTP. */
+    readonly port: number | null;
     readonly homeSite: Site | null;
     readonly registryAuth: Buffer | null;
 }
@@ -137,7 +138,7 @@ export interface ServiceChanges {
     readonly replicas?: number | undefined;
     readonly memoryMb?: number | undefined;
     readonly cpuMillicores?: number | undefined;
-    readonly port?: number | undefined;
+    readonly port?: number | null | undefined;
     readonly homeSite?: Site | null | undefined;
     readonly registryAuth?: Buffer | null | undefined;
 }
@@ -153,26 +154,37 @@ const COLUMN_OF: Record<keyof ServiceChanges, string> = {
     registryAuth: 'registry_auth',
 };
 
-/** The changed Service; undefined when there is no such Service. */
+export type UpdateServiceError = 'not-found' | 'routed';
+
+/** The changed Service; `routed` when the change removes the port of a Service a Route serves. */
 export async function updateService(
     pool: pg.Pool,
     projectId: string,
     id: string,
     changes: ServiceChanges,
-): Promise<Service | undefined> {
+): Promise<Result<Service, UpdateServiceError>> {
     const entries = (Object.keys(COLUMN_OF) as (keyof ServiceChanges)[]).filter((key) => changes[key] !== undefined);
     const assignments = [
         ...entries.map((key, i) => `${COLUMN_OF[key]} = $${i + 3}`),
         ...(changes.imageDigest === undefined ? [] : ['deployed_at = now()']),
     ];
-    if (assignments.length === 0) {
-        return getService(pool, projectId, id);
+    const updated =
+        assignments.length === 0
+            ? ok(await getService(pool, projectId, id))
+            : await unlessCodes(
+                  pool
+                      .query<Row>(`update services set ${assignments.join(', ')} where id = $1 and project_id = $2 returning ${COLUMNS}`, [
+                          id,
+                          projectId,
+                          ...entries.map((key) => changes[key]),
+                      ])
+                      .then(({ rows }) => rows.map(toService)[0]),
+                  { [SERVICE_ROUTED]: 'routed' as const },
+              );
+    if (!updated.ok) {
+        return updated;
     }
-    const { rows } = await pool.query<Row>(
-        `update services set ${assignments.join(', ')} where id = $1 and project_id = $2 returning ${COLUMNS}`,
-        [id, projectId, ...entries.map((key) => changes[key])],
-    );
-    return rows.map(toService)[0];
+    return updated.value === undefined ? err('not-found') : ok(updated.value);
 }
 
 export type DeleteServiceOutcome = 'deleted' | 'not-found' | 'routed';
@@ -206,12 +218,25 @@ export const siteOf = (t: string): string =>
         'hetzner-fsn1'
     )`;
 
+/**
+ * The live Databases of the Project of the row aliased `t`, oldest first, as
+ * a JSON array of `{id, name}`: a Service or Job gets a DATABASE_URL for
+ * each (decision 97).
+ */
+export const databasesOf = (t: string): string =>
+    `coalesce(
+        (select json_agg(json_build_object('id', d.id, 'name', d.name) order by d.created_at, d.id)
+         from databases d where d.project_id = ${t}.project_id and d.deleted_at is null),
+        '[]'::json
+    )`;
+
 interface OperatorRow extends Row {
     project_name: string;
     account_id: string;
     project_created_at: Date;
     site: Site;
     secrets_version: string;
+    databases: RowDatabase[];
 }
 
 /**
@@ -225,7 +250,8 @@ export async function listServiceRows(pool: pg.Pool, projectId?: string): Promis
         `select ${columns('s.')},
                 p.name as project_name, p.account_id, p.created_at as project_created_at,
                 ${siteOf('s')} as site,
-                coalesce(p.secrets_version, '') as secrets_version
+                coalesce(p.secrets_version, '') as secrets_version,
+                ${databasesOf('s')} as databases
          from services s join projects p on p.id = s.project_id
          where p.deleted_at is null and ($1::uuid is null or s.project_id = $1)
          order by s.project_id, s.created_at, s.id`,
@@ -254,6 +280,7 @@ export async function listServiceRows(pool: pg.Pool, projectId?: string): Promis
                 pinnedImage: pinnedImage(image.value, service.imageDigest),
                 site: row.site,
                 secretsVersion: row.secrets_version,
+                databases: row.databases,
             },
         ];
     });

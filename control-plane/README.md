@@ -84,7 +84,7 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `POST /v1/projects` | `{accountId, name}` → 201, with its default Domain `<name>-<random>.<CUSTOMER_DOMAIN>`; 409 if the name is taken in the Account |
 | `GET /v1/projects/{id}` | |
 | `DELETE /v1/projects/{id}` | 202: the Project and its Databases and Buckets are deleted, see Cleanup; its Domains and Routes at once |
-| `GET /v1/projects/{id}/databases` | with each Database's `state` and in-cluster `connection` |
+| `GET /v1/projects/{id}/databases` | with each Database's `state` and in-cluster `connection` (no password: the Project's Services and Jobs get the URL as `DATABASE_URL_<NAME>`, the oldest's as `DATABASE_URL`) |
 | `POST /v1/projects/{id}/databases` | `{name, homeSite?, memoryMb, storageGb}` → 201, `state: provisioning`; 402 if the Account has a Hold |
 | `GET /v1/projects/{id}/databases/{id}` | `state` read live from the Cluster |
 | `DELETE /v1/projects/{id}/databases/{id}` | 202 |
@@ -97,12 +97,12 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `POST /v1/projects/{id}/domains/{id}/verify` | looks the TXT record up now → 200 with the Domain verified (it stays so), its Routes served from the next Routes operator pass, with a certificate of its own once its CNAME points at `ingress.<CUSTOMER_DOMAIN>` (set it before the first Route; a failed certificate is retried after an hour); 409 if the record is not there yet (with the values found) or another Project verified the hostname first; 503 if DNS cannot be asked |
 | `DELETE /v1/projects/{id}/domains/{id}` | 204: the custom domain and its Routes; a Bucket left without Routes stops being served by Garage; 409 for the default Domain |
 | `GET /v1/projects/{id}/domains/{id}/routes` | the Domain's Routes, longest prefix first |
-| `POST /v1/projects/{id}/domains/{id}/routes` | `{pathPrefix, bucketId, spaFallback?}` or `{pathPrefix, serviceId}` → 201: the Bucket is served below the prefix (stripped), or the Service gets the requests with their path unchanged, within one Routes operator pass; 400 for a Bucket or Service not in the Project; 409 if the prefix is taken, or if the Bucket's other Routes have another `spaFallback`; 503 if Garage cannot be reached |
+| `POST /v1/projects/{id}/domains/{id}/routes` | `{pathPrefix, bucketId, spaFallback?}` or `{pathPrefix, serviceId}` → 201: the Bucket is served below the prefix (stripped), or the Service gets the requests with their path unchanged, within one Routes operator pass; 400 for a Bucket or Service not in the Project; 409 if the prefix is taken, if the Bucket's other Routes have another `spaFallback`, or if the Service has no port; 503 if Garage cannot be reached |
 | `DELETE /v1/projects/{id}/domains/{id}/routes/{id}` | 204; the Bucket's last Route also stops Garage serving it |
 | `GET /v1/projects/{id}/services` | with each Service's `state`, read live from its Deployment |
-| `POST /v1/projects/{id}/services` | `{name, image, port, memoryMb, cpuMillicores, replicas?, homeSite?, registryAuth?}` → 201, `state: deploying`, the image pinned to the digest its tag points at now (`src/registry.ts`); 400 for an image the registry does not have or will not serve with `registryAuth` (`{username, password}`, never returned), or a registry at a private address; 503 if the registry cannot be reached; 409 if the name is taken in the Project; 402 if the Account has a Hold |
+| `POST /v1/projects/{id}/services` | `{name, image, port?, memoryMb, cpuMillicores, replicas?, homeSite?, registryAuth?}` (without `port`: a worker) → 201, `state: deploying`, the image pinned to the digest its tag points at now (`src/registry.ts`); 400 for an image the registry does not have or will not serve with `registryAuth` (`{username, password}`, never returned), or a registry at a private address; 503 if the registry cannot be reached; 409 if the name is taken in the Project; 402 if the Account has a Hold |
 | `GET /v1/projects/{id}/services/{id}` | `state`: `deploying` (also until the Services operator has applied the latest change: its Deployment carries the spec version of the row), `running`, `degraded`, or `unknown` when Kubernetes cannot be asked |
-| `PATCH /v1/projects/{id}/services/{id}` | any of `image, port, replicas, memoryMb, cpuMillicores, homeSite, registryAuth` (`null` removes the last two); a new image or new credentials resolve the tag again; a new image at another registry without new credentials drops the stored ones |
+| `PATCH /v1/projects/{id}/services/{id}` | any of `image, port, replicas, memoryMb, cpuMillicores, homeSite, registryAuth` (`null` removes `port` and the last two; 409 for `port: null` while a Route serves the Service); a new image or new credentials resolve the tag again; a new image at another registry without new credentials drops the stored ones |
 | `POST /v1/projects/{id}/services/{id}/deploy` | resolves the same tag again and pins what it points at now |
 | `DELETE /v1/projects/{id}/services/{id}` | 202: the row goes at once, the Deployment with the next Services operator pass; 409 while a Route serves it |
 | `GET /v1/projects/{id}/jobs` | with each Job's `state`, read live from its CronJob |
@@ -252,7 +252,10 @@ operator has created it.
 ## Tests
 
 The schema and store tests run against a real Postgres. Each test file
-creates its own database and drops it afterwards.
+creates its own database and drops it afterwards, once every connection of
+its pool has closed: `pg`'s `pool.end()` returns before they have, and
+`drop database … with (force)` would terminate one still closing, an error
+that ends the test run.
 
 - With `TEST_DATABASE_URL` set (CI does this), they use that server.
 - Otherwise they start `postgres:17-alpine` in Docker with

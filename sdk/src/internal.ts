@@ -4,7 +4,7 @@
  * public API: it is served on its own port, never routed by ingress, and
  * callers authenticate with their Kubernetes ServiceAccount token.
  */
-import type { Account, Database, Domain, Id, Job, Member, Project, Route, Service, Site } from './model.js';
+import type { Account, Database, DatabaseConnection, Domain, Id, Job, Member, Project, Route, Service, Site } from './model.js';
 
 /**
  * Kubernetes names, by id (ARCHITECTURE.md, decision 42): the operators
@@ -17,6 +17,17 @@ export const clusterName = (database: Pick<Database, 'id'>): string => `db-${dat
 
 /** Cannot share the Cluster's name, nor `<cluster>-rw`, which the Cluster's own Service takes. */
 export const poolerName = (database: Pick<Database, 'id'>): string => `${clusterName(database)}-pooler`;
+
+/** The Secret CloudNativePG keeps the Database's `app` user in, with its generated `password`. */
+export const databaseAppSecret = (database: Pick<Database, 'id'>): string => `${clusterName(database)}-app`;
+
+/** Where the Project's Services and Jobs reach the Database: its Pooler, inside the cluster. */
+export const databaseConnection = (database: Pick<Database, 'id' | 'projectId'>): DatabaseConnection => ({
+    host: `${poolerName(database)}.${projectNamespace(database.projectId)}.svc.cluster.local`,
+    port: 5432,
+    database: 'app',
+    user: 'app',
+});
 
 /**
  * The Kubernetes Secret in a Project's namespace that holds all its Secrets'
@@ -121,7 +132,12 @@ export interface ServiceRow {
      * Service and its pods read the new values.
      */
     readonly secretsVersion: string;
+    /** The Project's live Databases, oldest first: the Service gets a DATABASE_URL for each (decision 97). */
+    readonly databases: readonly RowDatabase[];
 }
+
+/** A Database as a Service's or Job's row names it. */
+export type RowDatabase = Pick<Database, 'id' | 'name'>;
 
 /** On a Service's Deployment and a Job's CronJob: the spec version it was applied from (serviceSpecVersion, jobSpecVersion). */
 export const SPEC_VERSION_ANNOTATION = 'openupstream.io/spec-version';
@@ -132,8 +148,17 @@ export const SPEC_VERSION_ANNOTATION = 'openupstream.io/spec-version';
  * `deploying` until the Deployment carries the version its row asks for,
  * so a change is not `running` before it has been applied and rolled out.
  */
-export const serviceSpecVersion = (row: Pick<ServiceRow, 'service' | 'pinnedImage' | 'site' | 'secretsVersion'>): string =>
-    [row.pinnedImage, row.service.replicas, row.service.memoryMb, row.service.cpuMillicores, row.service.port, row.site, row.secretsVersion].join('|');
+export const serviceSpecVersion = (row: Pick<ServiceRow, 'service' | 'pinnedImage' | 'site' | 'secretsVersion' | 'databases'>): string =>
+    [
+        row.pinnedImage,
+        row.service.replicas,
+        row.service.memoryMb,
+        row.service.cpuMillicores,
+        row.service.port,
+        row.site,
+        row.secretsVersion,
+        ...row.databases.map((database) => `${database.id}=${database.name}`),
+    ].join('|');
 
 /** One Job as the Jobs operator needs it. */
 export interface JobRow {
@@ -146,6 +171,8 @@ export interface JobRow {
     readonly pinnedImage: string;
     /** Where its runs go: the Job's homeSite, else the Project's oldest Database's, else `hetzner-fsn1`. */
     readonly site: Site;
+    /** The Project's live Databases, oldest first: its runs get a DATABASE_URL for each (decision 97). */
+    readonly databases: readonly RowDatabase[];
 }
 
 /**
@@ -155,7 +182,7 @@ export interface JobRow {
  * template. The Secrets are not part of it: a run's pod reads them when it
  * starts, so nothing needs to change when they do.
  */
-export const jobSpecVersion = (row: Pick<JobRow, 'job' | 'pinnedImage' | 'site'>): string =>
+export const jobSpecVersion = (row: Pick<JobRow, 'job' | 'pinnedImage' | 'site' | 'databases'>): string =>
     JSON.stringify([
         row.pinnedImage,
         row.job.command,
@@ -166,6 +193,7 @@ export const jobSpecVersion = (row: Pick<JobRow, 'job' | 'pinnedImage' | 'site'>
         row.job.schedule,
         row.job.timeZone,
         row.site,
+        row.databases,
     ]);
 
 export interface DatabaseRow {

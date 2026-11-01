@@ -2,7 +2,15 @@
  * What every operator shares about the cluster: how Sites and Projects appear
  * in Kubernetes, and the shape of a manifest.
  */
-import { COMPUTE_SITES, type Id, type Project, projectNamespace as namespaceOf } from '@openupstream/sdk';
+import {
+    COMPUTE_SITES,
+    type Id,
+    type Project,
+    type RowDatabase,
+    databaseAppSecret,
+    databaseConnection,
+    projectNamespace as namespaceOf,
+} from '@openupstream/sdk';
 
 /** Each Site is one zone; every node carries its Site's name in this label. */
 export const ZONE_LABEL = 'topology.kubernetes.io/zone';
@@ -171,3 +179,32 @@ export const customerEgressPolicy = (projectId: Id, name: string, component: str
         ],
     },
 });
+
+/** `DATABASE_URL_<NAME>`'s suffix: the Database's name upper-cased, `-` as `_`. */
+const envSuffix = (database: Pick<RowDatabase, 'name'>): string => database.name.toUpperCase().replaceAll('-', '_');
+
+export type EnvVar = { readonly name: string; readonly value: string } | { readonly name: string; readonly valueFrom: unknown };
+
+/**
+ * The environment a Service's or Job's container gets for its Project's
+ * Databases (decision 97): `DATABASE_URL_<NAME>` for each, and the oldest
+ * one's also as `DATABASE_URL`. The password comes from CloudNativePG's
+ * Secret of the Database through a secretKeyRef, as
+ * `OUP_DATABASE_PASSWORD_<NAME>`, and is put into the URL by Kubernetes'
+ * `$(VAR)` expansion, so it never passes through the control plane or an
+ * operator. It goes in unencoded: CloudNativePG generates letters and
+ * digits only. A pod waits until that Secret exists. Set with `env`, these
+ * win over a Project Secret of the same name.
+ */
+export function databaseEnv(projectId: Id, databases: readonly RowDatabase[]): EnvVar[] {
+    const pairs = databases.map((database): [EnvVar, { name: string; value: string }] => {
+        const password = `OUP_DATABASE_PASSWORD_${envSuffix(database)}`;
+        const { host, port, database: name, user } = databaseConnection({ id: database.id, projectId });
+        return [
+            { name: password, valueFrom: { secretKeyRef: { name: databaseAppSecret(database), key: 'password' } } },
+            { name: `DATABASE_URL_${envSuffix(database)}`, value: `postgres://${user}:$(${password})@${host}:${port}/${name}` },
+        ];
+    });
+    const oldest = pairs[0]?.[1];
+    return [...pairs.flat(), ...(oldest === undefined ? [] : [{ name: 'DATABASE_URL', value: oldest.value }])];
+}

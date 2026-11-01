@@ -8,12 +8,12 @@
  * within one pass, and Kubernetes its runs with it, since they are the
  * CronJob's (decision 95).
  */
-import type { Job, JobRow, Site } from '@openupstream/sdk';
+import type { Job, JobRow, RowDatabase, Site } from '@openupstream/sdk';
 import type pg from 'pg';
 import { ACCOUNT_HELD, FOREIGN_KEY_VIOLATION, UNIQUE_VIOLATION, unlessCodes } from '../db/errors.js';
 import { parseImageReference, pinnedImage } from '../registry.js';
 import { type Result, ok } from '../result.js';
-import { siteOf } from '../services/store.js';
+import { databasesOf, siteOf } from '../services/store.js';
 
 interface Row {
     id: string;
@@ -204,6 +204,7 @@ interface OperatorRow extends Row {
     account_id: string;
     project_created_at: Date;
     site: Site;
+    databases: RowDatabase[];
 }
 
 /**
@@ -215,7 +216,8 @@ export async function listJobRows(pool: pg.Pool, projectId?: string): Promise<Jo
     const { rows } = await pool.query<OperatorRow>(
         `select ${columns('j.')},
                 p.name as project_name, p.account_id, p.created_at as project_created_at,
-                ${siteOf('j')} as site
+                ${siteOf('j')} as site,
+                ${databasesOf('j')} as databases
          from jobs j join projects p on p.id = j.project_id
          where p.deleted_at is null and ($1::uuid is null or j.project_id = $1)
          order by j.project_id, j.created_at, j.id`,
@@ -246,6 +248,7 @@ export async function listJobRows(pool: pg.Pool, projectId?: string): Promise<Jo
                 },
                 pinnedImage: pinnedImage(image.value, job.imageDigest),
                 site: row.site,
+                databases: row.databases,
             },
         ];
     });
