@@ -86,12 +86,17 @@ export function runManifest(
 
 const timestamp = (value: Date | undefined): string | null => (value === undefined ? null : new Date(value).toISOString());
 
-/** The run a Kubernetes Job of the Job's is, as the API reports it. */
+/**
+ * The run a Kubernetes Job of the Job's is, as the API reports it. The
+ * outcome is known from `SuccessCriteriaMet` and `FailureTarget` on: the
+ * Job controller sets them while it stops the pod, a moment before
+ * `Complete` or `Failed`, and no pod is ready in between.
+ */
 export function runOf(job: KubeJob): JobRun {
     const conditions = job.status?.conditions ?? [];
     const holds = (type: string) => conditions.find((condition) => condition.type === type && condition.status === 'True');
-    const complete = holds('Complete');
-    const failed = holds('Failed');
+    const complete = holds('Complete') ?? holds('SuccessCriteriaMet');
+    const failed = holds('Failed') ?? holds('FailureTarget');
     const base = {
         id: job.metadata.name,
         jobId: job.metadata.labels?.[JOB_ID_LABEL] ?? '',
