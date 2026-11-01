@@ -15,11 +15,11 @@ import { waitUntil } from './wait.js';
 /** What a new Service gets for the flags left out. */
 export const DEFAULTS = { replicas: 1, memoryMb: 256, cpuMillicores: 250 } as const;
 
-/** What the flags ask for; `undefined`: keep what the Service has (or the default). */
+/** What the flags ask for; `undefined`: keep what the Service has (or the default); `port: null`: a worker. */
 export interface DesiredService {
     readonly name: string;
     readonly image: string;
-    readonly port?: number;
+    readonly port?: number | null;
     readonly replicas?: number;
     readonly memoryMb?: number;
     readonly cpuMillicores?: number;
@@ -36,14 +36,14 @@ export type DeployPlan =
 export function planServiceDeploy(existing: ServiceDetails | undefined, desired: DesiredService): DeployPlan {
     if (existing === undefined) {
         if (desired.port === undefined) {
-            return { kind: 'invalid', reason: `a new Service needs --port, the port its container listens on` };
+            return { kind: 'invalid', reason: `a new Service needs --port, the port its container listens on, or --no-port for a worker` };
         }
         return {
             kind: 'create',
             input: {
                 name: desired.name,
                 image: desired.image,
-                port: desired.port,
+                ...(desired.port === null ? {} : { port: desired.port }),
                 replicas: desired.replicas ?? DEFAULTS.replicas,
                 memoryMb: desired.memoryMb ?? DEFAULTS.memoryMb,
                 cpuMillicores: desired.cpuMillicores ?? DEFAULTS.cpuMillicores,
@@ -58,7 +58,7 @@ export function planServiceDeploy(existing: ServiceDetails | undefined, desired:
         memoryMb: desired.memoryMb,
         cpuMillicores: desired.cpuMillicores,
         homeSite: desired.homeSite,
-    }) as [keyof ServicePatch, number | Site | undefined][]).filter(([key, value]) => value !== undefined && existing[key as keyof ServiceDetails] !== value);
+    }) as [keyof ServicePatch, number | Site | null | undefined][]).filter(([key, value]) => value !== undefined && existing[key as keyof ServiceDetails] !== value);
     if (changed.length === 0 && desired.image === existing.image && desired.registryAuth === undefined) {
         return { kind: 'redeploy', serviceId: existing.id };
     }

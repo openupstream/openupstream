@@ -27,6 +27,13 @@ test('a new Service is created with the defaults for what the flags leave out; i
         input: { name: 'api', image: 'nginx', port: 80, ...DEFAULTS },
     });
     assert.equal(planServiceDeploy(undefined, { name: 'api', image: 'nginx' }).kind, 'invalid');
+    const worker = planServiceDeploy(undefined, { name: 'worker', image: 'nginx', port: null });
+    assert.ok(worker.kind === 'create' && !('port' in worker.input), 'a worker is created without a port');
+    assert.deepEqual(planServiceDeploy(existing, { name: 'api', image: 'ghcr.io/acme/api:v1', port: null }), {
+        kind: 'update',
+        serviceId: existing.id,
+        patch: { port: null, image: 'ghcr.io/acme/api:v1' },
+    });
 });
 
 test('the same settings deploy the tag again; flags left out keep what the Service has', () => {

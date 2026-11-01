@@ -57,6 +57,17 @@ test("a Project's namespace and NetworkPolicies first, then each Service's Deplo
     );
 });
 
+test('a worker without a port gets no Kubernetes Service, no container port and no readiness probe', () => {
+    const plan = planServices([row({ port: null })]);
+    assert.deepEqual(plan.filter((o) => o.kind === 'Service'), []);
+    const container = podOf(plan.find((o) => o.kind === 'Deployment')).spec.containers[0] as Record<string, unknown> | undefined;
+    assert.equal(container?.['ports'], undefined);
+    assert.equal(container?.['readinessProbe'], undefined);
+    const spec = plan.find((o) => o.kind === 'Deployment')?.['spec'] as { minReadySeconds?: number };
+    assert.equal(spec.minReadySeconds, 10, 'a worker that crashes at start does not replace the old pods');
+    assert.equal((planServices([row()]).find((o) => o.kind === 'Deployment')?.['spec'] as { minReadySeconds?: number }).minReadySeconds, undefined);
+});
+
 test("the container gets a DATABASE_URL per Database of the Project, the oldest's also as DATABASE_URL, without a password in the manifest", () => {
     assert.equal(podOf(planServices([row()]).find((o) => o.kind === 'Deployment')).spec.containers[0]?.env, undefined);
     const databases = [
