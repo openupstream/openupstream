@@ -30,6 +30,7 @@ const row = (overrides: Partial<JobRow['job']> = {}): JobRow => ({
     },
     pinnedImage: `ghcr.io/acme/api@${digest}`,
     site: 'ovh-lim',
+    databases: [],
 });
 
 interface CronJobSpec {
@@ -53,7 +54,7 @@ interface CronJobSpec {
                     automountServiceAccountToken: boolean;
                     imagePullSecrets: unknown;
                     affinity: { nodeAffinity: { preferredDuringSchedulingIgnoredDuringExecution: unknown } };
-                    containers: { image: string; command?: string[]; args?: string[]; envFrom: unknown; resources: unknown }[];
+                    containers: { image: string; command?: string[]; args?: string[]; env?: { name: string }[]; envFrom: unknown; resources: unknown }[];
                 };
             };
         };
@@ -124,6 +125,13 @@ test('runs carry the Job id the control plane lists them by, and the label the e
     }
     const egress = planJobs([row()]).find((o) => o.metadata.name === 'job-egress');
     assert.deepEqual((egress?.['spec'] as { podSelector: unknown }).podSelector, { matchLabels: { 'openupstream.io/component': 'jobs' } });
+});
+
+test("a run gets the Project's DATABASE_URLs as a Service does", () => {
+    const databases = [{ id: '44444444-4444-4444-8444-444444444444', name: 'main' }];
+    const container = specOf(cronJobOf([{ ...row(), databases }])).jobTemplate.spec.template.spec.containers[0];
+    assert.deepEqual(container?.env?.map((variable) => variable.name), ['OUP_DATABASE_PASSWORD_MAIN', 'DATABASE_URL_MAIN', 'DATABASE_URL']);
+    assert.equal(specOf(cronJobOf([row()])).jobTemplate.spec.template.spec.containers[0]?.env, undefined);
 });
 
 test('the CronJob carries the spec version the control plane compares its row with', () => {

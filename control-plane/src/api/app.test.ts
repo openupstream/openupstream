@@ -967,6 +967,15 @@ describe('Services', () => {
         assert.equal(await site(), 'hetzner-fsn1');
     });
 
+    test("the Service's row names the Project's live Databases, oldest first", async () => {
+        const created = await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name: 'events-db', memoryMb: 256, storageGb: 1 });
+        const second = (await created.json()) as { id: string };
+        const databases = async () => (await listServiceRows(db.pool)).find((row) => row.service.id === service.id)?.databases.map((d) => d.name);
+        assert.deepEqual(await databases(), ['main', 'events-db']);
+        assert.equal((await call('DELETE', `/v1/projects/${projectId}/databases/${second.id}`, 'alice')).status, 202);
+        assert.deepEqual(await databases(), ['main']);
+    });
+
     test('a Route sends a prefix to the Service, which cannot be deleted while it does', async () => {
         const [domain] = (await (await call('GET', `/v1/projects/${projectId}/domains`, 'alice')).json()) as Domain[];
         assert.ok(domain);
@@ -1052,6 +1061,18 @@ describe('Jobs', () => {
         const listed = (await (await call('GET', path(), 'alice')).json()) as JobDetails[];
         assert.deepEqual(listed.map((candidate) => [candidate.name, candidate.state]), [['nightly', 'deploying']]);
         cronJobs.delete(`job-${job.id}`);
+    });
+
+    test("a new Database changes the Job's spec, so its runs get its DATABASE_URL only once applied", async () => {
+        const rowNow = async () => (await listJobRows(db.pool, projectId)).find((candidate) => candidate.job.id === job.id);
+        const before = await rowNow();
+        assert.deepEqual(before?.databases, []);
+        const created = await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name: 'jobs-db', memoryMb: 256, storageGb: 1 });
+        const database = (await created.json()) as { id: string };
+        const after = await rowNow();
+        assert.deepEqual(after?.databases, [{ id: database.id, name: 'jobs-db' }]);
+        assert.ok(before !== undefined && after !== undefined && jobSpecVersion(before) !== jobSpecVersion(after));
+        assert.equal((await call('DELETE', `/v1/projects/${projectId}/databases/${database.id}`, 'alice')).status, 202);
     });
 
     test('schedules, time zones, command and timeout are checked before anything is written', async () => {

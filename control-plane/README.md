@@ -84,7 +84,7 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `POST /v1/projects` | `{accountId, name}` → 201, with its default Domain `<name>-<random>.<CUSTOMER_DOMAIN>`; 409 if the name is taken in the Account |
 | `GET /v1/projects/{id}` | |
 | `DELETE /v1/projects/{id}` | 202: the Project and its Databases and Buckets are deleted, see Cleanup; its Domains and Routes at once |
-| `GET /v1/projects/{id}/databases` | with each Database's `state` and in-cluster `connection` |
+| `GET /v1/projects/{id}/databases` | with each Database's `state` and in-cluster `connection` (no password: the Project's Services and Jobs get the URL as `DATABASE_URL_<NAME>`, the oldest's as `DATABASE_URL`) |
 | `POST /v1/projects/{id}/databases` | `{name, homeSite?, memoryMb, storageGb}` → 201, `state: provisioning`; 402 if the Account has a Hold |
 | `GET /v1/projects/{id}/databases/{id}` | `state` read live from the Cluster |
 | `DELETE /v1/projects/{id}/databases/{id}` | 202 |

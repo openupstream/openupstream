@@ -31,6 +31,7 @@ import {
     MANAGED_BY,
     ZONE_LABEL,
     customerEgressPolicy,
+    databaseEnv,
     projectNamespace,
     projectObjectsFor,
     requireComputeSite,
@@ -120,9 +121,10 @@ const deployment = (row: ServiceRow): KubeObject => {
                         {
                             name: 'app',
                             image: row.pinnedImage,
-                            // A worker has no port: nothing probes it, and it is ready once it runs.
+                            // A worker has no port: nothing probes it (minReadySeconds below stands in).
                             ...(service.port === null ? {} : { ports: [{ name: 'http', containerPort: service.port, protocol: 'TCP' }] }),
                             envFrom: [{ secretRef: { name: PROJECT_SECRETS } }],
+                            ...(row.databases.length === 0 ? {} : { env: databaseEnv(row.project.id, row.databases) }),
                             // The limits are what is reserved and billed (memory_gb_hours); no Service takes another's CPU.
                             resources: { requests: resources, limits: resources },
                             ...(service.port === null ? {} : { readinessProbe: { tcpSocket: { port: 'http' }, periodSeconds: 5 } }),
