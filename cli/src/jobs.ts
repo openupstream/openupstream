@@ -19,7 +19,8 @@ export const DEFAULTS = { memoryMb: SERVICE_DEFAULTS.memoryMb, cpuMillicores: SE
 export interface DesiredJob {
     readonly name: string;
     readonly image: string;
-    readonly command?: readonly string[];
+    /** null: the image's entrypoint again. */
+    readonly command?: readonly string[] | null;
     readonly memoryMb?: number;
     readonly cpuMillicores?: number;
     readonly timeoutSeconds?: number;
@@ -46,7 +47,7 @@ export function planJobDeploy(existing: Job | undefined, desired: DesiredJob): J
                 image,
                 memoryMb: settings.memoryMb ?? DEFAULTS.memoryMb,
                 cpuMillicores: settings.cpuMillicores ?? DEFAULTS.cpuMillicores,
-                ...(settings.command === undefined ? {} : { command: [...settings.command] }),
+                ...(settings.command === undefined || settings.command === null ? {} : { command: [...settings.command] }),
                 ...(settings.timeoutSeconds === undefined ? {} : { timeoutSeconds: settings.timeoutSeconds }),
                 ...(schedule === undefined || schedule === null ? {} : { schedule }),
                 ...(settings.timeZone === undefined ? {} : { timeZone: settings.timeZone }),
@@ -81,6 +82,35 @@ export function parseEnv(pairs: readonly string[]): Result<Record<string, string
     }
     return ok(Object.fromEntries(entries));
 }
+
+/** The flags each `oup job` verb takes; any other is refused rather than ignored. */
+export const JOB_FLAGS = {
+    list: ['project'],
+    show: ['project'],
+    runs: ['project'],
+    stop: ['project'],
+    delete: ['project'],
+    deploy: [
+        'project',
+        'image',
+        'schedule',
+        'no-schedule',
+        'time-zone',
+        'timeout',
+        'memory',
+        'cpu',
+        'site',
+        'no-command',
+        'registry-user',
+        'registry-password-stdin',
+        'no-wait',
+    ],
+    run: ['project', 'env', 'no-wait'],
+} as const;
+
+/** The first given flag the verb does not take; undefined when there is none. */
+export const strayFlag = (verb: keyof typeof JOB_FLAGS, given: Readonly<Record<string, unknown>>): string | undefined =>
+    Object.keys(given).find((flag) => given[flag] !== undefined && !(JOB_FLAGS[verb] as readonly string[]).includes(flag));
 
 /** Splits arguments at the first `--`: what comes after is a command or args, never flags. */
 export const splitAtDashes = (args: readonly string[]): { readonly flags: string[]; readonly rest: string[] | undefined } => {

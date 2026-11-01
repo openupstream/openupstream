@@ -42,7 +42,18 @@ import { credentialsPath, readCredentials, removeCredentials, writeCredentials }
 import { deploy } from './deploy.js';
 import { discover, emailOf, startDeviceSignIn, waitForApproval } from './oidc.js';
 import { projectFor, resolveProject, writeLink } from './project.js';
-import { type DesiredJob, formatJobs, formatRuns, isFinished, outcomeOf, parseEnv, planJobDeploy, splitAtDashes } from './jobs.js';
+import {
+    type DesiredJob,
+    JOB_FLAGS,
+    formatJobs,
+    formatRuns,
+    isFinished,
+    outcomeOf,
+    parseEnv,
+    planJobDeploy,
+    splitAtDashes,
+    strayFlag,
+} from './jobs.js';
 import { type DesiredService, formatServices, planServiceDeploy, waitUntilRunning } from './services.js';
 import { apiAccess } from './session.js';
 import { readSecretValue } from './stdin.js';
@@ -61,7 +72,7 @@ const USAGE = `usage:
   oup job show <name>
   oup job deploy <name> --image <ref> [--schedule <cron> | --no-schedule] [--time-zone <IANA name>]
                  [--timeout <seconds>] [--memory <MB>] [--cpu <millicores>] [--site hetzner-fsn1|ovh-lim]
-                 [--registry-user <user> --registry-password-stdin] [--no-wait] [-- <command> <arg>…]
+                 [--registry-user <user> --registry-password-stdin] [--no-wait] [--no-command | -- <command> <arg>…]
   oup job run <name> [--env NAME=value]… [--no-wait] [-- <arg>…]
   oup job runs <name>
   oup job stop <name> <run>
@@ -326,6 +337,7 @@ async function job(args: string[]): Promise<void> {
             memory: { type: 'string' },
             cpu: { type: 'string' },
             site: { type: 'string' },
+            'no-command': { type: 'boolean' },
             env: { type: 'string', multiple: true },
             'registry-user': { type: 'string' },
             'registry-password-stdin': { type: 'boolean' },
@@ -333,8 +345,12 @@ async function job(args: string[]): Promise<void> {
         },
     });
     const [name, runId] = positionals;
-    if (verb !== 'list' && name === undefined) {
+    if (verb === undefined || !Object.hasOwn(JOB_FLAGS, verb) || (verb !== 'list' && name === undefined)) {
         return fail(USAGE);
+    }
+    const stray = strayFlag(verb as keyof typeof JOB_FLAGS, values);
+    if (stray !== undefined || (trailing !== undefined && verb !== 'deploy' && verb !== 'run')) {
+        return fail(`oup job ${verb} does not take ${stray === undefined ? 'arguments after --' : `--${stray}`}`);
     }
     const { client, project } = await inProject(values.project);
     const jobs = await client.listJobs(project.id);
@@ -392,6 +408,7 @@ async function jobDeploy(
         memory?: string;
         cpu?: string;
         site?: string;
+        'no-command'?: boolean;
         'registry-user'?: string;
         'registry-password-stdin'?: boolean;
         'no-wait'?: boolean;
@@ -399,6 +416,9 @@ async function jobDeploy(
 ): Promise<void> {
     if (flags.image === undefined) {
         return fail('oup job deploy needs --image');
+    }
+    if (flags.command !== undefined && flags['no-command'] === true) {
+        return fail('a command after -- and --no-command exclude each other');
     }
     if (flags.schedule !== undefined && flags['no-schedule'] === true) {
         return fail('--schedule and --no-schedule exclude each other');
@@ -417,7 +437,7 @@ async function jobDeploy(
     const desired: DesiredJob = {
         name: flags.name,
         image: flags.image,
-        ...(flags.command === undefined ? {} : { command: flags.command }),
+        ...(flags['no-command'] === true ? { command: null } : flags.command === undefined ? {} : { command: flags.command }),
         ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
         ...(memoryMb === undefined ? {} : { memoryMb }),
         ...(cpuMillicores === undefined ? {} : { cpuMillicores }),

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { JobDetails, JobRun } from '@openupstream/sdk';
-import { DEFAULTS, formatJobs, formatRuns, isFinished, outcomeOf, parseEnv, planJobDeploy, splitAtDashes } from './jobs.js';
+import { DEFAULTS, formatJobs, formatRuns, isFinished, outcomeOf, parseEnv, planJobDeploy, splitAtDashes, strayFlag } from './jobs.js';
 import { waitUntil } from './wait.js';
 
 const existing: JobDetails = {
@@ -110,4 +110,31 @@ test('a run is waited for until it has finished, either way', async () => {
     });
     assert.equal(done.ok && done.value.state, 'failed');
     assert.deepEqual(reported, ['pending', 'running', 'failed']);
+});
+
+test('--no-command goes back to the image entrypoint', () => {
+    assert.deepEqual(planJobDeploy(existing, { name: 'nightly', image: existing.image, command: null }), {
+        kind: 'update',
+        jobId: existing.id,
+        patch: { command: null, image: existing.image },
+    });
+    assert.equal(planJobDeploy(undefined, { name: 'n', image: 'nginx', command: null }).kind, 'create');
+});
+
+test("a flag of another verb is refused, not ignored", () => {
+    assert.equal(strayFlag('deploy', { image: 'x', env: ['A=1'] }), 'env');
+    assert.equal(strayFlag('run', { schedule: '@daily' }), 'schedule');
+    assert.equal(strayFlag('run', { env: ['A=1'], 'no-wait': true, project: 'shop' }), undefined);
+    assert.equal(strayFlag('list', { project: undefined }), undefined);
+});
+
+test('a run that is gone ends the wait at once', async () => {
+    let reads = 0;
+    const gone = await waitUntil(
+        async () => (++reads === 1 ? { ok: true, value: run({ state: 'running' }) } : { ok: false, error: { status: 404, message: 'not found' } }),
+        isFinished,
+        { timeoutMs: 60_000, intervalMs: 1, report: () => undefined },
+    );
+    assert.deepEqual(gone, { ok: false, error: 'gone: not found' });
+    assert.equal(reads, 2);
 });

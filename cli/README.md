@@ -42,11 +42,13 @@ oup site deploy dist --bucket my-site
 - `oup job deploy <name> --image <ref> [--schedule <cron> | --no-schedule]
   [--time-zone <IANA name>] [--timeout <seconds>] [--memory <MB>]
   [--cpu <millicores>] [--site hetzner-fsn1|ovh-lim] [--registry-user <user>
-  --registry-password-stdin] [--no-wait] [-- <command> <arg>…]`: brings the
+  --registry-password-stdin] [--no-wait] [--no-command | -- <command>
+  <arg>…]`: brings the
   Job to what the flags say, as `oup service deploy` does for a Service
   (ARCHITECTURE.md, decision 95). What follows `--` replaces the image's
   entrypoint; without it the Job keeps its command (the image's on
-  creation). A Job with `--schedule` is a Cron job; `--no-schedule` makes it
+  creation), and `--no-command` goes back to the image's. A flag another
+  verb takes is refused, not ignored. A Job with `--schedule` is a Cron job; `--no-schedule` makes it
   run only when started. Memory and CPU default to 256 MB and 250
   millicores, the timeout to an hour. Then it waits until the Job is ready
   to run (up to 2 minutes), unless `--no-wait`.
@@ -54,7 +56,8 @@ oup site deploy dist --bucket my-site
   One-off job, with the args after `--` instead of the Job's and the
   variables added to its environment, and waits until it has finished:
   exit 0 when it succeeded, 1 when it failed or timed out, so a CI step
-  (a migration) fails with it. `--no-wait` prints the run's id and returns.
+  (a migration) fails with it; a run stopped meanwhile ends the wait at
+  once. `--no-wait` prints the run's id and returns.
 - `oup job list`, `oup job show <name>` (JSON), `oup job runs <name>` (the
   last day's runs, scheduled and started, newest first), `oup job stop
   <name> <run>` (stops and removes a run), `oup job delete <name>` (and
