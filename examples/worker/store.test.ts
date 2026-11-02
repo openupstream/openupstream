@@ -78,7 +78,7 @@ test('a task another worker holds is skipped, not waited for', async () => {
     assert.equal(await b.takeOne(noWork), false);
     holding.open();
     assert.equal(await first, true);
-    assert.deepEqual(await a.progress(batch), { done: 2, byWorker: { a: 1, b: 1 } });
+    assert.deepEqual(await a.progress(batch), { done: 2, open: 0, byWorker: { a: 1, b: 1 } });
     const { rows } = await pool.query<{ payload: string; result: string }>('select payload, result from tasks');
     assert.ok(rows.every((row) => row.result === digest(row.payload)));
 });
@@ -107,9 +107,9 @@ test('a task whose work fails stays open for the next worker', async () => {
     await reset();
     const batch = await queue.enqueue(1);
     await assert.rejects(queue.takeOne(() => Promise.reject(new Error('worker crashed'))), /worker crashed/);
-    assert.deepEqual(await queue.progress(batch), { done: 0, byWorker: {} });
+    assert.deepEqual(await queue.progress(batch), { done: 0, open: 1, byWorker: {} });
     assert.equal(await queue.takeOne(noWork), true);
-    assert.deepEqual(await queue.progress(batch), { done: 1, byWorker: { a: 1 } });
+    assert.deepEqual(await queue.progress(batch), { done: 1, open: 0, byWorker: { a: 1 } });
 });
 
 test('cleanup deletes only tasks done longer ago than its hours', async () => {

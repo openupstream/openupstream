@@ -1,7 +1,6 @@
 /** The task queue in Postgres, through the Project's Pooler (DATABASE_URL). */
 import { randomUUID } from 'node:crypto';
-import pg from 'pg';
-import { log } from '../shared/http.js';
+import type pg from 'pg';
 import type { Progress, Task, TaskQueue } from './tasks.js';
 
 const SCHEMA = [
@@ -21,22 +20,6 @@ const SCHEMA = [
 
 /** Any number shared by the worker and its jobs: they create the table one at a time. */
 const SCHEMA_LOCK = 4_242_002;
-
-/**
- * The pool for DATABASE_URL, or undefined when it is not set. Short
- * timeouts: during a failover a query fails fast and the retry reaches the
- * new primary.
- */
-export function poolFromEnv(env: NodeJS.ProcessEnv = process.env): pg.Pool | undefined {
-    const url = env['DATABASE_URL'];
-    if (url === undefined || url === '') {
-        return undefined;
-    }
-    const pool = new pg.Pool({ connectionString: url, max: 2, connectionTimeoutMillis: 5000, query_timeout: 10_000 });
-    // An idle connection the Pooler drops must not end the process.
-    pool.on('error', (error) => log({ msg: 'idle database connection lost', error: error.message }));
-    return pool;
-}
 
 /**
  * Runs `steps` in one transaction on one connection. On a failure it rolls
@@ -97,13 +80,16 @@ export async function postgresQueue(pool: pg.Pool, worker: string): Promise<Task
             return batch;
         },
         progress: async (batch): Promise<Progress> => {
-            const { rows } = await pool.query<{ worker: string; done: number }>(
-                'select worker, count(*)::int as done from tasks where batch = $1 and done_at is not null group by worker order by worker',
+            // The open tasks are the group without a worker.
+            const { rows } = await pool.query<{ worker: string | null; tasks: number }>(
+                'select worker, count(*)::int as tasks from tasks where batch = $1 group by worker order by worker',
                 [batch],
             );
+            const done = rows.filter((row): row is { worker: string; tasks: number } => row.worker !== null);
             return {
-                done: rows.reduce((sum, row) => sum + row.done, 0),
-                byWorker: Object.fromEntries(rows.map((row) => [row.worker, row.done])),
+                done: done.reduce((sum, row) => sum + row.tasks, 0),
+                open: rows.find((row) => row.worker === null)?.tasks ?? 0,
+                byWorker: Object.fromEntries(done.map((row) => [row.worker, row.tasks])),
             };
         },
         deleteDone: async (hours) =>

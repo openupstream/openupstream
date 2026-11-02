@@ -4,7 +4,8 @@
  * would. `oup job run cleanup -- 0` deletes every done task at once.
  */
 import { log } from '../shared/http.js';
-import { poolFromEnv, postgresQueue } from './store.js';
+import { poolFromEnv } from '../shared/database.js';
+import { postgresQueue } from './store.js';
 import { parseWhole } from './tasks.js';
 
 const hours = parseWhole(process.argv[2], 'the hours a done task is kept', 24, 0, 24 * 365);
@@ -12,7 +13,7 @@ if (!hours.ok) {
     log({ msg: hours.error });
     process.exit(2);
 }
-const pool = poolFromEnv();
+const pool = poolFromEnv(2);
 if (pool === undefined) {
     log({ msg: 'DATABASE_URL is not set: give the Project a Database' });
     process.exit(1);

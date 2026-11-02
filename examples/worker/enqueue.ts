@@ -6,7 +6,8 @@
  * workers, the Job's timeout fails the run.
  */
 import { log } from '../shared/http.js';
-import { poolFromEnv, postgresQueue } from './store.js';
+import { poolFromEnv } from '../shared/database.js';
+import { postgresQueue } from './store.js';
 import { parseWhole, waitForBatch } from './tasks.js';
 
 const count = parseWhole(process.argv[2], 'the number of tasks', 10, 1, 10_000);
@@ -14,7 +15,7 @@ if (!count.ok) {
     log({ msg: count.error });
     process.exit(2);
 }
-const pool = poolFromEnv();
+const pool = poolFromEnv(2);
 if (pool === undefined) {
     log({ msg: 'DATABASE_URL is not set: give the Project a Database' });
     process.exit(1);

@@ -111,7 +111,9 @@ mode, which has no `LISTEN`, so the worker polls. It reads `DATABASE_URL`
 (decision 97) and creates its table on start, as do the Jobs. `WORK_MS`
 (default 100) is how long a task takes, so the share of each replica
 shows. On SIGTERM it finishes the task at hand and ends; while the
-database is away it logs and retries every 2 s.
+database is away, at start too, it logs and retries every 2 s. `enqueue`
+waits until no task of its batch is open, so a `cleanup` meanwhile does
+not keep it waiting.
 
 On the platform, with a Database in the Project:
 

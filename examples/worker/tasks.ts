@@ -12,6 +12,8 @@ export interface Task {
 
 export interface Progress {
     readonly done: number;
+    /** Tasks of the batch not done yet. */
+    readonly open: number;
     /** Done tasks per worker, the pod's hostname. */
     readonly byWorker: Readonly<Record<string, number>>;
 }
@@ -47,9 +49,12 @@ export function parseWhole(arg: string | undefined, name: string, fallback: numb
 /** What a task computes: the SHA-256 of its payload, in hex. */
 export const digest = (payload: string): string => createHash('sha256').update(payload).digest('hex');
 
-/** Waits `ms`, or less when `signal` aborts first. Never rejects. */
+/** Waits `ms`, or less when `signal` aborts first; not at all when it already has. Never rejects. */
 export const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
     new Promise((resolve) => {
+        if (signal?.aborted) {
+            return resolve();
+        }
         const timer = setTimeout(resolve, ms);
         signal?.addEventListener(
             'abort',
@@ -97,8 +102,9 @@ export async function runWorker(queue: TaskQueue, work: (task: Task) => Promise<
 }
 
 /**
- * Waits until all `count` tasks of `batch` are done and returns who did
- * them; the Job's timeout ends a wait that never gets there. Logs the
+ * Waits until no task of `batch` is open and returns who did them; the
+ * Job's timeout ends a wait that never gets there. Open tasks, not done
+ * ones, are counted, since `cleanup` may delete done tasks meanwhile. Logs the
  * progress whenever it changed, and failures, which it retries.
  */
 export async function waitForBatch(
@@ -116,7 +122,7 @@ export async function waitForBatch(
         );
         if (!outcome.ok) {
             options.log({ msg: 'reading the progress failed', error: outcome.error });
-        } else if (outcome.progress.done >= count) {
+        } else if (outcome.progress.open === 0) {
             return outcome.progress;
         } else if (outcome.progress.done !== last) {
             last = outcome.progress.done;

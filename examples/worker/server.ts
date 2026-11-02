@@ -11,10 +11,11 @@
  */
 import { hostname } from 'node:os';
 import { log } from '../shared/http.js';
-import { poolFromEnv, postgresQueue } from './store.js';
+import { poolFromEnv } from '../shared/database.js';
+import { postgresQueue } from './store.js';
 import { type Task, digest, parseWhole, runWorker, sleep } from './tasks.js';
 
-const pool = poolFromEnv();
+const pool = poolFromEnv(2);
 if (pool === undefined) {
     log({ msg: 'DATABASE_URL is not set: give the Project a Database' });
     process.exit(1);
@@ -26,7 +27,6 @@ if (!workMs.ok) {
 }
 
 const worker = hostname();
-const queue = await postgresQueue(pool, worker);
 const stop = new AbortController();
 // The platform sends SIGTERM on a rollout or a scale down: finish the task at hand, then end.
 process.on('SIGTERM', () => {
@@ -34,12 +34,19 @@ process.on('SIGTERM', () => {
     stop.abort();
 });
 
+// Started during a failover, it waits for the database rather than crashing.
+let queue = await postgresQueue(pool, worker).catch((error: unknown) => String(error));
+while (typeof queue === 'string' && !stop.signal.aborted) {
+    log({ msg: 'creating the table failed', error: queue });
+    await sleep(2000, stop.signal);
+    queue = await postgresQueue(pool, worker).catch((error: unknown) => String(error));
+}
 log({ msg: 'worker started', worker });
 const work = async (task: Task): Promise<string> => {
     log({ msg: 'task taken', id: task.id, worker });
     await sleep(workMs.value);
     return digest(task.payload);
 };
-const done = await runWorker(queue, work, { signal: stop.signal, idleMs: 1000, retryMs: 2000, log });
+const done = typeof queue === 'string' ? 0 : await runWorker(queue, work, { signal: stop.signal, idleMs: 1000, retryMs: 2000, log });
 log({ msg: 'worker stopped', done });
 await pool.end();

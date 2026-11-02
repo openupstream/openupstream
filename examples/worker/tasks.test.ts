@@ -13,7 +13,7 @@ const scriptedQueue = (answers: readonly (boolean | Error)[], onTake: () => void
             return answer instanceof Error ? Promise.reject(answer) : answer;
         },
         enqueue: async () => 'batch',
-        progress: async (): Promise<Progress> => ({ done: 0, byWorker: {} }),
+        progress: async (): Promise<Progress> => ({ done: 0, open: 0, byWorker: {} }),
         deleteDone: async () => 0,
     };
     return queue;
@@ -74,6 +74,14 @@ test('a failing database is logged and retried, the worker keeps running', async
     assert.deepEqual(logged.map((entry) => entry['error']), ['Error: connection refused', 'Error: connection refused']);
 });
 
+test('a stop that came during a take ends the loop without waiting', async () => {
+    const stop = new AbortController();
+    const queue = scriptedQueue([new Error('connection refused')], () => stop.abort());
+    const started = Date.now();
+    await runWorker(queue, noWork, { signal: stop.signal, idleMs: 60_000, retryMs: 60_000, log: () => {} });
+    assert.ok(Date.now() - started < 5000);
+});
+
 test('a stop cuts the idle wait short', async () => {
     const stop = new AbortController();
     const queue = scriptedQueue([], () => setTimeout(() => stop.abort(), 10));
@@ -85,11 +93,12 @@ test('a stop cuts the idle wait short', async () => {
 
 test('the wait for a batch ends once all its tasks are done, and logs only changes', async () => {
     const answers: (Progress | Error)[] = [
-        { done: 0, byWorker: {} },
-        { done: 0, byWorker: {} },
+        { done: 0, open: 3, byWorker: {} },
+        { done: 0, open: 3, byWorker: {} },
         new Error('connection refused'),
-        { done: 2, byWorker: { a: 2 } },
-        { done: 3, byWorker: { a: 2, b: 1 } },
+        { done: 2, open: 1, byWorker: { a: 2 } },
+        // cleanup deleted the done tasks meanwhile: no open task is still the end
+        { done: 1, open: 0, byWorker: { b: 1 } },
     ];
     let read = 0;
     const queue: TaskQueue = {
@@ -102,7 +111,7 @@ test('the wait for a batch ends once all its tasks are done, and logs only chang
     };
     const logged: Record<string, unknown>[] = [];
     const progress = await waitForBatch(queue, 'batch', 3, { intervalMs: 1000, log: (entry) => void logged.push(entry), wait: async () => {} });
-    assert.deepEqual(progress.byWorker, { a: 2, b: 1 });
+    assert.deepEqual(progress.byWorker, { b: 1 });
     assert.deepEqual(
         logged.map((entry) => entry['done'] ?? entry['error']),
         [0, 'Error: connection refused', 2],
