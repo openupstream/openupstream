@@ -634,22 +634,45 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         return c.body(null, 204);
     });
 
+    /** Each Project's last queued Secrets write, which the next one waits for. */
+    const secretWrites = new Map<string, Promise<void>>();
+    /** Projects with a queued write that has not started yet; it will read any later change too. */
+    const waitingWrites = new Set<string>();
+
     /**
      * Writes the Project's Kubernetes Secret now, so a change reaches its
      * Services at once, without making the caller wait for Kubernetes: the
      * change is stored, and the secrets pass writes it again within one
-     * interval if this fails.
+     * interval if this fails. A Project's writes run one after another, each
+     * reading the values when it starts, so an earlier write that reads
+     * before a change cannot land after the write that follows it. At most
+     * one write waits: it reads every change made before it starts.
      */
     const syncSecrets = (projectId: string): void => {
-        void syncProjectSecrets({ pool, kube, kek: deps.kek }, projectId).then(
-            (synced) => {
-                if (!synced.ok) {
-                    deps.log?.({ msg: 'cannot write the Secrets of a Project', projectId, error: synced.error });
-                }
-            },
-            (error: unknown) =>
-                deps.log?.({ msg: 'cannot write the Secrets of a Project', projectId, error: error instanceof Error ? error.message : String(error) }),
-        );
+        if (waitingWrites.has(projectId)) {
+            return;
+        }
+        waitingWrites.add(projectId);
+        const write = (secretWrites.get(projectId) ?? Promise.resolve())
+            .then(() => {
+                waitingWrites.delete(projectId);
+                return syncProjectSecrets({ pool, kube, kek: deps.kek }, projectId);
+            })
+            .then(
+                (synced) => {
+                    if (!synced.ok) {
+                        deps.log?.({ msg: 'cannot write the Secrets of a Project', projectId, error: synced.error });
+                    }
+                },
+                (error: unknown) =>
+                    deps.log?.({ msg: 'cannot write the Secrets of a Project', projectId, error: error instanceof Error ? error.message : String(error) }),
+            );
+        secretWrites.set(projectId, write);
+        void write.then(() => {
+            if (secretWrites.get(projectId) === write) {
+                secretWrites.delete(projectId);
+            }
+        });
     };
 
     app.get('/v1/projects/:projectId/secrets', async (c) => {

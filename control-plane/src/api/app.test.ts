@@ -108,6 +108,8 @@ const clusters = new Map<string, ClusterStatus | string>();
 /** The Secrets the fake Kubernetes received, latest last; namespaces in `missingNamespaces` do not exist. */
 const appliedSecrets: SecretManifest[] = [];
 const missingNamespaces = new Set<string>();
+/** When set, the next Secret write into `namespace` calls `reached` and waits for `released` before it lands. */
+let secretHold: { readonly namespace: string; readonly reached: () => void; readonly released: Promise<void> } | undefined;
 
 const kube: ControlPlaneKube = {
     readCluster: async (_namespace, name) => {
@@ -137,6 +139,12 @@ const kube: ControlPlaneKube = {
     deleteJob: async (_namespace, name) => ok(runs.delete(name) ? 'deleted' : 'not-found'),
     remove: async () => ok(undefined),
     applySecret: async (secret) => {
+        const hold = secretHold?.namespace === secret.metadata.namespace ? secretHold : undefined;
+        if (hold !== undefined) {
+            secretHold = undefined;
+            hold.reached();
+            await hold.released;
+        }
         if (missingNamespaces.has(secret.metadata.namespace)) {
             return ok('no-namespace');
         }
@@ -830,6 +838,29 @@ describe('Secrets', () => {
         await pause(200);
         assert.equal(appliedSecrets.length, before);
         missingNamespaces.delete(`project-${projectId}`);
+    });
+
+    test('quick changes are written in order, so the last write has the newest value; one write waits for them all', async () => {
+        const created = await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'secret-order' });
+        const orderProject = ((await created.json()) as Project).id;
+        const order = `/v1/projects/${orderProject}/secrets/ORDER`;
+        const writes = () => appliedSecrets.filter((s) => s.metadata.name === 'project-secrets' && s.metadata.namespace === `project-${orderProject}`);
+        const written = () => decoded(writes().at(-1));
+        let reached = () => {};
+        let release = () => {};
+        const blocked = new Promise<void>((resolve) => (reached = resolve));
+        secretHold = { namespace: `project-${orderProject}`, reached, released: new Promise<void>((resolve) => (release = resolve)) };
+
+        assert.equal((await call('PUT', order, 'alice', { value: 'first' })).status, 201);
+        await blocked; // the first write has read 'first' and waits to land
+        assert.equal((await call('PUT', order, 'alice', { value: 'second' })).status, 200);
+        assert.equal((await call('PUT', order, 'alice', { value: 'third' })).status, 200);
+        await pause(100);
+        release();
+        await eventually(() => assert.deepEqual(written(), { ORDER: 'third' }));
+        await pause(100);
+        assert.deepEqual(written(), { ORDER: 'third' });
+        assert.equal(writes().length, 2);
     });
 
     test("another Account's Project: 404; a read-only key lists but cannot write", async () => {

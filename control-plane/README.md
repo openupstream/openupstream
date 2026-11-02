@@ -244,7 +244,9 @@ key is 32 random bytes, base64 encoded, with an id
 Secret `project-secrets` in its namespace, and its Services' and Jobs'
 registry credentials into the dockerconfigjson Secret `project-registry-auth`, with server-side apply under the
 field manager `openupstream-control-plane`: the API does so after every
-change, and the secrets pass every `CLEANUP_INTERVAL_SECONDS` for every
+change, queued per Project so that each write reads the values when it
+starts and none lands after a newer one (at most one waits; the pass is
+not queued with them and the next pass repairs a crossing), and the secrets pass every `CLEANUP_INTERVAL_SECONDS` for every
 live Project that has a data key, a Service or a Job, on one replica at a time (its own
 advisory lock). A Project without a namespace yet is skipped until an
 operator has created it.

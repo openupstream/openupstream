@@ -25,6 +25,7 @@ jobs:
           - { image: control-plane, file: control-plane/Dockerfile, app: '' }
           - { image: operators, file: operators/Dockerfile, app: '' }
           - { image: example-notes, file: examples/Dockerfile, app: notes }
+          - { image: example-spa-api, file: examples/Dockerfile, app: spa-api }
     env:
       PUSH: ${{ github.event_name == 'push' }}
     steps:
