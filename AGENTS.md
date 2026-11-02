@@ -165,7 +165,7 @@ destroy it without asking per command.
 
 ## Testing
 
-Before considering a task done, run what CI runs at the repo root (Node 22,
+Before considering a task done, run what CI runs at the repo root (Node 24,
 npm workspaces): `npm run build`, `npm run typecheck` and `npm test`. Every
 change that alters behavior comes with a test.
 

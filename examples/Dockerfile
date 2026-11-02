@@ -4,7 +4,7 @@
 #   docker build -f examples/Dockerfile --build-arg APP=notes .
 #
 # APP is the folder of the app's server: notes, spa-api or worker.
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /repo
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY sdk/package.json sdk/
@@ -17,7 +17,7 @@ RUN npm ci --workspace examples
 COPY examples examples
 RUN npm run build --workspace examples
 
-FROM node:22-alpine
+FROM node:24-alpine
 ARG APP
 WORKDIR /repo
 ENV NODE_ENV=production

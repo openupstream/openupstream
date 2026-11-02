@@ -2,7 +2,7 @@
 # workspaces it depends on:
 #
 #   docker build -f operators/Dockerfile .
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /repo
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY sdk/package.json sdk/
@@ -16,7 +16,7 @@ COPY sdk sdk
 COPY operators operators
 RUN npm run build --workspace sdk && npm run build --workspace operators
 
-FROM node:22-alpine
+FROM node:24-alpine
 WORKDIR /repo
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
