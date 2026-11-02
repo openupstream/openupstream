@@ -673,8 +673,9 @@ digest (#55).
   before an operator created the namespace, arrives within one pass; a
   Project with Services but no Secrets gets an empty one, since a Service's
   pods wait for it rather than start without their values (the
-  API does not wait for its write; two quick changes can land out of order,
-  which the pass also repairs). It
+  API does not wait for its write; a replica runs a Project's writes one
+  after another, so two quick changes land in order, and only writes from
+  two replicas can still cross, which the pass also repairs). It
   alone holds the key-encryption key, so no decrypted value crosses the
   internal API. Services and jobs read the Secret via `envFrom`. Changing a
   Secret rolls the Services that use it.

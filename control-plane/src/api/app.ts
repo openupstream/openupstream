@@ -634,22 +634,35 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         return c.body(null, 204);
     });
 
+    /** Each Project's last queued Secrets write, which the next one waits for. */
+    const secretWrites = new Map<string, Promise<void>>();
+
     /**
      * Writes the Project's Kubernetes Secret now, so a change reaches its
      * Services at once, without making the caller wait for Kubernetes: the
      * change is stored, and the secrets pass writes it again within one
-     * interval if this fails.
+     * interval if this fails. A Project's writes run one after another, each
+     * reading the values when it starts, so an earlier write that reads
+     * before a change cannot land after the write that follows it.
      */
     const syncSecrets = (projectId: string): void => {
-        void syncProjectSecrets({ pool, kube, kek: deps.kek }, projectId).then(
-            (synced) => {
-                if (!synced.ok) {
-                    deps.log?.({ msg: 'cannot write the Secrets of a Project', projectId, error: synced.error });
-                }
-            },
-            (error: unknown) =>
-                deps.log?.({ msg: 'cannot write the Secrets of a Project', projectId, error: error instanceof Error ? error.message : String(error) }),
-        );
+        const write = (secretWrites.get(projectId) ?? Promise.resolve())
+            .then(() => syncProjectSecrets({ pool, kube, kek: deps.kek }, projectId))
+            .then(
+                (synced) => {
+                    if (!synced.ok) {
+                        deps.log?.({ msg: 'cannot write the Secrets of a Project', projectId, error: synced.error });
+                    }
+                },
+                (error: unknown) =>
+                    deps.log?.({ msg: 'cannot write the Secrets of a Project', projectId, error: error instanceof Error ? error.message : String(error) }),
+            );
+        secretWrites.set(projectId, write);
+        void write.then(() => {
+            if (secretWrites.get(projectId) === write) {
+                secretWrites.delete(projectId);
+            }
+        });
     };
 
     app.get('/v1/projects/:projectId/secrets', async (c) => {
