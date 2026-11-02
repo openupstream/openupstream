@@ -1,10 +1,12 @@
 /**
  * A fresh, migrated database for each test suite.
  *
- * Uses the Postgres server at TEST_DATABASE_URL when it is set (CI runs one
- * as a service container); otherwise starts one in Docker with
- * testcontainers. Each call creates its own database on that server and drops
- * it again on close, so test files can run in parallel.
+ * Uses the Postgres server at TEST_DATABASE_URL when it is set: CI runs one
+ * as a service container, and `npm test` starts one for the whole run in
+ * global-setup.ts. Otherwise, as when a test file is run on its own, it
+ * starts one in Docker with testcontainers. Each call creates its own
+ * database on that server and drops it again on close, so test files can run
+ * in parallel.
  */
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
@@ -19,12 +21,12 @@ export interface TestDatabase {
     close(): Promise<void>;
 }
 
-interface Server {
+export interface Server {
     readonly url: string;
     stop(): Promise<void>;
 }
 
-async function startServer(): Promise<Server> {
+export async function startServer(): Promise<Server> {
     const configured = process.env['TEST_DATABASE_URL'];
     if (configured) {
         return { url: configured, stop: async () => {} };

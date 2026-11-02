@@ -2,7 +2,7 @@
 # workspaces it depends on:
 #
 #   docker build -f control-plane/Dockerfile .
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /repo
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY sdk/package.json sdk/
@@ -16,7 +16,7 @@ COPY sdk sdk
 COPY control-plane control-plane
 RUN npm run build --workspace sdk && npm run build --workspace control-plane
 
-FROM node:22-alpine
+FROM node:24-alpine
 WORKDIR /repo
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./

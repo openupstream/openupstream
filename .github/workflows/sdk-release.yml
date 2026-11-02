@@ -30,7 +30,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           registry-url: https://registry.npmjs.org
-      # Trusted publishing needs npm 11.5.1 or later; Node 22 ships npm 10.
+      # Trusted publishing needs npm 11.5.1 or later; early Node 24 releases ship an older npm.
       - run: npm install -g npm@11.20.0
       - run: npm ci
       - name: The tag names the package's version

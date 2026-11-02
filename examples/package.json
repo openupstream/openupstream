@@ -11,7 +11,7 @@
     "test": "node --test --import tsx 'notes/**/*.test.ts' 'spa-api/**/*.test.ts'"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0",
+    "@types/node": "^24.0.0",
     "@types/pg": "^8.23.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"

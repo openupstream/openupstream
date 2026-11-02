@@ -52,7 +52,7 @@ docs/            Architecture, decision records (adr/), runbooks
 - Usage events in Postgres, rated monthly by the control plane; invoices
   through lexoffice, payments through Mollie (card, PayPal or SEPA Direct Debit)
 - madAuth for sign-in and API keys
-- Node.js 22 / TypeScript throughout the control plane
+- Node.js 24 / TypeScript throughout the control plane
 
 Details and the reasoning behind each choice: [ARCHITECTURE.md](ARCHITECTURE.md).
 

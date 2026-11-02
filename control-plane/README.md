@@ -260,9 +260,15 @@ its pool has closed: `pg`'s `pool.end()` returns before they have, and
 that ends the test run.
 
 - With `TEST_DATABASE_URL` set (CI does this), they use that server.
-- Otherwise they start `postgres:17-alpine` in Docker with
-  [testcontainers](https://node.testcontainers.org). With Colima, point
-  testcontainers at its socket:
+- Otherwise `npm test` starts one `postgres:17-alpine` container for the
+  whole run with [testcontainers](https://node.testcontainers.org), in a
+  node:test global setup (`src/testing/global-setup.ts`, passed with
+  `--test-global-setup`, Node 24), and stops it when the run ends. All test
+  files create their databases on it. The test runner's process ignores
+  `--import tsx`, so the setup module registers tsx itself.
+- A test file run on its own (`node --test --import tsx src/…test.ts`)
+  without `TEST_DATABASE_URL` starts its own container.
+- With Colima, point testcontainers at its socket:
 
   ```sh
   export DOCKER_HOST=unix://$HOME/.colima/default/docker.sock

@@ -18,7 +18,7 @@ context) and put them into the cluster as Kubernetes Secrets.
 
 | Tool | For |
 | --- | --- |
-| Node.js 22 and npm (`nvm use` reads `.nvmrc`) | building and testing, the scripts in `operators/scripts` |
+| Node.js 24 and npm (`nvm use` reads `.nvmrc`) | building and testing, the scripts in `operators/scripts` |
 | Docker (Docker Desktop or Colima) | the control plane's tests, building images locally |
 | `hcloud` | creating and deleting the development cluster's VMs |
 | `kubectl` | everything on the cluster |
