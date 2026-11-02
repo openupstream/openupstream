@@ -636,6 +636,8 @@ export function createApi(deps: ApiDeps): Hono<Env> {
 
     /** Each Project's last queued Secrets write, which the next one waits for. */
     const secretWrites = new Map<string, Promise<void>>();
+    /** Projects with a queued write that has not started yet; it will read any later change too. */
+    const waitingWrites = new Set<string>();
 
     /**
      * Writes the Project's Kubernetes Secret now, so a change reaches its
@@ -643,11 +645,19 @@ export function createApi(deps: ApiDeps): Hono<Env> {
      * change is stored, and the secrets pass writes it again within one
      * interval if this fails. A Project's writes run one after another, each
      * reading the values when it starts, so an earlier write that reads
-     * before a change cannot land after the write that follows it.
+     * before a change cannot land after the write that follows it. At most
+     * one write waits: it reads every change made before it starts.
      */
     const syncSecrets = (projectId: string): void => {
+        if (waitingWrites.has(projectId)) {
+            return;
+        }
+        waitingWrites.add(projectId);
         const write = (secretWrites.get(projectId) ?? Promise.resolve())
-            .then(() => syncProjectSecrets({ pool, kube, kek: deps.kek }, projectId))
+            .then(() => {
+                waitingWrites.delete(projectId);
+                return syncProjectSecrets({ pool, kube, kek: deps.kek }, projectId);
+            })
             .then(
                 (synced) => {
                     if (!synced.ok) {
