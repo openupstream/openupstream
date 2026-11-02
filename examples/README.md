@@ -91,3 +91,43 @@ serves the Bucket at its own hostname:
 BUCKET_ENDPOINT=http://uploads.s3.localhost:3900 BUCKET_REGION=garage \
 BUCKET_ACCESS_KEY_ID=… BUCKET_SECRET_ACCESS_KEY=… npx tsx examples/spa-api/server.ts
 ```
+
+## worker
+
+A queue on the Project's Database, worked by a Service without a port and
+fed and cleaned up by Jobs (`ghcr.io/openupstream/example-worker`, decision
+102): step 4's Cron and One-off jobs and a worker Service (decision 98), on
+`SELECT … FOR UPDATE SKIP LOCKED` (decision 8). One image, three commands:
+
+| Command | Runs as | Does |
+| --- | --- | --- |
+| the image's own (`worker/server.js`) | a Service with `--no-port`, any number of replicas | takes the oldest open task no other replica holds, stores the SHA-256 of its payload and its hostname as the worker, in one transaction; polls every second when the queue is empty |
+| `node examples/dist/worker/enqueue.js [count]` | a One-off job | adds `count` tasks (1 to 10000, default 10) as a batch and waits until all are done, then exits 0 and logs the tasks done per worker |
+| `node examples/dist/worker/cleanup.js [hours]` | a Cron job | deletes the tasks done more than `hours` ago (default 24), as a TTL would |
+
+A task is taken and done in one transaction, so a worker stopped or
+crashing midway leaves it open for the next. The Pooler runs in transaction
+mode, which has no `LISTEN`, so the worker polls. It reads `DATABASE_URL`
+(decision 97) and creates its table on start, as do the Jobs. `WORK_MS`
+(default 100) is how long a task takes, so the share of each replica
+shows. On SIGTERM it finishes the task at hand and ends; while the
+database is away it logs and retries every 2 s.
+
+On the platform, with a Database in the Project:
+
+```bash
+oup service deploy worker --image ghcr.io/openupstream/example-worker:main --no-port --replicas 2
+oup job deploy enqueue --image ghcr.io/openupstream/example-worker:main --timeout 600 -- node examples/dist/worker/enqueue.js
+oup job deploy cleanup --image ghcr.io/openupstream/example-worker:main --schedule '0 3 * * *' -- node examples/dist/worker/cleanup.js
+oup job run enqueue -- 100
+```
+
+`oup job run enqueue -- 100` exits 0 once both replicas have done all 100
+tasks; without a worker, the Job's timeout fails the run.
+`oup job run cleanup -- 0` deletes every done task at once. Locally,
+against any Postgres:
+
+```bash
+DATABASE_URL=postgres://… npx tsx examples/worker/server.ts
+DATABASE_URL=postgres://… npx tsx examples/worker/enqueue.ts 20
+```

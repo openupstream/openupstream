@@ -8,9 +8,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
-    "test": "node --test --import tsx 'notes/**/*.test.ts' 'spa-api/**/*.test.ts'"
+    "test": "node --test --import tsx 'notes/**/*.test.ts' 'spa-api/**/*.test.ts' 'worker/**/*.test.ts'"
   },
   "devDependencies": {
+    "@testcontainers/postgresql": "^12.2.1",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.23.1",
     "tsx": "^4.19.0",

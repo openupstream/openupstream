@@ -878,6 +878,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 99 | The demo apps (#30) are one npm workspace, `examples/`, a folder per app on plain `node:http` and `pg` (and the AWS SDK's S3 client for a Bucket, decision 100), built by the Images workflow from one Dockerfile (`APP` build argument) into `ghcr.io/openupstream/example-<app>`, public | a repository of their own; one image for all apps; a web framework | they change with the platform in the same PR and are built for the commit under test; the workspace puts their tests under the repo's CI; one image per app keeps each deploy line the customer's (`oup service deploy notes --image …/example-notes`); a framework would hide what the platform needs from a container |
 | 100 | The demo app `spa-api` is a single-page app in one Bucket at `/` with SPA fallback and a Service at `/api` on the same hostname that keeps uploaded files (up to 1 MiB) in a second Bucket over S3, with the AWS SDK's S3 client. The Service reads the Bucket's access from four Secrets (`BUCKET_ENDPOINT`, `BUCKET_REGION`, `BUCKET_ACCESS_KEY_ID`, `BUCKET_SECRET_ACCESS_KEY`) copied from what the API shows for the Bucket; downloads are `attachment` with CSP `sandbox`, so an uploaded page never runs on the app's origin | a stateless API; the browser uploading straight to the Bucket with presigned URLs | step 2 is object storage as well as static sites, and ProjectMatch's five S3 buckets are reached from its code; proxying through the Service needs no CORS on Garage; copying the key by hand is what a customer does today and shows what binding Buckets like Databases (decision 97) would save (Open question 19) |
 | 101 | Node.js 24 everywhere (`.nvmrc`, `engines`, CI, the images); the control plane's tests start one Postgres server per run in a node:test global setup (`--test-global-setup`), each test file still creating and dropping its own database on it | staying on Node 22 with a wrapper script that starts the container and then runs `node --test`; testcontainers' reuse mode | a container per test file, about 21 starting at once, failed 3 of 15 local runs under Docker load; global setup is node:test's own hook and exists from Node 24.0 on; reuse locks only within one process, so the parallel test files would still race, and the container outlives the run. Node 24 is the active LTS, and the images run what the tests run. Costs: contributors need Node 24, and the hook is still Stability 1.0, so it may change in a minor release |
+| 102 | The demo app `worker` is one image with three commands on one Database: the image's own a Service without a port taking tasks with `FOR UPDATE SKIP LOCKED`, each taken and done in one transaction and polled every second; `enqueue` a One-off job that adds a batch and exits 0 once workers have done it all; `cleanup` a Cron job deleting tasks done more than a day ago | jobs only, with no queue; a worker on the `notes` Database; `LISTEN`/`NOTIFY` instead of polling; a queue library (pg-boss, Graphile Worker) | step 4 and the worker Services of decision 98 each get a demo, and ProjectMatch's SQS consumers and DynamoDB TTLs take the same shapes after v1; `enqueue` waiting makes `oup job run` the proof that the workers ran, before there is a log stream; the Pooler's transaction mode has no `LISTEN`; plain SQL shows the pattern decision 8 points customers to. Costs: a task holds its transaction (and a Pooler connection) while it runs, and an empty queue costs a query per replica a second |
 
 ## Open questions
 
@@ -1100,8 +1101,12 @@ Decisions table once it is settled.
    (decision 99) and `spa-api` (decision 100), the latter tested locally
    against Garage 2.4.1 behind a stand-in for its two Routes: files
    stored, listed, downloaded and deleted, a missing file a 404, and a 503
-   at once with the process still healthy while Garage was stopped. Left:
-   `worker`, Umami, and the runs on the dev cluster.
+   at once with the process still healthy while Garage was stopped; and
+   `worker` (decision 102), tested locally with its image against Postgres
+   17: two replicas did 60 tasks of an `enqueue` run between them (28 and
+   32), which then exited 0, `cleanup` deleted the done tasks, a worker
+   kept retrying while the database was stopped, and SIGTERM let it finish
+   its task and exit 0. Left: Umami, and the runs on the dev cluster.
 
 ### After v1: ProjectMatch
 
