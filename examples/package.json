@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
-    "test": "node --test --import tsx 'notes/**/*.test.ts'"
+    "test": "node --test --import tsx 'notes/**/*.test.ts' 'spa-api/**/*.test.ts'"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
@@ -17,6 +17,7 @@
     "typescript": "^5.7.0"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1161.0",
     "pg": "^8.23.1"
   }
 }
