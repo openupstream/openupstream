@@ -43,10 +43,24 @@ owner (`.github/workflows/images.yml`, #55). The cluster pulls them without
 credentials, so the packages must be public:
 
 1. Push once, so that the Images workflow creates the packages.
-2. On GitHub, open your organization's (or account's) **Packages**, then
-   `control-plane`, `operators` and each `example-…`: **Package settings →
-   Danger Zone → Change visibility → Public**. A demo app added later is a
-   new package, private until this is done for it.
+2. Check each one without credentials: `200` is public, anything else is
+   not. GitHub documents a new package as private, yet `example-worker` here
+   came up public with nothing done by hand (2026-11-07), so check rather
+   than assume, also for a demo app added later:
+
+   ```bash
+   owner=openupstream
+   for package in control-plane operators example-notes example-spa-api example-worker; do
+     token=$(curl -s "https://ghcr.io/token?scope=repository:$owner/$package:pull" | jq -r .token)
+     curl -s -o /dev/null -w "$package %{http_code}\n" -H "Authorization: Bearer $token" \
+       -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+       "https://ghcr.io/v2/$owner/$package/manifests/main"
+   done
+   ```
+
+3. For a package that is not public, open your organization's (or account's)
+   **Packages**, then the package: **Package settings → Danger Zone → Change
+   visibility → Public**.
 
 In a fork, the images are `ghcr.io/<your owner>/…`; the deploy manifests and
 `infra/dev-cluster/platform.sh` still say `openupstream`, so adjust them.
