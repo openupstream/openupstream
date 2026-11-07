@@ -46,7 +46,8 @@ credentials, so the packages must be public:
 2. Check each one without credentials: `200` is public, anything else is
    not. GitHub documents a new package as private, yet `example-worker` here
    came up public with nothing done by hand (2026-11-07), so check rather
-   than assume, also for a demo app added later:
+   than assume. Set `owner` to your own in a fork, and list every image of
+   the matrix in `.github/workflows/images.yml`:
 
    ```bash
    owner=openupstream
