@@ -4,7 +4,7 @@ import { PLATFORM } from '@openupstream/sdk';
 import type { FetchRows } from '../control-plane.js';
 import type { Kube } from '../kube.js';
 import { err, ok } from '../result.js';
-import { type PassLog, databasesPass, runPasses } from './loop.js';
+import { type PassLog, databasesPass, runPasses, wakeup } from './loop.js';
 import type { DatabaseConfig } from './manifests.js';
 
 const config: DatabaseConfig = {
@@ -78,4 +78,38 @@ test('the loop runs passes until it is stopped', async () => {
         logs.map((entry) => entry.msg),
         ['pass 1', 'pass 2', 'pass 3'],
     );
+});
+
+test('a wake cuts the wait between passes short', async () => {
+    const wait = wakeup();
+    const stop = new AbortController();
+    const started = Date.now();
+    const sleeping = wait.sleep(60_000, stop.signal);
+    wait.wake();
+    await sleeping;
+    assert.ok(Date.now() - started < 1_000);
+});
+
+test('a wake during a pass makes the next pass start right after it', async () => {
+    const stop = new AbortController();
+    const wait = wakeup();
+    let passes = 0;
+    const started = Date.now();
+    await runPasses(
+        async () => {
+            passes += 1;
+            if (passes === 1) {
+                wait.wake();
+            } else {
+                stop.abort();
+            }
+            return { msg: `pass ${passes}` };
+        },
+        60_000,
+        () => undefined,
+        stop.signal,
+        wait,
+    );
+    assert.equal(passes, 2);
+    assert.ok(Date.now() - started < 1_000);
 });

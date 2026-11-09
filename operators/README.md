@@ -34,7 +34,7 @@ Traefik already implements is configured, not reimplemented.
 - `src/services/`: the Services operator (ARCHITECTURE.md, decision 93).
   `planServices` (pure) turns the Services into, per Project, its namespace,
   its NetworkPolicy and `service-egress` (DNS, the own namespace and the
-  internet only); per Service, a Deployment `svc-<id>` with the image
+  internet only, the nodes on 80 and 443 only, decision 104); per Service, a Deployment `svc-<id>` with the image
   pinned by digest under the `gvisor` RuntimeClass and, unless it is a
   worker without a port, a readiness probe and a Kubernetes Service.
   `reconcileServices` applies them and deletes the objects labelled
@@ -76,6 +76,13 @@ Traefik already implements is configured, not reimplemented.
   identically under one field manager before anything goes into the
   namespace, labels, the Site zone label and the third Site's taint, and
   the egress policy of customer pods (`customerEgressPolicy`).
+- `src/nodes.ts` (decision 104): the Nodes' addresses, which the egress
+  policy leaves out but for 80 and 443. The Services and Jobs passes list
+  them every time and apply and delete nothing without them (no Nodes, a
+  Node without an address, a failed listing), so the policies in place
+  stay; `watchNodes` starts a pass at once when a Node joins, goes or
+  changes its addresses (`wakeup` in `src/databases/loop.ts`). Both
+  operators' ClusterRoles allow `list` and `watch` on Nodes.
 - `deploy/`: each operator's ServiceAccount, RBAC and Deployment. The image
   is built by `Dockerfile` (GitHub Actions pushes it to
   `ghcr.io/openupstream/operators`); `infra/dev-cluster/platform.sh` deploys

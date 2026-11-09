@@ -81,7 +81,7 @@ const messageOf = (body: unknown): string | undefined => {
 export const KUBE_CALL_TIMEOUT_MS = 30_000;
 
 /** Runs a client call and turns its rejection, or its not ending in time, into a KubeError. */
-const attemptWithin = <T>(call: () => Promise<T>, timeoutMs: number): Promise<Result<T, KubeError>> => {
+export const attemptWithin = <T>(call: () => Promise<T>, timeoutMs: number): Promise<Result<T, KubeError>> => {
     const timedOut = new Promise<Result<T, KubeError>>((resolve) => {
         const timer = setTimeout(() => resolve(err({ status: 0, message: `no answer within ${timeoutMs} ms` })), timeoutMs);
         timer.unref();

@@ -11,6 +11,7 @@ import {
     databaseConnection,
     projectNamespace as namespaceOf,
 } from '@openupstream/sdk';
+import type { NodeBlocks } from './nodes.js';
 
 /** Each Site is one zone; every node carries its Site's name in this label. */
 export const ZONE_LABEL = 'topology.kubernetes.io/zone';
@@ -153,13 +154,25 @@ export const EGRESS_EXCEPT_V4 = [
 ];
 export const EGRESS_EXCEPT_V6 = ['::/127', 'fc00::/7', 'fe80::/10', 'ff00::/8', '64:ff9b::/96'];
 
+/** The ports a customer's container may reach on a node: Traefik's hostPorts, for a Bucket or Route at its public hostname. */
+export const NODE_EGRESS_PORTS = [80, 443] as const;
+
 /**
  * Where the customer's containers of one kind (`component`, a Service's or
  * a Job's) may connect: DNS, their own namespace (their Databases' Poolers)
  * and the internet, but nothing else inside the cluster or in a private
- * network (decision 93).
+ * network (decision 93). The internet leaves out the nodes' own addresses,
+ * where the Kubernetes API, kubelet and etcd listen: those are reachable on
+ * 80 and 443 only (decision 104). The `kubernetes` Service's address is
+ * rewritten to a node's before the policy sees it, so this closes it too.
  */
-export const customerEgressPolicy = (projectId: Id, name: string, component: string, labels: Readonly<Record<string, string>>) => ({
+export const customerEgressPolicy = (
+    projectId: Id,
+    name: string,
+    component: string,
+    labels: Readonly<Record<string, string>>,
+    nodes: NodeBlocks,
+) => ({
     apiVersion: 'networking.k8s.io/v1',
     kind: 'NetworkPolicy',
     metadata: { name, namespace: namespaceOf(projectId), labels },
@@ -175,7 +188,16 @@ export const customerEgressPolicy = (projectId: Id, name: string, component: str
                 ],
             },
             { to: [{ podSelector: {} }] },
-            { to: [{ ipBlock: { cidr: '0.0.0.0/0', except: EGRESS_EXCEPT_V4 } }, { ipBlock: { cidr: '::/0', except: EGRESS_EXCEPT_V6 } }] },
+            {
+                to: [
+                    { ipBlock: { cidr: '0.0.0.0/0', except: [...EGRESS_EXCEPT_V4, ...nodes.v4] } },
+                    { ipBlock: { cidr: '::/0', except: [...EGRESS_EXCEPT_V6, ...nodes.v6] } },
+                ],
+            },
+            {
+                to: [...nodes.v4, ...nodes.v6].map((cidr) => ({ ipBlock: { cidr } })),
+                ports: NODE_EGRESS_PORTS.map((port) => ({ port, protocol: 'TCP' })),
+            },
         ],
     },
 });

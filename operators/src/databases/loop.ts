@@ -40,16 +40,46 @@ export async function databasesPass(
     };
 }
 
-/** Runs passes until `signal` aborts; the next pass starts `intervalMs` after the last one ended. */
+/**
+ * The wait between passes, which something outside the loop can cut short:
+ * a Node that joined or changed its addresses (decision 104). A wake during
+ * a pass makes the next one start right after it.
+ */
+export interface Wakeup {
+    readonly wake: () => void;
+    readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>;
+}
+
+export function wakeup(): Wakeup {
+    let pending = false;
+    let cutShort: AbortController | undefined;
+    return {
+        wake: () => {
+            pending = true;
+            cutShort?.abort();
+        },
+        sleep: async (ms, signal) => {
+            if (!pending) {
+                cutShort = new AbortController();
+                // Rejects when stopped or woken, which only ends the wait early.
+                await sleep(ms, undefined, { signal: AbortSignal.any([signal, cutShort.signal]) }).catch(() => undefined);
+                cutShort = undefined;
+            }
+            pending = false;
+        },
+    };
+}
+
+/** Runs passes until `signal` aborts; the next pass starts `intervalMs` after the last one ended, or when woken. */
 export async function runPasses(
     pass: () => Promise<PassLog>,
     intervalMs: number,
     log: (entry: PassLog) => void,
     signal: AbortSignal,
+    wait: Wakeup = wakeup(),
 ): Promise<void> {
     while (!signal.aborted) {
         log(await pass());
-        // Rejects when stopped, which only ends the wait early.
-        await sleep(intervalMs, undefined, { signal }).catch(() => undefined);
+        await wait.sleep(intervalMs, signal);
     }
 }

@@ -5,7 +5,8 @@
  * Per Project with Services, in its namespace: the namespace and its
  * NetworkPolicy, then `service-egress`, which lets the customer's
  * containers reach DNS, their own namespace (their Databases' Poolers) and
- * the internet, but nothing else inside the cluster or in a private network.
+ * the internet, but nothing else inside the cluster or in a private network,
+ * and the nodes (`nodes`) on 80 and 443 only.
  * Per Service: a Deployment `svc-<id>` running the image pinned by digest
  * under the `gvisor` RuntimeClass, and a Kubernetes Service of the same
  * name, which the Routes operator sends its Routes to.
@@ -25,6 +26,7 @@ import {
     serviceSpecVersion,
 } from '@openupstream/sdk';
 import type { KubeObject } from '../kube.js';
+import type { NodeBlocks } from '../nodes.js';
 import {
     COMPONENT_LABEL,
     LABELS,
@@ -155,12 +157,12 @@ const kubernetesService = (row: ServiceRow, port: number): KubeObject => ({
  * Applied in this order, per Project: its namespace, NetworkPolicies, then
  * each Service's Deployment and, when it has a port, its Kubernetes Service.
  */
-export function planServices(rows: readonly ServiceRow[]): KubeObject[] {
+export function planServices(rows: readonly ServiceRow[], nodes: NodeBlocks): KubeObject[] {
     const projects = [...new Map(rows.map((row) => [row.project.id, row.project])).values()];
     return [
         ...projects.flatMap((project) => [
             ...projectObjectsFor(project),
-            customerEgressPolicy(project.id, 'service-egress', SERVICES_COMPONENT, labels(project.id)),
+            customerEgressPolicy(project.id, 'service-egress', SERVICES_COMPONENT, labels(project.id), nodes),
         ]),
         ...rows.flatMap((row) => [deployment(row), ...(row.service.port === null ? [] : [kubernetesService(row, row.service.port)])]),
     ];

@@ -98,7 +98,10 @@ Germany.
   the internet, and the node-to-node ports (k3s API 6443, etcd 2379–2380,
   kubelet 10250, Garage RPC 3901) only from the other two nodes' public IPs.
   These control-plane connections are TLS (k3s, etcd) or Garage's own
-  encrypted RPC; flannel's WireGuard carries pod traffic only.
+  encrypted RPC; flannel's WireGuard carries pod traffic only. Pod traffic
+  leaves with its node's address, so this firewall admits a pod's
+  connection to another node's ports too; the customer pods' egress policy
+  keeps them out instead (decision 104).
 - gVisor (`runsc`) is added to k3s's containerd config template and
   exposed as the `gvisor` RuntimeClass; k3s does not detect it on its own.
   `infra/gvisor/install.sh` installs a pinned release, checked against the
@@ -644,7 +647,13 @@ digest (#55).
   NetworkPolicy `service-egress` (#93) leaves out every loopback, private,
   shared and link-local range, which holds the cluster's pod and service
   networks, the nodes' private addresses and metadata endpoints. Their
-  Buckets they reach at their public hostnames.
+  Buckets they reach at their public hostnames. The nodes' own addresses,
+  where the Kubernetes API, kubelet and etcd listen, are left out too and
+  allowed on TCP 80 and 443 only (decision 104): the Services and Jobs
+  operators list the Nodes on every pass and watch them, so a node that
+  joins is left out at once, and a pass that cannot list them applies
+  nothing. The `kubernetes` Service's address is rewritten to a node's
+  6443 before the policy sees it, so it is closed with them.
 - One-off jobs are an API call; customers cannot spawn containers from inside
   containers.
 - Deleting a Project deletes its namespace and every Resource, Secret and
@@ -879,6 +888,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 100 | The demo app `spa-api` is a single-page app in one Bucket at `/` with SPA fallback and a Service at `/api` on the same hostname that keeps uploaded files (up to 1 MiB) in a second Bucket over S3, with the AWS SDK's S3 client. The Service reads the Bucket's access from four Secrets (`BUCKET_ENDPOINT`, `BUCKET_REGION`, `BUCKET_ACCESS_KEY_ID`, `BUCKET_SECRET_ACCESS_KEY`) copied from what the API shows for the Bucket; downloads are `attachment` with CSP `sandbox`, so an uploaded page never runs on the app's origin | a stateless API; the browser uploading straight to the Bucket with presigned URLs | step 2 is object storage as well as static sites, and ProjectMatch's five S3 buckets are reached from its code; proxying through the Service needs no CORS on Garage; copying the key by hand is what a customer does today and shows what binding Buckets like Databases (decision 97) would save (Open question 19) |
 | 101 | Node.js 24 everywhere (`.nvmrc`, `engines`, CI, the images); the control plane's tests start one Postgres server per run in a node:test global setup (`--test-global-setup`), each test file still creating and dropping its own database on it | staying on Node 22 with a wrapper script that starts the container and then runs `node --test`; testcontainers' reuse mode | a container per test file, about 21 starting at once, failed 3 of 15 local runs under Docker load; global setup is node:test's own hook and exists from Node 24.0 on; reuse locks only within one process, so the parallel test files would still race, and the container outlives the run. Node 24 is the active LTS, and the images run what the tests run. Costs: contributors need Node 24, and the hook is still Stability 1.0, so it may change in a minor release |
 | 102 | The demo app `worker` is one image with three commands on one Database: the image's own a Service without a port taking tasks with `FOR UPDATE SKIP LOCKED`, each taken and done in one transaction and polled every second; `enqueue` a One-off job that adds a batch and exits 0 once workers have done it all; `cleanup` a Cron job deleting tasks done more than a day ago | jobs only, with no queue; a worker on the `notes` Database; `LISTEN`/`NOTIFY` instead of polling; a queue library (pg-boss, Graphile Worker) | step 4 and the worker Services of decision 98 each get a demo, and ProjectMatch's SQS consumers and DynamoDB TTLs take the same shapes after v1; `enqueue` waiting makes `oup job run` the proof that the workers ran, before there is a log stream; the Pooler's transaction mode has no `LISTEN`; plain SQL shows the pattern decision 8 points customers to. Costs: a task holds its transaction (and a Pooler connection) while it runs, and an empty queue costs a query per replica a second |
+| 104 | The customer egress policies (`service-egress`, `job-egress`) leave the nodes' addresses (InternalIP and ExternalIP, /32 and /128) out of the internet and allow them on TCP 80 and 443 only. The Services and Jobs operators list the Nodes on every pass and watch them to start a pass at once when a Node joins, goes or changes its addresses; with no Nodes, a Node without an address or a failed listing, the pass applies and deletes nothing. Their ClusterRoles gain `list` and `watch` on Nodes | a host firewall rule dropping pod traffic to the nodes but for 80 and 443; the node-to-node ports on Tailscale addresses; leaving it, as each port needs a certificate or token | pod traffic leaves with its node's address, so the host firewall, which admits everything between nodes, cannot tell a customer's pod from the platform's: a host rule would also cut off the platform pods that use the Kubernetes API (through the `kubernetes` Service, rewritten to a node's 6443) or kubelet, or need holes that reopen them. Tailscale as the node mesh reverses decision 28. k3s's policy controller has no notion of a node, so the operators supply the addresses, as Cilium's `world` entity leaves out `host` and `remote-node` and Calico users keep node addresses in a GlobalNetworkSet. Planning without the addresses is no fallback: pruning would delete the policy, and a new Project's pods would start without one. The watch only wakes the pass, which lists the Nodes itself, so a broken watch costs at most one interval. Before, a Service's pod reached 6443, 10250 and 2379 on every node. Tested on the dev cluster (2026-11-09, with decision 103), the pass run under the Services operator's ServiceAccount: from a pod on each compute node 6443, 10250, 2379, 2380 and 3901 on all three nodes, `10.43.0.1:443` and the metadata endpoint were refused, while a Bucket answered through 443 of either compute node; the same policy without the node addresses left them open; with `list` on Nodes taken away the pass logged the 403 and left the policy as it was |
 
 ## Open questions
 
@@ -999,6 +1009,9 @@ Decisions table once it is settled.
     copy. A binding would put Bucket secrets into `project-secrets` or a
     Secret of their own, which the control plane must keep in step when a
     Bucket's key is replaced.
+20. ~~**Customer pods reach the nodes' own ports.**~~ Settled by decision
+    104: the egress policies leave the nodes' addresses out but for 80 and
+    443.
 
 ## Build order
 
