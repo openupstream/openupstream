@@ -29,6 +29,8 @@ import type {
     JobPatch,
     JobRun,
     JobRunInput,
+    LogEntry,
+    LogQuery,
     Project,
     ProjectInput,
     Route,
@@ -258,6 +260,22 @@ export class OpenUpstreamClient {
         );
     }
 
+    /** The Service's output from all its replicas, as a stream of entries; `signal` ends it early. */
+    serviceLogs(projectId: Id, serviceId: Id, query: LogQuery = {}, signal?: AbortSignal): Promise<ApiResult<AsyncIterable<LogEntry>>> {
+        return this.#stream(
+            `/v1/projects/${encodeURIComponent(projectId)}/services/${encodeURIComponent(serviceId)}/logs${logSearch(query)}`,
+            signal,
+        );
+    }
+
+    /** A run's output, as a stream of entries; `signal` ends it early. */
+    jobRunLogs(projectId: Id, jobId: Id, runId: string, query: LogQuery = {}, signal?: AbortSignal): Promise<ApiResult<AsyncIterable<LogEntry>>> {
+        return this.#stream(
+            `/v1/projects/${encodeURIComponent(projectId)}/jobs/${encodeURIComponent(jobId)}/runs/${encodeURIComponent(runId)}/logs${logSearch(query)}`,
+            signal,
+        );
+    }
+
     /** The Project's Secrets, names only: a value is never returned. */
     listSecrets(projectId: Id): Promise<ApiResult<Secret[]>> {
         return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/secrets`);
@@ -272,6 +290,32 @@ export class OpenUpstreamClient {
 
     deleteSecret(projectId: Id, name: string): Promise<ApiResult<void>> {
         return this.#call('DELETE', `/v1/projects/${encodeURIComponent(projectId)}/secrets/${encodeURIComponent(name)}`);
+    }
+
+    /** A GET whose answer is NDJSON, one entry per line, read as it arrives. */
+    async #stream<T>(path: string, signal?: AbortSignal): Promise<ApiResult<AsyncIterable<T>>> {
+        const response = await fetch(`${this.baseUrl}${path}`, {
+            headers: { authorization: `Bearer ${this.#token}` },
+            ...(signal === undefined ? {} : { signal }),
+        }).then(
+            (value) => ({ ok: true as const, value }),
+            (error: unknown) => ({ ok: false as const, error: { status: 0, message: error instanceof Error ? error.message : String(error) } }),
+        );
+        if (!response.ok) {
+            return response;
+        }
+        const isNdjson = response.value.headers.get('content-type')?.includes('application/x-ndjson') ?? false;
+        if (response.value.ok && isNdjson && response.value.body !== null) {
+            return { ok: true, value: ndjsonLines<T>(response.value.body) };
+        }
+        const parsed: unknown = await response.value.json().catch(() => undefined);
+        const message =
+            typeof parsed === 'object' && parsed !== null && 'error' in parsed && typeof parsed.error === 'string'
+                ? parsed.error
+                : response.value.ok
+                  ? 'the API did not answer with a log stream'
+                  : response.value.statusText;
+        return { ok: false, error: { status: response.value.ok ? 0 : response.value.status, message } };
     }
 
     async #call<T>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {
@@ -300,5 +344,31 @@ export class OpenUpstreamClient {
                 ? parsed.error
                 : response.value.statusText;
         return { ok: false, error: { status: response.value.status, message } };
+    }
+}
+
+const logSearch = (query: LogQuery): string => {
+    const params = new URLSearchParams({
+        ...(query.tail === undefined ? {} : { tail: String(query.tail) }),
+        ...(query.follow === true ? { follow: 'true' } : {}),
+    }).toString();
+    return params === '' ? '' : `?${params}`;
+};
+
+/** The JSON values of a body of NDJSON, one per non-empty line. */
+export async function* ndjsonLines<T>(body: ReadableStream<Uint8Array>): AsyncIterable<T> {
+    const decoder = new TextDecoder();
+    let pending = '';
+    for await (const chunk of body) {
+        pending += decoder.decode(chunk, { stream: true });
+        const lines = pending.split('\n');
+        pending = lines.pop() ?? '';
+        for (const line of lines.filter((candidate) => candidate.trim() !== '')) {
+            yield JSON.parse(line) as T;
+        }
+    }
+    const last = pending + decoder.decode();
+    if (last.trim() !== '') {
+        yield JSON.parse(last) as T;
     }
 }

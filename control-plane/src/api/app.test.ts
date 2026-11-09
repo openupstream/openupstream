@@ -10,6 +10,7 @@ import {
     type Domain,
     type JobDetails,
     type JobRun,
+    type LogEntry,
     type Project,
     type Route,
     type Secret,
@@ -22,7 +23,7 @@ import { getAccountRecord, liftHold, placeHold } from '../accounts/store.js';
 import { listDatabaseRows } from '../databases/rows.js';
 import { ensureDefaultDomains } from '../domains/store.js';
 import { listDomainRoutings } from '../routes/store.js';
-import { type ClusterStatus, type ControlPlaneKube, type CronJobStatus, type DeploymentStatus, type KubeJob, type SecretManifest } from '../kube.js';
+import { type ClusterStatus, type ControlPlaneKube, type CronJobStatus, type DeploymentStatus, type KubeJob, type PodInfo, type SecretManifest } from '../kube.js';
 import type { RegistryDeps } from '../registry.js';
 import { listServiceRows } from '../services/store.js';
 import { listJobRows } from '../jobs/store.js';
@@ -102,6 +103,10 @@ const cronJobs = new Map<string, CronJobStatus>();
 const runs = new Map<string, KubeJob>();
 let kubeDown = false;
 
+/** The pods the fake Kubernetes lists, by namespace and label selector, and their log lines (`pod/container`). */
+const pods = new Map<string, PodInfo[]>();
+const podLogs = new Map<string, string[]>();
+
 /** What the fake Kubernetes reports per Cluster name; a string is an error. */
 const clusters = new Map<string, ClusterStatus | string>();
 
@@ -137,6 +142,15 @@ const kube: ControlPlaneKube = {
         return ok([...runs.values()].filter((run) => run.metadata.namespace === namespace && run.metadata.labels?.[key] === value));
     },
     deleteJob: async (_namespace, name) => ok(runs.delete(name) ? 'deleted' : 'not-found'),
+    listPods: async (namespace, selector) => (kubeDown ? err('connection refused') : ok(pods.get(`${namespace} ${selector}`) ?? [])),
+    nodeSite: async () => ok('hetzner-fsn1'),
+    podLog: async (_namespace, pod, container, options) => {
+        const lines = podLogs.get(`${pod}/${container}`) ?? [];
+        const tail = options.tailLines === undefined ? lines : lines.slice(-options.tailLines);
+        return ok((async function* () {
+            yield* tail;
+        })());
+    },
     remove: async () => ok(undefined),
     applySecret: async (secret) => {
         const hold = secretHold?.namespace === secret.metadata.namespace ? secretHold : undefined;
@@ -178,6 +192,7 @@ before(async () => {
         storage,
         ...domainDeps,
         authenticate: madauthAuthenticator(sessionVerifier({ issuer: ISSUER, keys: jwks }), apiKeys),
+        logStream: { pollMs: 20, maxMs: 2_000 },
     });
     const accounts = await db.pool.query<{ id: string }>(`insert into accounts (name) values ('A'), ('B') returning id`);
     [accountA, accountB] = accounts.rows.map((row) => row.id) as [string, string];
@@ -954,6 +969,37 @@ describe('Services', () => {
         assert.equal((await call('DELETE', path(`/${created.id}`), 'alice')).status, 202);
     });
 
+    test('logs: the replicas\' last lines as NDJSON, found by the Service\'s label; checked like the Service', async () => {
+        pods.set(`project-${projectId} openupstream.io/service-id=${service.id}`, [
+            { name: 'svc-a', nodeName: 'node-1', containers: [{ name: 'app', state: 'running', restartCount: 0 }] },
+        ]);
+        podLogs.set('svc-a/app', ['2026-11-09T10:00:00Z one', '2026-11-09T10:00:01Z two', '2026-11-09T10:00:02Z three']);
+        const response = await call('GET', path(`/${service.id}/logs?tail=2`), 'alice');
+        assert.equal(response.status, 200);
+        assert.match(response.headers.get('content-type') ?? '', /^application\/x-ndjson/);
+        const entries = (await response.text())
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line) as LogEntry);
+        assert.deepEqual(entries, [
+            { pod: 'svc-a', site: 'hetzner-fsn1', time: '2026-11-09T10:00:01Z', line: 'two', previous: false },
+            { pod: 'svc-a', site: 'hetzner-fsn1', time: '2026-11-09T10:00:02Z', line: 'three', previous: false },
+        ]);
+        assert.equal((await call('GET', path(`/${service.id}/logs`), 'bob')).status, 404);
+        assert.equal((await call('GET', path(`/${service.id}/logs?tail=-1`), 'alice')).status, 400);
+        assert.equal((await call('GET', path(`/${service.id}/logs?follow=yes`), 'alice')).status, 400);
+        kubeDown = true;
+        assert.equal((await call('GET', path(`/${service.id}/logs`), 'alice')).status, 503);
+        kubeDown = false;
+    });
+
+    test('logs with follow: ends once no pod is left to write', async () => {
+        pods.set(`project-${projectId} openupstream.io/service-id=${service.id}`, []);
+        const response = await call('GET', path(`/${service.id}/logs?follow=true`), 'alice');
+        assert.equal(response.status, 200);
+        assert.equal(await response.text(), '');
+    });
+
     test('PATCH: a new tag is resolved again; replicas alone are not', async () => {
         images.set('acme/api:v2', digest('4'));
         const patched = await call('PATCH', path(`/${service.id}`), 'alice', { image: 'ghcr.io/acme/api:v2', replicas: 2 });
@@ -1264,6 +1310,19 @@ describe('Jobs', () => {
         assert.equal((await call('GET', runsPath, 'alice')).status, 503);
         assert.equal((await call('POST', runsPath, 'alice')).status, 503);
         kubeDown = false;
+    });
+
+    test("a run's logs come from its pod, found by the run's name; only a run of the Job is looked up", async () => {
+        const runId = `job-${job.id}-29384757`;
+        pods.set(`project-${projectId} batch.kubernetes.io/job-name=${runId}`, [
+            { name: `${runId}-x1`, nodeName: 'node-1', containers: [{ name: 'job', state: 'terminated', restartCount: 0 }] },
+        ]);
+        podLogs.set(`${runId}-x1/job`, ['2026-11-09T03:00:00Z done 42 tasks']);
+        const response = await call('GET', path(`/${job.id}/runs/${runId}/logs`), 'alice');
+        assert.equal(response.status, 200);
+        assert.equal(((JSON.parse(await response.text()) as LogEntry)).line, 'done 42 tasks');
+        assert.equal((await call('GET', path(`/${job.id}/runs/svc-${job.id}-abc/logs`), 'alice')).status, 404);
+        assert.equal((await call('GET', path(`/${job.id}/runs/${runId}/logs`), 'bob')).status, 404);
     });
 
     test('a run is checked before it starts; an Account with a Hold starts none', async () => {

@@ -39,7 +39,8 @@ subjects:
     namespace: project-00000000-0000-4000-8000-000000000002
 ---
 # Reads a Database's and a Service's state for the API; deletes what the cleanup removes
-# (ARCHITECTURE.md, decisions 48 and 58); writes the Projects' Secrets.
+# (ARCHITECTURE.md, decisions 48 and 58); writes the Projects' Secrets; reads
+# the log stream of Services' and runs' pods (decision 21).
 # Creating everything else is the operators' job.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -77,6 +78,17 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     verbs: [create, patch]
+  # The log stream: a Service's or a run's pods by label, their logs, and
+  # the Site (zone label) of the node each runs on.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

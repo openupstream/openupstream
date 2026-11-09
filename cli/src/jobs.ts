@@ -106,6 +106,7 @@ export const JOB_FLAGS = {
         'no-wait',
     ],
     run: ['project', 'env', 'no-wait'],
+    logs: ['project', 'tail', 'follow', 'timestamps'],
 } as const;
 
 /** The first given flag the verb does not take; undefined when there is none. */

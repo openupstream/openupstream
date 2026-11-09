@@ -1,11 +1,13 @@
 /**
  * What the control plane asks of Kubernetes: a Database's, a Service's and
- * a Job's state for the API, the deletes of the cleanup (decision 48: deleting is the control
+ * a Job's state for the API, the log stream of their pods (decision 21), the deletes of the cleanup (decision 48: deleting is the control
  * plane's explicit step, never the operator's), and the Secrets it renders
  * from its encrypted store (decision 91), since it alone holds the
  * key-encryption key. Every other object is the operators' to create.
  */
-import { ApiException, type KubeConfig, KubernetesObjectApi, PatchStrategy } from '@kubernetes/client-node';
+import { PassThrough } from 'node:stream';
+import { createInterface } from 'node:readline';
+import { ApiException, type KubeConfig, KubernetesObjectApi, Log, PatchStrategy } from '@kubernetes/client-node';
 import { SPEC_VERSION_ANNOTATION, type DatabaseState, type JobState, type ServiceState } from '@openupstream/sdk';
 import { type Result, err, ok } from './result.js';
 
@@ -75,6 +77,31 @@ export interface SecretManifest {
     readonly data: Readonly<Record<string, string>>;
 }
 
+/** A container of a pod, as far as its logs go. */
+export interface PodContainer {
+    readonly name: string;
+    readonly restartCount: number;
+    /** `waiting` has no output yet; `running` and `terminated` have. */
+    readonly state: 'waiting' | 'running' | 'terminated';
+}
+
+/** A pod, as far as its logs go. */
+export interface PodInfo {
+    readonly name: string;
+    /** undefined before it is scheduled. */
+    readonly nodeName: string | undefined;
+    readonly containers: readonly PodContainer[];
+}
+
+/** What to read of one container's log; Kubernetes' own parameters, timestamps always on. */
+export interface PodLogOptions {
+    readonly follow: boolean;
+    readonly previous: boolean;
+    readonly tailLines?: number;
+    /** RFC 3339; Kubernetes reads it to the second. */
+    readonly sinceTime?: string;
+}
+
 export interface ControlPlaneKube {
     /** undefined when the Cluster does not exist (yet). */
     readCluster(namespace: string, name: string): Promise<Result<ClusterStatus | undefined, string>>;
@@ -88,6 +115,15 @@ export interface ControlPlaneKube {
     listJobs(namespace: string, selector: string): Promise<Result<KubeJob[], string>>;
     /** Stops and deletes a Kubernetes Job with its pod; `not-found` when there is none. */
     deleteJob(namespace: string, name: string): Promise<Result<'deleted' | 'not-found', string>>;
+    /** The pods in the namespace that carry the labels in `selector`. */
+    listPods(namespace: string, selector: string): Promise<Result<PodInfo[], string>>;
+    /** The Site (zone label) of a node; undefined when it has none or is gone. */
+    nodeSite(nodeName: string): Promise<Result<string | undefined, string>>;
+    /**
+     * One container's log, line by line, each starting with its RFC 3339
+     * timestamp; ends with the log, or when `signal` aborts.
+     */
+    podLog(namespace: string, pod: string, container: string, options: PodLogOptions, signal: AbortSignal): Promise<Result<AsyncIterable<string>, string>>;
     /** Deletes an object; one that is already gone counts as deleted. */
     remove(ref: ObjectRef): Promise<Result<void, string>>;
     /**
@@ -150,6 +186,29 @@ interface CronJobObject {
     spec?: { jobTemplate?: unknown };
 }
 
+interface PodObject {
+    metadata: { name: string; deletionTimestamp?: Date };
+    spec?: { nodeName?: string; containers?: { name: string }[] };
+    status?: {
+        containerStatuses?: { name: string; restartCount?: number; state?: { running?: unknown; terminated?: unknown; waiting?: unknown } }[];
+    };
+}
+
+const ZONE_LABEL = 'topology.kubernetes.io/zone';
+
+const podInfoOf = (pod: PodObject): PodInfo => ({
+    name: pod.metadata.name,
+    nodeName: pod.spec?.nodeName,
+    containers: (pod.spec?.containers ?? []).map((container) => {
+        const status = pod.status?.containerStatuses?.find((candidate) => candidate.name === container.name);
+        return {
+            name: container.name,
+            restartCount: status?.restartCount ?? 0,
+            state: status?.state?.running !== undefined ? 'running' : status?.state?.terminated !== undefined ? 'terminated' : 'waiting',
+        };
+    }),
+});
+
 /** A Kubernetes Job, a run of a Job: the fields the control plane writes and reads. */
 export interface KubeJob {
     apiVersion: 'batch/v1';
@@ -174,6 +233,7 @@ export interface KubeJob {
 
 export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIMEOUT_MS } = {}): ControlPlaneKube {
     const api = KubernetesObjectApi.makeApiClient(config);
+    const logs = new Log(config);
     return {
         readCluster: async (namespace, name) => {
             const result = await within(
@@ -243,6 +303,59 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
                 return result.error.status === NOT_FOUND ? ok('not-found') : err(result.error.message);
             }
             return ok('deleted');
+        },
+        listPods: async (namespace, selector) => {
+            const result = await within(api.list<PodObject>('v1', 'Pod', namespace, undefined, undefined, undefined, undefined, selector), timeoutMs);
+            return result.ok ? ok(result.value.items.map(podInfoOf)) : err(result.error.message);
+        },
+        nodeSite: async (nodeName) => {
+            const result = await within(
+                api.read<{ apiVersion: string; kind: string; metadata: { name: string; labels?: Record<string, string> } }>({
+                    apiVersion: 'v1',
+                    kind: 'Node',
+                    metadata: { name: nodeName },
+                }),
+                timeoutMs,
+            );
+            if (!result.ok) {
+                return result.error.status === NOT_FOUND ? ok(undefined) : err(result.error.message);
+            }
+            return ok(result.value.metadata.labels?.[ZONE_LABEL]);
+        },
+        podLog: async (namespace, pod, container, options, signal) => {
+            const sink = new PassThrough();
+            // The client pipes the response body into the sink without an error handler on the body: aborting it,
+            // or a connection that drops, would crash the process. Its error ends the lines instead.
+            sink.on('pipe', (body) => body.on('error', () => sink.end()));
+            // A body still piped in after the sink was ended must not crash the process either.
+            sink.on('error', () => undefined);
+            const request = logs.log(namespace, pod, container, sink, {
+                follow: options.follow,
+                previous: options.previous,
+                timestamps: true,
+                ...(options.tailLines === undefined ? {} : { tailLines: options.tailLines }),
+                ...(options.sinceTime === undefined ? {} : { sinceTime: options.sinceTime }),
+            });
+            const result = await within(request, timeoutMs);
+            if (!result.ok) {
+                sink.end();
+                // One that answers after the timeout is closed at once.
+                request.then((late) => late.abort(), () => undefined);
+                return err(result.error.message);
+            }
+            const controller = result.value;
+            // The client pipes the body into the sink without passing on its errors: ending the sink is what ends the lines.
+            const stop = () => {
+                controller.abort();
+                sink.end();
+            };
+            if (signal.aborted) {
+                stop();
+            } else {
+                signal.addEventListener('abort', stop, { once: true });
+                sink.once('end', () => signal.removeEventListener('abort', stop));
+            }
+            return ok(createInterface({ input: sink, crlfDelay: Number.POSITIVE_INFINITY }));
         },
         remove: async (ref) => {
             const result = await within(

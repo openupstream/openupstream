@@ -395,6 +395,43 @@ export interface JobRunInput {
     env?: Record<string, string>;
 }
 
+/**
+ * One line of a Service's or a run's output, as the log stream sends it
+ * (ARCHITECTURE.md, "Observability and customer logs"): a live tail only,
+ * nothing is retained (decision 21).
+ */
+export interface LogEntry {
+    /** The pod (replica or run) it came from. */
+    pod: string;
+    /** The Site the pod runs in; null when Kubernetes does not say. */
+    site: Site | null;
+    /** When the container wrote it, as Kubernetes recorded it (RFC 3339, nanoseconds). */
+    time: string;
+    /** The line, without its line break. */
+    line: string;
+    /** From the container before its last restart (a crash): what it wrote before it died. */
+    previous: boolean;
+}
+
+/** Limits of the log stream, checked by the API. */
+export const LOG_LIMITS = {
+    /** Lines per container sent first, when `tail` is not given. */
+    defaultTailLines: 100,
+    maxTailLines: 10_000,
+    /** A followed stream ends after this long; the client asks again to go on. */
+    maxFollowSeconds: 3600,
+} as const;
+
+/**
+ * What to read: `tail` lines per container first; with `follow`, then new
+ * lines as they are written, also from replicas that start while it runs,
+ * until LOG_LIMITS.maxFollowSeconds have passed or every pod is gone.
+ */
+export interface LogQuery {
+    tail?: number;
+    follow?: boolean;
+}
+
 /** A Secret's name is an environment variable name (the schema checks the same). */
 export const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,254}$/;
 

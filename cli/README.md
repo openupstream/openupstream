@@ -40,6 +40,13 @@ oup site deploy dist --bucket my-site
   password comes from stdin.
 - `oup service list`, `oup service show <name>` (JSON),
   `oup service delete <name>` (refused while a Route serves it).
+- `oup service logs <name> [--tail <n>] [-f | --follow] [--timestamps]`:
+  the last lines (100 by default) of every replica, sorted by time, each
+  with the end of its pod's name in brackets, and `previous` for what a
+  container wrote before it crashed and restarted. `-f` goes on with new
+  lines as they are written, including from replicas a deploy starts, for
+  up to an hour. Nothing is kept (decision 21): what a pod wrote before it
+  was replaced is gone.
 - `oup job deploy <name> --image <ref> [--schedule <cron> | --no-schedule]
   [--time-zone <IANA name>] [--timeout <seconds>] [--memory <MB>]
   [--cpu <millicores>] [--site hetzner-fsn1|ovh-lim] [--registry-user <user>
@@ -63,6 +70,9 @@ oup site deploy dist --bucket my-site
   last day's runs, scheduled and started, newest first), `oup job stop
   <name> <run>` (stops and removes a run), `oup job delete <name>` (and
   its runs).
+- `oup job logs <name> [<run>] [--tail <n>] [-f | --follow] [--timestamps]`:
+  a run's output, the newest run's without `<run>`; `-f` ends once the run
+  has finished. Runs, and so their output, are kept a day.
 - `oup secret list` (names only), `oup secret set <NAME>`, `oup secret
   delete <NAME>`. The value comes from stdin, never from an argument, which
   shells keep in their history: piped (one trailing line break is dropped,

@@ -7,10 +7,12 @@
  *   oup link <project>                       this directory's Project (.openupstream.json)
  *   oup service list | show <name> | delete <name>
  *   oup service deploy <name> --image <ref> [--port … | --no-port] …
+ *   oup service logs <name> [--tail <n>] [-f] [--timestamps]
  *   oup job list | show <name> | runs <name> | delete <name>
  *   oup job deploy <name> --image <ref> [--schedule …] … [-- command…]
  *   oup job run <name> [--env NAME=value] [-- args…]   waits for the outcome
  *   oup job stop <name> <run>
+ *   oup job logs <name> [<run>] [--tail <n>] [-f] [--timestamps]   the newest run by default
  *   oup secret list | set <NAME> | delete <NAME>   a value is read from stdin
  *   oup site deploy <dir> --bucket <name> [--keep] [--force]
  *   oup version
@@ -19,7 +21,7 @@
  * or `OUP_PROJECT` names another.
  *
  * Planned (ARCHITECTURE.md build order): oup pg, oup bucket, oup routes,
- * oup logs, oup usage.
+ * oup usage.
  *
  * `OUP_API_KEY` (a madAuth API key) replaces `oup login`, e.g. in CI, with
  * `OUP_API_URL` for another API than https://api.openupstream.com.
@@ -30,7 +32,9 @@ import { S3Client } from '@aws-sdk/client-s3';
 import {
     COMPUTE_SITES,
     DEFAULT_API_URL,
+    type ApiResult,
     type JobDetails,
+    type LogEntry,
     OpenUpstreamClient,
     type Project,
     type RegistryAuth,
@@ -54,6 +58,7 @@ import {
     splitAtDashes,
     strayFlag,
 } from './jobs.js';
+import { formatLogEntry, parseTail } from './logs.js';
 import { type DesiredService, formatServices, planServiceDeploy, waitUntilRunning } from './services.js';
 import { apiAccess } from './session.js';
 import { readSecretValue } from './stdin.js';
@@ -67,6 +72,7 @@ const USAGE = `usage:
   oup service show <name>
   oup service deploy <name> --image <ref> [--port <n> | --no-port] [--replicas <n>] [--memory <MB>] [--cpu <millicores>]
                      [--site hetzner-fsn1|ovh-lim] [--registry-user <user> --registry-password-stdin] [--no-wait]
+  oup service logs <name> [--tail <n>] [-f | --follow] [--timestamps]
   oup service delete <name>
   oup job list
   oup job show <name>
@@ -76,6 +82,7 @@ const USAGE = `usage:
   oup job run <name> [--env NAME=value]… [--no-wait] [-- <arg>…]
   oup job runs <name>
   oup job stop <name> <run>
+  oup job logs <name> [<run>] [--tail <n>] [-f | --follow] [--timestamps]
   oup job delete <name>
   oup secret list
   oup secret set <NAME>        (the value from stdin)
@@ -84,7 +91,11 @@ const USAGE = `usage:
   oup version
 
 Service, job and secret commands take --project <name|id>; without it, the
-Project linked to this directory (oup link) or OUP_PROJECT.`;
+Project linked to this directory (oup link) or OUP_PROJECT.
+
+logs prints the last lines (100 by default) of every replica or of a run,
+with -f also new ones as they are written, for up to an hour. Nothing is
+kept: what a pod wrote before it was replaced is gone.`;
 
 const fail = (message: string): never => {
     console.error(`oup: ${message}`);
@@ -224,6 +235,9 @@ async function service(args: string[]): Promise<void> {
             'registry-user': { type: 'string' },
             'registry-password-stdin': { type: 'boolean' },
             'no-wait': { type: 'boolean' },
+            tail: { type: 'string' },
+            follow: { type: 'boolean', short: 'f' },
+            timestamps: { type: 'boolean' },
         },
     });
     const [name] = positionals;
@@ -251,6 +265,19 @@ async function service(args: string[]): Promise<void> {
         }
         case 'deploy':
             return serviceDeploy(client, project, existing, { ...values, name: name as string });
+        case 'logs': {
+            if (existing === undefined) {
+                return fail(`no Service ${name} in ${project.name}`);
+            }
+            const tail = parseTail(values.tail);
+            if (!tail.ok) {
+                return fail(tail.error);
+            }
+            return printLogs(await client.serviceLogs(project.id, existing.id, logQuery(tail.value, values.follow)), {
+                prefix: true,
+                timestamps: values.timestamps === true,
+            });
+        }
         default:
             return fail(USAGE);
     }
@@ -311,6 +338,21 @@ async function serviceDeploy(
     return running.ok ? undefined : fail(`${flags.name} is not running: ${running.error}`);
 }
 
+const logQuery = (tail: number | undefined, follow: boolean | undefined) => ({
+    ...(tail === undefined ? {} : { tail }),
+    ...(follow === true ? { follow: true } : {}),
+});
+
+/** Prints a log stream as it arrives. */
+async function printLogs(opened: ApiResult<AsyncIterable<LogEntry>>, options: { readonly prefix: boolean; readonly timestamps: boolean }): Promise<void> {
+    if (!opened.ok) {
+        return fail(opened.error.message);
+    }
+    for await (const entry of opened.value) {
+        console.log(formatLogEntry(entry, options));
+    }
+}
+
 /** Registry credentials from `--registry-user` and the password on stdin; undefined without them. */
 async function registryAuthFrom(flags: { 'registry-user'?: string; 'registry-password-stdin'?: boolean }): Promise<RegistryAuth | undefined> {
     const username = flags['registry-user'];
@@ -346,6 +388,9 @@ async function job(args: string[]): Promise<void> {
             'registry-user': { type: 'string' },
             'registry-password-stdin': { type: 'boolean' },
             'no-wait': { type: 'boolean' },
+            tail: { type: 'string' },
+            follow: { type: 'boolean', short: 'f' },
+            timestamps: { type: 'boolean' },
         },
     });
     const [name, runId] = positionals;
@@ -384,6 +429,18 @@ async function job(args: string[]): Promise<void> {
             const stopped = await client.deleteJobRun(project.id, found().id, runId);
             return stopped.ok ? console.log(`Stopped and removed ${runId}.`) : fail(stopped.error.message);
         }
+        case 'logs': {
+            const tail = parseTail(values.tail);
+            if (!tail.ok) {
+                return fail(tail.error);
+            }
+            const jobId = found().id;
+            const run = runId ?? (await newestRun(client, project, jobId, name as string));
+            return printLogs(await client.jobRunLogs(project.id, jobId, run, logQuery(tail.value, values.follow)), {
+                prefix: false,
+                timestamps: values.timestamps === true,
+            });
+        }
         case 'delete': {
             const deleted = await client.deleteJob(project.id, found().id);
             return deleted.ok ? console.log(`Deleted ${name}; its runs stop within a minute.`) : fail(deleted.error.message);
@@ -395,6 +452,15 @@ async function job(args: string[]): Promise<void> {
         default:
             return fail(USAGE);
     }
+}
+
+/** The id of the Job's newest run; the API lists them newest first. */
+async function newestRun(client: OpenUpstreamClient, project: Project, jobId: string, name: string): Promise<string> {
+    const runs = await client.listJobRuns(project.id, jobId);
+    if (!runs.ok) {
+        return fail(runs.error.message);
+    }
+    return runs.value[0]?.id ?? fail(`no runs of ${name} in the last day`);
 }
 
 async function jobDeploy(
