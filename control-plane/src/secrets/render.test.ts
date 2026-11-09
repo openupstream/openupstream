@@ -41,6 +41,9 @@ const fakeKube = (failing: readonly string[] = [], missing: readonly string[] = 
         createJob: async () => err('not in this test'),
         listJobs: async () => ok([]),
         deleteJob: async () => ok('not-found'),
+        listPods: async () => ok([]),
+        nodeSite: async () => ok(undefined),
+        podLog: async () => err('not in this test'),
         remove: async () => ok(undefined),
         applySecret: async (secret) => {
             if (failing.includes(secret.metadata.namespace)) {
