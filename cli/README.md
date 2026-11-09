@@ -43,7 +43,8 @@ oup site deploy dist --bucket my-site
 - `oup service logs <name> [--tail <n>] [-f | --follow] [--timestamps]`:
   the last lines (100 by default) of every replica, sorted by time, each
   with the end of its pod's name in brackets, and `previous` for what a
-  container wrote before it crashed and restarted. `-f` goes on with new
+  container wrote before it crashed and restarted; `--tail 0` shows only
+  new lines. `-f` goes on with new
   lines as they are written, including from replicas a deploy starts, for
   up to an hour. Nothing is kept (decision 21): what a pod wrote before it
   was replaced is gone.

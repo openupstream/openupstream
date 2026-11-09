@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import type { LogEntry } from '@openupstream/sdk';
 import type { PodInfo, PodLogOptions } from '../kube.js';
 import { err, ok } from '../result.js';
-import { type LogKube, logsOf, openLogStream, parseLogLine, timeKey } from './stream.js';
+import { type LogKube, firstRead, logsOf, openLogStream, parseLogLine, timeKey } from './stream.js';
 
 /** A followed log the test writes into and ends. */
 interface Live {
@@ -269,6 +269,68 @@ describe('log stream', () => {
             (await reading).map((entry) => entry.line),
             ['working', 'done'],
         );
+    });
+
+    test('tail 0: Kubernetes is asked from now on, never for tailLines=0, which it takes for all', () => {
+        assert.deepEqual(firstRead(5, '2026-11-09T10:00:00.25Z'), { tailLines: 5 });
+        assert.deepEqual(firstRead(0, '2026-11-09T10:00:00.25Z'), { sinceTime: '2026-11-09T10:00:00Z', after: '2026-11-09T10:00:00.25Z' });
+    });
+
+    test('tail 0 without follow: nothing is read', async () => {
+        const fake = fakeKube();
+        fake.setPods([pod('a', 'running')]);
+        fake.written.set('a/app', ['2026-11-09T10:00:00Z old']);
+        const opened = await openLogStream(fake.kube, options({ tail: 0 }), new AbortController().signal);
+        assert.ok(opened.ok);
+        assert.deepEqual(await collect(opened.value), []);
+        assert.deepEqual(fake.reads, []);
+    });
+
+    test('follow tail 0: only what is written from now on, and no previous log', async () => {
+        const fake = fakeKube();
+        fake.setPods([pod('a', 'running', 1)]);
+        fake.written.set('a/app', []);
+        fake.written.set('a/app/previous', ['2026-11-09T09:00:00Z crash']);
+        const stop = new AbortController();
+        const opened = await openLogStream(fake.kube, options({ tail: 0, follow: true }), stop.signal);
+        assert.ok(opened.ok);
+        const reading = collect(opened.value);
+        await until(() => fake.live.length === 1);
+        assert.equal(fake.live[0]?.options.tailLines, undefined);
+        assert.match(fake.live[0]?.options.sinceTime ?? '', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+        stop.abort();
+        assert.deepEqual(await reading, []);
+        assert.ok(!fake.reads.some((read) => read.key.endsWith('/previous')));
+    });
+
+    test('follow: a container that restarted long ago gets its tail, not everything since the crash', async () => {
+        const fake = fakeKube();
+        fake.setPods([pod('a', 'running', 1)]);
+        fake.written.set('a/app/previous', ['2026-11-06T10:00:00Z crash']);
+        fake.written.set('a/app', ['2026-11-06T10:00:05Z day 1', '2026-11-09T10:00:00Z today']);
+        const stop = new AbortController();
+        const opened = await openLogStream(fake.kube, options({ tail: 1, follow: true }), stop.signal);
+        assert.ok(opened.ok);
+        const reading = collect(opened.value);
+        await until(() => fake.live.length === 1);
+        assert.equal(fake.live[0]?.options.tailLines, 1);
+        assert.equal(fake.live[0]?.options.sinceTime, undefined);
+        stop.abort();
+        assert.deepEqual(
+            (await reading).map((entry) => entry.line),
+            ['crash', 'today'],
+        );
+    });
+
+    test('follow with a client that went already: ends at once', async () => {
+        const fake = fakeKube();
+        fake.setPods([pod('a', 'running')]);
+        fake.written.set('a/app', ['2026-11-09T10:00:00Z old']);
+        const stop = new AbortController();
+        stop.abort();
+        const opened = await openLogStream(fake.kube, options({ follow: true }), stop.signal);
+        assert.ok(opened.ok);
+        assert.deepEqual(await collect(opened.value), []);
     });
 
     test('follow: ends at maxMs', async () => {

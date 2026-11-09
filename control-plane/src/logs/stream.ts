@@ -51,6 +51,14 @@ export const timeKey = (time: string): string => {
     return match === null ? time : `${match[1]}.${(match[2] ?? '').padEnd(9, '0')}${match[3]}`;
 };
 
+/**
+ * Where the first read of a container starts: its last `tail` lines, or
+ * with `tail` 0 only what is written from `now` on. Kubernetes cannot be
+ * asked for 0 lines: the client drops `tailLines=0`, which then means all.
+ */
+export const firstRead = (tail: number, now: string): { readonly tailLines: number } | { readonly sinceTime: string; readonly after: string } =>
+    tail > 0 ? { tailLines: tail } : { sinceTime: now.replace(/\.\d+/, ''), after: now };
+
 const siteOf = (zone: string | undefined): Site | null => COMPUTE_SITES.find((site) => site === zone) ?? null;
 
 /**
@@ -72,23 +80,38 @@ const readable = (container: PodContainer) => {
     return logs.previous || logs.current;
 };
 
-/** A queue the readers push into and the response reads from. */
+/** Entries queued for a slow client before the readers wait: the Kubernetes connections then hold the rest. */
+const QUEUE_HIGH_WATER = 1000;
+
+/** A snapshot keeps at most this many bytes of lines per container, the newest. */
+const SNAPSHOT_BYTES_PER_CONTAINER = 4 * 1024 * 1024;
+
+/** A queue the readers push into and the response reads from; a full one makes the readers wait. */
 const channel = <T>() => {
     const queued: T[] = [];
+    const drained: (() => void)[] = [];
     let wake: (() => void) | undefined;
     let closed = false;
     const notify = () => {
         wake?.();
         wake = undefined;
     };
+    const release = () => {
+        for (const waiting of drained.splice(0)) {
+            waiting();
+        }
+    };
     return {
-        push: (value: T) => {
+        /** Resolves once there is room again. */
+        push: (value: T): Promise<void> => {
             queued.push(value);
             notify();
+            return queued.length < QUEUE_HIGH_WATER || closed ? Promise.resolve() : new Promise<void>((resolve) => drained.push(resolve));
         },
         close: () => {
             closed = true;
             notify();
+            release();
         },
         /** Wakes the reader without queueing anything. */
         poke: notify,
@@ -103,7 +126,11 @@ const channel = <T>() => {
                           resolve();
                       };
                   }),
-        take: () => queued.splice(0),
+        take: () => {
+            const all = queued.splice(0);
+            release();
+            return all;
+        },
         get closed() {
             return closed;
         },
@@ -145,7 +172,7 @@ async function readInto(
     container: PodContainer,
     read: { readonly follow: boolean; readonly previous: boolean; readonly tailLines?: number; readonly sinceTime?: string; readonly after?: string },
     site: Site | null,
-    emit: (entry: LogEntry) => void,
+    emit: (entry: LogEntry) => void | Promise<void>,
     signal: AbortSignal,
 ): Promise<void> {
     const { after, ...logOptions } = read;
@@ -161,29 +188,52 @@ async function readInto(
             options.log?.({ msg: 'a log line without a time', pod: pod.name, container: container.name, line: raw.slice(0, 200) });
         } else if (afterKey === undefined || timeKey(parsed.time) > afterKey) {
             // sinceTime counts whole seconds: lines of that second sent already come again, and are dropped here.
-            emit({ pod: pod.name, site, time: parsed.time, line: parsed.line, previous: read.previous });
+            await emit({ pod: pod.name, site, time: parsed.time, line: parsed.line, previous: read.previous });
         }
     }
 }
 
+/** Collects entries, keeping only the newest `maxBytes` of lines. */
+const newest = (maxBytes: number) => {
+    const kept: LogEntry[] = [];
+    let first = 0;
+    let bytes = 0;
+    return {
+        emit: (entry: LogEntry) => {
+            kept.push(entry);
+            bytes += entry.line.length;
+            while (bytes > maxBytes && first < kept.length - 1) {
+                bytes -= (kept[first] as LogEntry).line.length;
+                first++;
+            }
+        },
+        entries: () => kept.slice(first),
+    };
+};
+
 async function* snapshot(kube: LogKube, options: LogStreamOptions, pods: readonly PodInfo[], siteOf: SiteOf, signal: AbortSignal): AsyncIterable<LogEntry> {
-    const entries: LogEntry[] = [];
-    const emit = (entry: LogEntry) => entries.push(entry);
-    await Promise.all(
+    if (options.tail === 0) {
+        return;
+    }
+    const read = { follow: false, tailLines: options.tail };
+    const perContainer = await Promise.all(
         pods.flatMap((pod) =>
             pod.containers.filter(readable).map(async (container) => {
                 const site = await siteOf(pod);
                 const logs = logsOf(container);
+                const collected = newest(SNAPSHOT_BYTES_PER_CONTAINER);
                 if (logs.previous) {
-                    await readInto(kube, options, pod, container, { follow: false, previous: true, tailLines: options.tail }, site, emit, signal);
+                    await readInto(kube, options, pod, container, { ...read, previous: true }, site, collected.emit, signal);
                 }
                 if (logs.current) {
-                    await readInto(kube, options, pod, container, { follow: false, previous: false, tailLines: options.tail }, site, emit, signal);
+                    await readInto(kube, options, pod, container, { ...read, previous: false }, site, collected.emit, signal);
                 }
+                return collected.entries();
             }),
         ),
     );
-    yield* entries.sort((a, b) => (timeKey(a.time) < timeKey(b.time) ? -1 : timeKey(a.time) > timeKey(b.time) ? 1 : 0));
+    const keyed = perContainer.flat().map((entry) => ({ key: timeKey(entry.time), entry }));
+    yield* keyed.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)).map(({ entry }) => entry);
 }
 
 /** What `follow` keeps per container: whether a read is open, and the last line's time. */
@@ -206,6 +256,10 @@ async function* follow(kube: LogKube, options: LogStreamOptions, initial: readon
         }
         queue.close();
     };
+    const startedAt = new Date().toISOString();
+    if (signal.aborted) {
+        stopAll();
+    }
     signal.addEventListener('abort', stopAll, { once: true });
     const timer = setTimeout(stopAll, options.maxMs);
 
@@ -220,21 +274,20 @@ async function* follow(kube: LogKube, options: LogStreamOptions, initial: readon
         followed.set(key, entry);
         const emit = (logEntry: LogEntry) => {
             entry.lastTime = logEntry.time;
-            queue.push(logEntry);
+            return queue.push(logEntry);
         };
+        // Where this container's output was left: not where the previous log read below ends.
+        const resume = known?.lastTime;
         const stopped = AbortSignal.any([entry.stop.signal, signal]);
         void (async () => {
             const site = await siteOf(pod);
             const logs = logsOf(container);
             // Later crashes need no previous log: the read of the running container had their lines.
-            if (known === undefined && logs.previous) {
+            if (known === undefined && logs.previous && options.tail > 0) {
                 await readInto(kube, options, pod, container, { follow: false, previous: true, tailLines: options.tail }, site, emit, stopped);
             }
             if (logs.current) {
-                const from =
-                    entry.lastTime === undefined
-                        ? { tailLines: options.tail }
-                        : { sinceTime: entry.lastTime.replace(/\.\d+/, ''), after: entry.lastTime };
+                const from = resume === undefined ? firstRead(options.tail, startedAt) : { sinceTime: resume.replace(/\.\d+/, ''), after: resume };
                 await readInto(kube, options, pod, container, { follow: true, previous: false, ...from }, site, emit, stopped);
             }
             entry.active = false;

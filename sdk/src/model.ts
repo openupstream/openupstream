@@ -420,12 +420,18 @@ export const LOG_LIMITS = {
     maxTailLines: 10_000,
     /** A followed stream ends after this long; the client asks again to go on. */
     maxFollowSeconds: 3600,
+    /** Followed streams open at once per Account, on one control-plane replica; more answer 429. */
+    maxFollowsPerAccount: 10,
+    /** A followed stream sends an empty line this often, so a client and the proxies between see it is alive. */
+    heartbeatSeconds: 30,
 } as const;
 
 /**
  * What to read: `tail` lines per container first; with `follow`, then new
  * lines as they are written, also from replicas that start while it runs,
  * until LOG_LIMITS.maxFollowSeconds have passed or every pod is gone.
+ * `tail` 0 sends only what is written from now on. Empty lines in the
+ * stream are heartbeats, not entries.
  */
 export interface LogQuery {
     tail?: number;

@@ -109,7 +109,7 @@ export interface ApiDeps {
 
 /** `?tail=&follow=` of the log stream. */
 const logQuery = z.strictObject({
-    tail: z.coerce.number().int().min(0).max(LOG_LIMITS.maxTailLines).optional(),
+    tail: z.string().regex(/^\d{1,5}$/, 'a whole number').transform(Number).pipe(z.number().max(LOG_LIMITS.maxTailLines)).optional(),
     follow: z.enum(['true', 'false']).optional(),
 });
 
@@ -975,14 +975,30 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (!query.success) {
             return c.json(invalid(query.error.issues), 400);
         }
+        const follow = query.data.follow === 'true';
+        const project = await projectOf(c.get('accountIds'), projectId);
+        if (project === undefined) {
+            return c.json(notFound, 404);
+        }
+        const following = follows.get(project.accountId) ?? 0;
+        if (follow && following >= LOG_LIMITS.maxFollowsPerAccount) {
+            return c.json({ error: `at most ${LOG_LIMITS.maxFollowsPerAccount} followed log streams at once; end one first` }, 429);
+        }
+        // The request's own signal: a client that goes before the stream starts is seen too.
         const stop = new AbortController();
+        const request = c.req.raw.signal;
+        if (request.aborted) {
+            stop.abort();
+        } else {
+            request.addEventListener('abort', () => stop.abort(), { once: true });
+        }
         const opened = await openLogStream(
             kube,
             {
                 namespace: projectNamespace(projectId),
                 selector,
                 tail: query.data.tail ?? LOG_LIMITS.defaultTailLines,
-                follow: query.data.follow === 'true',
+                follow,
                 pollMs: deps.logStream?.pollMs ?? LOG_POLL_MS,
                 maxMs: deps.logStream?.maxMs ?? LOG_LIMITS.maxFollowSeconds * 1000,
                 log: deps.log,
@@ -995,13 +1011,32 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         c.header('content-type', 'application/x-ndjson; charset=utf-8');
         c.header('cache-control', 'no-store');
+        if (follow) {
+            follows.set(project.accountId, (follows.get(project.accountId) ?? 0) + 1);
+        }
         return stream(c, async (body) => {
             body.onAbort(() => stop.abort());
-            for await (const entry of opened.value) {
-                await body.write(`${JSON.stringify(entry)}\n`);
+            const heartbeat = follow ? setInterval(() => void body.write('\n'), LOG_LIMITS.heartbeatSeconds * 1000) : undefined;
+            try {
+                for await (const entry of opened.value) {
+                    // Hono drops write errors: a client that went is seen here.
+                    if (body.aborted) {
+                        stop.abort();
+                        break;
+                    }
+                    await body.write(`${JSON.stringify(entry)}\n`);
+                }
+            } finally {
+                clearInterval(heartbeat);
+                stop.abort();
+                if (follow) {
+                    follows.set(project.accountId, (follows.get(project.accountId) ?? 1) - 1);
+                }
             }
         });
     };
+    /** Followed log streams open now, per Account, on this replica. */
+    const follows = new Map<string, number>();
     const kubernetesDown = (c: Context<Env>) => c.json({ error: 'cannot reach Kubernetes now' }, 503);
 
     app.get('/v1/projects/:projectId/services/:serviceId/logs', async (c) => {

@@ -244,6 +244,10 @@ async function service(args: string[]): Promise<void> {
     if (verb !== 'list' && name === undefined) {
         return fail(USAGE);
     }
+    const logFlag = (['tail', 'follow', 'timestamps'] as const).find((flag) => values[flag] !== undefined);
+    if (verb !== 'logs' && logFlag !== undefined) {
+        return fail(`oup service ${verb} does not take --${logFlag}`);
+    }
     const { client, project } = await inProject(values.project);
     const services = await client.listServices(project.id);
     if (!services.ok) {

@@ -988,9 +988,37 @@ describe('Services', () => {
         assert.equal((await call('GET', path(`/${service.id}/logs`), 'bob')).status, 404);
         assert.equal((await call('GET', path(`/${service.id}/logs?tail=-1`), 'alice')).status, 400);
         assert.equal((await call('GET', path(`/${service.id}/logs?follow=yes`), 'alice')).status, 400);
+        assert.equal((await call('GET', path(`/${service.id}/logs?tail=`), 'alice')).status, 400, 'an empty tail is not 0');
+        assert.equal((await call('GET', path(`/${service.id}/logs?tail=10001`), 'alice')).status, 400);
         kubeDown = true;
         assert.equal((await call('GET', path(`/${service.id}/logs`), 'alice')).status, 503);
         kubeDown = false;
+    });
+
+    test('logs with follow: at most 10 at once per Account; one that ends frees its place', async () => {
+        const followed = path(`/${service.id}/logs?follow=true`);
+        const clients = Array.from({ length: 10 }, () => new AbortController());
+        const open = await Promise.all(
+            clients.map(async (client) =>
+                api.request(followed, { headers: { authorization: `Bearer ${await token('alice')}` }, signal: client.signal }),
+            ),
+        );
+        assert.deepEqual(
+            open.map((response) => response.status),
+            Array(10).fill(200),
+        );
+        const refused = await call('GET', followed, 'alice');
+        assert.equal(refused.status, 429);
+        assert.equal((await call('GET', path(`/${service.id}/logs`), 'alice')).status, 200, 'without follow there is no limit');
+        clients.forEach((client) => client.abort());
+        await Promise.all(open.map((response) => response.body?.cancel()));
+        let again = await call('GET', followed, 'alice');
+        for (let attempt = 0; attempt < 50 && again.status === 429; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            again = await call('GET', followed, 'alice');
+        }
+        assert.equal(again.status, 200);
+        await again.body?.cancel();
     });
 
     test('logs with follow: ends once no pod is left to write', async () => {
