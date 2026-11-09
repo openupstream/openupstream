@@ -124,7 +124,10 @@ test('runs carry the Job id the control plane lists them by, and the label the e
         assert.equal(labels['openupstream.io/component'], 'jobs');
     }
     const egress = planJobs([row()]).find((o) => o.metadata.name === 'job-egress');
-    assert.deepEqual((egress?.['spec'] as { podSelector: unknown }).podSelector, { matchLabels: { 'openupstream.io/component': 'jobs' } });
+    const spec = egress?.['spec'] as { podSelector: unknown; egress: { to: unknown[]; ports?: unknown[] }[] };
+    assert.deepEqual(spec.podSelector, { matchLabels: { 'openupstream.io/component': 'jobs' } });
+    // Runs reach the platform's public hostnames through their own node too (decision 104).
+    assert.ok(spec.egress.some((rule) => JSON.stringify(rule.to).includes('"kubernetes.io/metadata.name":"traefik"') && rule.ports?.length === 2));
 });
 
 test("a run gets the Project's DATABASE_URLs as a Service does", () => {

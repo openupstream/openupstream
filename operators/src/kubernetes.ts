@@ -154,10 +154,23 @@ export const EGRESS_EXCEPT_V4 = [
 export const EGRESS_EXCEPT_V6 = ['::/127', 'fc00::/7', 'fe80::/10', 'ff00::/8', '64:ff9b::/96'];
 
 /**
+ * Traefik's pods and the ports they listen on behind the nodes' hostPorts
+ * 80 and 443, as set in infra/ingress/traefik-values.yaml: change them
+ * together.
+ */
+export const INGRESS_NAMESPACE = 'traefik';
+export const INGRESS_POD_LABELS = { 'app.kubernetes.io/name': 'traefik' } as const;
+export const INGRESS_POD_PORTS = [8000, 8443] as const;
+
+/**
  * Where the customer's containers of one kind (`component`, a Service's or
  * a Job's) may connect: DNS, their own namespace (their Databases' Poolers)
  * and the internet, but nothing else inside the cluster or in a private
- * network (decision 93).
+ * network (decision 93). The internet includes the platform's own public
+ * hostnames (a Bucket's endpoint, a Project's Routes): through the node a
+ * pod runs on, the hostPort rewrites such a connection to Traefik's pod
+ * address before the policy sees it, so Traefik's pods are allowed by
+ * selector, on their two ports only (decision 104).
  */
 export const customerEgressPolicy = (projectId: Id, name: string, component: string, labels: Readonly<Record<string, string>>) => ({
     apiVersion: 'networking.k8s.io/v1',
@@ -175,6 +188,10 @@ export const customerEgressPolicy = (projectId: Id, name: string, component: str
                 ],
             },
             { to: [{ podSelector: {} }] },
+            {
+                to: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': INGRESS_NAMESPACE } }, podSelector: { matchLabels: { ...INGRESS_POD_LABELS } } }],
+                ports: INGRESS_POD_PORTS.map((port) => ({ port, protocol: 'TCP' })),
+            },
             { to: [{ ipBlock: { cidr: '0.0.0.0/0', except: EGRESS_EXCEPT_V4 } }, { ipBlock: { cidr: '::/0', except: EGRESS_EXCEPT_V6 } }] },
         ],
     },

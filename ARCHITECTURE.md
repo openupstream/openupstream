@@ -644,7 +644,11 @@ digest (#55).
   NetworkPolicy `service-egress` (#93) leaves out every loopback, private,
   shared and link-local range, which holds the cluster's pod and service
   networks, the nodes' private addresses and metadata endpoints. Their
-  Buckets they reach at their public hostnames.
+  Buckets they reach at their public hostnames. Through the node a pod runs
+  on, Traefik's hostPort rewrites such a connection to Traefik's pod
+  address before the policy sees it, so the policy also allows Traefik's
+  pods by selector, on their ports 8000 and 8443 only (decision 104). The
+  same egress applies to a Job's runs (`job-egress`).
 - One-off jobs are an API call; customers cannot spawn containers from inside
   containers.
 - Deleting a Project deletes its namespace and every Resource, Secret and
@@ -901,6 +905,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 101 | Node.js 24 everywhere (`.nvmrc`, `engines`, CI, the images); the control plane's tests start one Postgres server per run in a node:test global setup (`--test-global-setup`), each test file still creating and dropping its own database on it | staying on Node 22 with a wrapper script that starts the container and then runs `node --test`; testcontainers' reuse mode | a container per test file, about 21 starting at once, failed 3 of 15 local runs under Docker load; global setup is node:test's own hook and exists from Node 24.0 on; reuse locks only within one process, so the parallel test files would still race, and the container outlives the run. Node 24 is the active LTS, and the images run what the tests run. Costs: contributors need Node 24, and the hook is still Stability 1.0, so it may change in a minor release |
 | 102 | The demo app `worker` is one image with three commands on one Database: the image's own a Service without a port taking tasks with `FOR UPDATE SKIP LOCKED`, each taken and done in one transaction and polled every second; `enqueue` a One-off job that adds a batch and exits 0 once workers have done it all; `cleanup` a Cron job deleting tasks done more than a day ago | jobs only, with no queue; a worker on the `notes` Database; `LISTEN`/`NOTIFY` instead of polling; a queue library (pg-boss, Graphile Worker) | step 4 and the worker Services of decision 98 each get a demo, and ProjectMatch's SQS consumers and DynamoDB TTLs take the same shapes after v1; `enqueue` waiting makes `oup job run` the proof that the workers ran, before there is a log stream; the Pooler's transaction mode has no `LISTEN`; plain SQL shows the pattern decision 8 points customers to. Costs: a task holds its transaction (and a Pooler connection) while it runs, and an empty queue costs a query per replica a second |
 | 103 | The log stream is chunked HTTP of NDJSON, one LogEntry per line, read by the control plane from the Kubernetes logs API per container and merged; a followed stream lists the pods again every 5 s and lasts at most an hour | plain text lines with a pod prefix (Heroku `logs --tail`, `kubectl logs -f --prefix`); Server-Sent Events; WebSockets (Render, Railway); polling a JSON endpoint with a cursor (Fly.io) | structured entries need no parsing in the dashboard and can gain fields; `fetch()` reads a chunked body while sending the `Authorization` header, which `EventSource` cannot, so SSE would put the token in the URL; the pod list again picks up rollouts and restarts without a watch. Costs: each follower holds one Kubernetes API connection per container on a control-plane replica (hence 10 followed streams per Account and replica), an idle stream lists pods every 5 s, and a client that wants more than an hour reconnects |
+| 104 | The customer egress policy (`service-egress`, `job-egress`) also allows Traefik's pods by namespace and pod selector, on their container ports 8000 and 8443 | Traefik on `hostNetwork`; a Bucket endpoint inside the cluster for Services; leaving it and documenting it | a pod connecting to its own node's public IP is DNATed by the hostPort to Traefik's pod IP (10.42.x) before k3s's policy filter sees it, so the private-range exclusion refused it: a Service calling a Bucket or any platform hostname failed whenever DNS gave it its own node, always with one Site down (found by `spa-api` on the dev cluster, 2026-11-09). Kubernetes leaves ipBlock behaviour around such rewrites undefined; allowing the ingress controller by selector is the usual answer (Calico, Cilium). The pods gain nothing over the public address: Traefik routes by Host. `hostNetwork` would move Traefik's admin and metrics ports onto the hosts |
 
 ## Open questions
 
@@ -1021,6 +1026,19 @@ Decisions table once it is settled.
     copy. A binding would put Bucket secrets into `project-secrets` or a
     Secret of their own, which the control plane must keep in step when a
     Bucket's key is replaced.
+20. **Customer pods reach the nodes' own ports.** A Service's pod opened
+    TCP connections to the nodes' Kubernetes API (6443), kubelet (10250)
+    and etcd (2379) at their public IPs (dev cluster, 2026-11-09): the
+    egress policy allows public addresses, and the host firewall admits
+    everything between nodes, which pod traffic leaving with its node's
+    address counts as. Each port needs a client certificate or token, so
+    nothing was reachable without credentials, but decision 93 means no
+    path at all. Options: the operators add the nodes' public IPs to the
+    egress exclusions (they read the Nodes; the list changes with every
+    node), a host firewall rule dropping forwarded pod traffic to the
+    nodes' ports other than 80 and 443, or Tailscale addresses for the
+    node-to-node ports (decision 28) so the public IPs serve only 80 and
+    443.
 
 ## Build order
 
@@ -1137,7 +1155,27 @@ Decisions table once it is settled.
    17: two replicas did 60 tasks of an `enqueue` run between them (28 and
    32), which then exited 0, `cleanup` deleted the done tasks, a worker
    kept retrying while the database was stopped, and SIGTERM let it finish
-   its task and exit 0. Left: Umami, and the runs on the dev cluster.
+   its task and exit 0. Run on the dev cluster (2026-11-09), each app in a
+   Project of its own, deployed with `oup` and served at its default
+   hostname: `notes` with two replicas wrote and listed notes through the
+   form and the API; `spa-api` served its site with SPA fallback and
+   stored, listed, downloaded (`attachment`, CSP `sandbox`) and deleted
+   files; `worker` did 100 tasks of an `enqueue` run with both replicas
+   (70 and 30, the one in the Database primary's Site faster) and
+   `cleanup -- 0` deleted the 200 done ones; Umami 3.4.1 unmodified from
+   GHCR, with `APP_SECRET` as a Secret and 768 MB, applied its migrations
+   through the Pooler, served its pages and stored an event sent to
+   `/api/send`. Site failover: a note written every 0.5 s through the
+   other Site's ingress while `hetzner-fsn1`, with the notes primary,
+   was switched off: 401 notes acknowledged and all 401 stored, writes
+   back after 87 s (41 s of timeouts until the node was NotReady, then
+   44 s of 503 until the promotion), DNS left with the other Site; Umami,
+   `spa-api`'s site and a worker run kept working, and the Site's
+   Databases rejoined as standbys when it came back. The run found two
+   bugs, both fixed: the Services operator refused the whole list of
+   Services once a worker without a port existed, and customer pods
+   could not reach their own node's ingress (decision 104). It also found
+   Open question 20.
 
 ### After v1: ProjectMatch
 
