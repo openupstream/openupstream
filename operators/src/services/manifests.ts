@@ -19,6 +19,7 @@
 import {
     PROJECT_REGISTRY_AUTH,
     PROJECT_SECRETS,
+    SERVICE_ID_LABEL,
     SPEC_VERSION_ANNOTATION,
     type ServiceRow,
     serviceObjectName,
@@ -39,7 +40,6 @@ import {
 
 export { COMPONENT_LABEL } from '../kubernetes.js';
 export const SERVICES_COMPONENT = 'services';
-export const SERVICE_ID_LABEL = 'openupstream.io/service-id';
 export const SERVICE_NAME_LABEL = 'openupstream.io/service-name';
 export const SECRETS_VERSION_ANNOTATION = 'openupstream.io/secrets-version';
 export const RUNTIME_CLASS = 'gvisor';

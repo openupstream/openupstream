@@ -126,7 +126,7 @@ test('runs carry the Job id the control plane lists them by, and the label the e
     const egress = planJobs([row()]).find((o) => o.metadata.name === 'job-egress');
     const spec = egress?.['spec'] as { podSelector: unknown; egress: { to: unknown[]; ports?: unknown[] }[] };
     assert.deepEqual(spec.podSelector, { matchLabels: { 'openupstream.io/component': 'jobs' } });
-    // Runs reach the platform's public hostnames through their own node too (decision 103).
+    // Runs reach the platform's public hostnames through their own node too (decision 104).
     assert.ok(spec.egress.some((rule) => JSON.stringify(rule.to).includes('"kubernetes.io/metadata.name":"traefik"') && rule.ports?.length === 2));
 });
 

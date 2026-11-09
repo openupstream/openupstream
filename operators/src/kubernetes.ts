@@ -170,7 +170,7 @@ export const INGRESS_POD_PORTS = [8000, 8443] as const;
  * hostnames (a Bucket's endpoint, a Project's Routes): through the node a
  * pod runs on, the hostPort rewrites such a connection to Traefik's pod
  * address before the policy sees it, so Traefik's pods are allowed by
- * selector, on their two ports only (decision 103).
+ * selector, on their two ports only (decision 104).
  */
 export const customerEgressPolicy = (projectId: Id, name: string, component: string, labels: Readonly<Record<string, string>>) => ({
     apiVersion: 'networking.k8s.io/v1',

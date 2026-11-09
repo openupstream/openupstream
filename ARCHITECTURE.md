@@ -647,7 +647,7 @@ digest (#55).
   Buckets they reach at their public hostnames. Through the node a pod runs
   on, Traefik's hostPort rewrites such a connection to Traefik's pod
   address before the policy sees it, so the policy also allows Traefik's
-  pods by selector, on their ports 8000 and 8443 only (decision 103). The
+  pods by selector, on their ports 8000 and 8443 only (decision 104). The
   same egress applies to a Job's runs (`job-egress`).
 - One-off jobs are an API call; customers cannot spawn containers from inside
   containers.
@@ -773,7 +773,28 @@ digest (#55).
 - For us: Prometheus, Loki and Grafana. Loki collects the platform's
   namespaces only, never a Project's.
 - For customers: a log stream endpoint that tails the Kubernetes logs API
-  (current and previous container). Nothing is retained.
+  (current and previous container). Nothing is retained. Per Service
+  (`GET …/services/{id}/logs`, all replicas) and per run (`GET
+  …/jobs/{id}/runs/{runId}/logs`), as NDJSON, one `{pod, site, time,
+  line, previous}` per line (decision 103). The control plane finds the
+  pods by label (`openupstream.io/service-id`, and
+  `batch.kubernetes.io/job-name` for a run), reads each container with
+  `timestamps=true` (a running one after a restart also its previous log,
+  the crash; a crash-looping one only its previous log, the run that
+  crashed) and, without `follow`, sends the last `tail` lines of
+  all of them sorted by time. With `follow` it lists the pods again every
+  5 s: a replica a rollout starts is added, a container that restarted is
+  read on from the last line sent (`sinceTime` counts whole seconds, so
+  lines of that second are dropped by time), a read of a pod that is gone
+  is stopped. A followed stream ends after an hour, when the client goes,
+  or once no container is left that can write, so it ends with a run. It
+  sends an empty line every 30 s as a heartbeat, and its readers wait on
+  Kubernetes rather than queue more than 1000 entries for a slow client;
+  an Account has at most 10 open at once per control-plane replica (429
+  beyond). `tail=0` reads from now on (`sinceTime`): the Kubernetes client
+  drops `tailLines=0`, which then means the whole log. A snapshot keeps at
+  most the newest 4 MiB of lines per container.
+  `oup service logs` and `oup job logs` print it.
 
 ## Decisions
 
@@ -883,7 +904,8 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 100 | The demo app `spa-api` is a single-page app in one Bucket at `/` with SPA fallback and a Service at `/api` on the same hostname that keeps uploaded files (up to 1 MiB) in a second Bucket over S3, with the AWS SDK's S3 client. The Service reads the Bucket's access from four Secrets (`BUCKET_ENDPOINT`, `BUCKET_REGION`, `BUCKET_ACCESS_KEY_ID`, `BUCKET_SECRET_ACCESS_KEY`) copied from what the API shows for the Bucket; downloads are `attachment` with CSP `sandbox`, so an uploaded page never runs on the app's origin | a stateless API; the browser uploading straight to the Bucket with presigned URLs | step 2 is object storage as well as static sites, and ProjectMatch's five S3 buckets are reached from its code; proxying through the Service needs no CORS on Garage; copying the key by hand is what a customer does today and shows what binding Buckets like Databases (decision 97) would save (Open question 19) |
 | 101 | Node.js 24 everywhere (`.nvmrc`, `engines`, CI, the images); the control plane's tests start one Postgres server per run in a node:test global setup (`--test-global-setup`), each test file still creating and dropping its own database on it | staying on Node 22 with a wrapper script that starts the container and then runs `node --test`; testcontainers' reuse mode | a container per test file, about 21 starting at once, failed 3 of 15 local runs under Docker load; global setup is node:test's own hook and exists from Node 24.0 on; reuse locks only within one process, so the parallel test files would still race, and the container outlives the run. Node 24 is the active LTS, and the images run what the tests run. Costs: contributors need Node 24, and the hook is still Stability 1.0, so it may change in a minor release |
 | 102 | The demo app `worker` is one image with three commands on one Database: the image's own a Service without a port taking tasks with `FOR UPDATE SKIP LOCKED`, each taken and done in one transaction and polled every second; `enqueue` a One-off job that adds a batch and exits 0 once workers have done it all; `cleanup` a Cron job deleting tasks done more than a day ago | jobs only, with no queue; a worker on the `notes` Database; `LISTEN`/`NOTIFY` instead of polling; a queue library (pg-boss, Graphile Worker) | step 4 and the worker Services of decision 98 each get a demo, and ProjectMatch's SQS consumers and DynamoDB TTLs take the same shapes after v1; `enqueue` waiting makes `oup job run` the proof that the workers ran, before there is a log stream; the Pooler's transaction mode has no `LISTEN`; plain SQL shows the pattern decision 8 points customers to. Costs: a task holds its transaction (and a Pooler connection) while it runs, and an empty queue costs a query per replica a second |
-| 103 | The customer egress policy (`service-egress`, `job-egress`) also allows Traefik's pods by namespace and pod selector, on their container ports 8000 and 8443 | Traefik on `hostNetwork`; a Bucket endpoint inside the cluster for Services; leaving it and documenting it | a pod connecting to its own node's public IP is DNATed by the hostPort to Traefik's pod IP (10.42.x) before k3s's policy filter sees it, so the private-range exclusion refused it: a Service calling a Bucket or any platform hostname failed whenever DNS gave it its own node, always with one Site down (found by `spa-api` on the dev cluster, 2026-11-09). Kubernetes leaves ipBlock behaviour around such rewrites undefined; allowing the ingress controller by selector is the usual answer (Calico, Cilium). The pods gain nothing over the public address: Traefik routes by Host. `hostNetwork` would move Traefik's admin and metrics ports onto the hosts |
+| 103 | The log stream is chunked HTTP of NDJSON, one LogEntry per line, read by the control plane from the Kubernetes logs API per container and merged; a followed stream lists the pods again every 5 s and lasts at most an hour | plain text lines with a pod prefix (Heroku `logs --tail`, `kubectl logs -f --prefix`); Server-Sent Events; WebSockets (Render, Railway); polling a JSON endpoint with a cursor (Fly.io) | structured entries need no parsing in the dashboard and can gain fields; `fetch()` reads a chunked body while sending the `Authorization` header, which `EventSource` cannot, so SSE would put the token in the URL; the pod list again picks up rollouts and restarts without a watch. Costs: each follower holds one Kubernetes API connection per container on a control-plane replica (hence 10 followed streams per Account and replica), an idle stream lists pods every 5 s, and a client that wants more than an hour reconnects |
+| 104 | The customer egress policy (`service-egress`, `job-egress`) also allows Traefik's pods by namespace and pod selector, on their container ports 8000 and 8443 | Traefik on `hostNetwork`; a Bucket endpoint inside the cluster for Services; leaving it and documenting it | a pod connecting to its own node's public IP is DNATed by the hostPort to Traefik's pod IP (10.42.x) before k3s's policy filter sees it, so the private-range exclusion refused it: a Service calling a Bucket or any platform hostname failed whenever DNS gave it its own node, always with one Site down (found by `spa-api` on the dev cluster, 2026-11-09). Kubernetes leaves ipBlock behaviour around such rewrites undefined; allowing the ingress controller by selector is the usual answer (Calico, Cilium). The pods gain nothing over the public address: Traefik routes by Host. `hostNetwork` would move Traefik's admin and metrics ports onto the hosts |
 
 ## Open questions
 
@@ -1097,8 +1119,17 @@ Decisions table once it is settled.
    its trailing line break and rolled both replicas; a private image on
    GHCR was refused without credentials and pulled by digest with
    `--registry-user` and the token on stdin (kubelet matched the
-   repository key). Left: the log stream; Docker Hub's credential key form
-   is untested, for lack of a private Docker Hub image.
+   repository key). Left: Docker Hub's credential key form is untested,
+   for lack of a private Docker Hub image. The log stream (decision 103):
+   the API, `oup service logs` and `oup job logs`. Tested against a local
+   k3s 1.33 (2026-11-09): two replicas merged with their Site, a
+   crash-looping one's last run from its previous log, its restarted
+   container picked up while following, and a client that went away
+   closing every Kubernetes read. The test found that aborting a read
+   crashed the process (the Kubernetes client pipes the body without an
+   error handler; fixed in `src/kube.ts`) and that the kubelet answers 200
+   with a sentence of its own for a log it cannot read (dropped: it has no
+   timestamp). Not yet run on the dev cluster under gVisor.
 4. Containers, Cron job and One-off job modes. Done: Jobs API (#95,
    ADR-0003), the Jobs operator and runs, `oup job` (#96). Tested on the
    dev cluster (2026-11-01) with `oup job`: a Cron job every minute in
@@ -1143,7 +1174,7 @@ Decisions table once it is settled.
    Databases rejoined as standbys when it came back. The run found two
    bugs, both fixed: the Services operator refused the whole list of
    Services once a worker without a port existed, and customer pods
-   could not reach their own node's ingress (decision 103). It also found
+   could not reach their own node's ingress (decision 104). It also found
    Open question 20.
 
 ### After v1: ProjectMatch

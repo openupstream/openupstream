@@ -35,7 +35,7 @@ service:
 
 # The pod ports 8000 and 8443 and the chart's label
 # app.kubernetes.io/name=traefik are what customer pods' egress policy
-# allows (operators/src/kubernetes.ts, INGRESS_POD_PORTS, decision 103):
+# allows (operators/src/kubernetes.ts, INGRESS_POD_PORTS, decision 104):
 # change them together.
 ports:
   web:

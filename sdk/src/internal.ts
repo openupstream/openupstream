@@ -49,6 +49,9 @@ export const serviceObjectName = (service: Pick<Service, 'id'>): string => `svc-
 /** The Job's CronJob, in its Project's namespace; its runs are Kubernetes Jobs named after it. */
 export const jobObjectName = (job: Pick<Job, 'id'>): string => `job-${job.id}`;
 
+/** On a Service's Deployment and its pods: the Service's id, by which the control plane finds the pods for its logs. */
+export const SERVICE_ID_LABEL = 'openupstream.io/service-id';
+
 /** On a Job's CronJob and its runs: the Job's id, by which the control plane lists the runs. */
 export const JOB_ID_LABEL = 'openupstream.io/job-id';
 

@@ -34,7 +34,7 @@ Traefik already implements is configured, not reimplemented.
 - `src/services/`: the Services operator (ARCHITECTURE.md, decision 93).
   `planServices` (pure) turns the Services into, per Project, its namespace,
   its NetworkPolicy and `service-egress` (DNS, the own namespace, Traefik's
-  pods on their two ports and the internet only, decision 103); per
+  pods on their two ports and the internet only, decision 104); per
   Service, a Deployment `svc-<id>` with the image pinned by digest under
   the `gvisor` RuntimeClass and, unless it is a worker without a port, a
   readiness probe and a Kubernetes Service.
