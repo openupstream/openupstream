@@ -98,15 +98,32 @@ export function nodeChanges(): (phase: string, node: NodeAddresses) => boolean {
 
 /** Below the client's own 30 s request timeout, so the server ends each watch cleanly. */
 const WATCH_SECONDS = 25;
-const WATCH_RETRY_MS = 5_000;
+
+/** What watchNodes needs of the client's Watch, so tests can stand in for it. */
+export type NodeWatch = Pick<Watch, 'watch'>;
+
+export interface WatchTiming {
+    /** Before opening the next watch after the server closed one: never a tight loop, even when it closes at once. */
+    readonly reopenMs: number;
+    /** Before opening the next watch after an error. */
+    readonly retryMs: number;
+}
+
+const WATCH_TIMING: WatchTiming = { reopenMs: 1_000, retryMs: 5_000 };
 
 /**
  * Calls `onChange` when a Node joins, goes or changes its addresses, until
- * `signal` aborts. A watch that ends is started again: at once after the
- * server closed it, after a pause after an error.
+ * `signal` aborts. A watch that ends is opened again after a pause, longer
+ * after an error. A missed event costs at most one interval: the pass lists
+ * the Nodes itself.
  */
-export function watchNodes(config: KubeConfig, onChange: () => void, log: (entry: Record<string, unknown>) => void, signal: AbortSignal): void {
-    const watch = new Watch(config);
+export function watchNodes(
+    watch: NodeWatch,
+    onChange: () => void,
+    log: (entry: Record<string, unknown>) => void,
+    signal: AbortSignal,
+    { reopenMs, retryMs }: WatchTiming = WATCH_TIMING,
+): void {
     const changed = nodeChanges();
     // The watch running now; one listener stops whichever it is.
     let current: AbortController | undefined;
@@ -119,12 +136,11 @@ export function watchNodes(config: KubeConfig, onChange: () => void, log: (entry
             if (signal.aborted) {
                 return;
             }
-            if (error === null || error === undefined) {
-                void start();
-                return;
+            const failed = error !== null && error !== undefined;
+            if (failed) {
+                log({ msg: 'node watch failed, retrying', error: error instanceof Error ? error.message : String(error) });
             }
-            log({ msg: 'node watch failed, retrying', error: error instanceof Error ? error.message : String(error) });
-            setTimeout(() => void start(), WATCH_RETRY_MS).unref();
+            setTimeout(() => void start(), failed ? retryMs : reopenMs).unref();
         };
         current = await watch
             .watch(
@@ -146,4 +162,10 @@ export function watchNodes(config: KubeConfig, onChange: () => void, log: (entry
         }
     };
     void start();
+}
+
+/** The Nodes as the Services and Jobs passes read them, and the watch that wakes those passes. */
+export function nodesFor(config: KubeConfig, wake: () => void, log: (entry: Record<string, unknown>) => void, signal: AbortSignal): ListNodes {
+    watchNodes(new Watch(config), wake, log, signal);
+    return listNodesFrom(config);
 }

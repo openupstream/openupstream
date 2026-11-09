@@ -23,7 +23,7 @@ import { type PassLog, databasesPass, runPasses, wakeup } from './databases/loop
 import type { DatabaseConfig } from './databases/manifests.js';
 import { jobsPass } from './jobs/loop.js';
 import { kubeFrom } from './kube.js';
-import { listNodesFrom, watchNodes } from './nodes.js';
+import { nodesFor } from './nodes.js';
 import { routesPass } from './routes/loop.js';
 import { servicesPass } from './services/loop.js';
 
@@ -82,15 +82,13 @@ const routes = (): (() => Promise<PassLog>) => {
 
 const services = (): (() => Promise<PassLog>) => {
     const fetchServices = controlPlaneServices(controlPlaneUrl, token);
-    const listNodes = listNodesFrom(kubeConfig);
-    watchNodes(kubeConfig, wait.wake, log, stop.signal);
+    const listNodes = nodesFor(kubeConfig, wait.wake, log, stop.signal);
     return () => servicesPass(fetchServices, listNodes, kube);
 };
 
 const jobs = (): (() => Promise<PassLog>) => {
     const fetchJobs = controlPlaneJobs(controlPlaneUrl, token);
-    const listNodes = listNodesFrom(kubeConfig);
-    watchNodes(kubeConfig, wait.wake, log, stop.signal);
+    const listNodes = nodesFor(kubeConfig, wait.wake, log, stop.signal);
     return () => jobsPass(fetchJobs, listNodes, kube);
 };
 
