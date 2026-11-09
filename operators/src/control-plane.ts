@@ -85,7 +85,7 @@ const isServiceRow = (value: unknown): value is ServiceRow =>
     typeof value['service']['replicas'] === 'number' &&
     typeof value['service']['memoryMb'] === 'number' &&
     typeof value['service']['cpuMillicores'] === 'number' &&
-    typeof value['service']['port'] === 'number' &&
+    (value['service']['port'] === null || typeof value['service']['port'] === 'number') &&
     typeof value['pinnedImage'] === 'string' &&
     /@sha256:[0-9a-f]{64}$/.test(value['pinnedImage']) &&
     (value['site'] === 'hetzner-fsn1' || value['site'] === 'ovh-lim') &&
