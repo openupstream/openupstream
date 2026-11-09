@@ -155,7 +155,8 @@ export const EGRESS_EXCEPT_V6 = ['::/127', 'fc00::/7', 'fe80::/10', 'ff00::/8', 
 
 /**
  * Traefik's pods and the ports they listen on behind the nodes' hostPorts
- * 80 and 443 (infra/ingress/traefik-values.yaml).
+ * 80 and 443, as set in infra/ingress/traefik-values.yaml: change them
+ * together.
  */
 export const INGRESS_NAMESPACE = 'traefik';
 export const INGRESS_POD_LABELS = { 'app.kubernetes.io/name': 'traefik' } as const;

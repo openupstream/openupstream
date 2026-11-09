@@ -33,8 +33,13 @@ affinity:
 service:
   enabled: false
 
+# The pod ports 8000 and 8443 and the chart's label
+# app.kubernetes.io/name=traefik are what customer pods' egress policy
+# allows (operators/src/kubernetes.ts, INGRESS_POD_PORTS, decision 103):
+# change them together.
 ports:
   web:
+    port: 8000
     hostPort: 80
     # Everything on 80 goes to HTTPS; bunny.net's health check (any non-5xx
     # on port 80) counts the redirect as healthy. At the lowest priority, so
@@ -48,6 +53,7 @@ ports:
           permanent: true
           priority: 1
   websecure:
+    port: 8443
     hostPort: 443
 
 providers:
