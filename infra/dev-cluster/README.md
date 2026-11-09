@@ -65,7 +65,12 @@ Site, `GARAGE_CAPACITY` each, 20 GB by default) and serves the S3 API at
 `https://<bucket>.s3.dev.openupstream.app`, with a wildcard certificate.
 It also makes `*.dev.openupstream.app` Traefik's default certificate, for
 every Project's default hostname, and points `*` and `*.s3` at both compute
-nodes. Then:
+nodes. Both certificates come from Let's Encrypt staging, which a Service
+reaching a Bucket does not trust (`unable to get local issuer
+certificate`); to run one, as the `spa-api` demo app does, use
+`CLUSTER_ISSUER=letsencrypt ./garage.sh`, which may run again on a
+running cluster. Let's Encrypt issues the same names at most five times a
+week. Then:
 
 ```bash
 ./platform.sh
@@ -135,6 +140,14 @@ where `rows.json` is `[{ "project": …, "database": … }]` and `config.json` a
 
 The kubeconfig points at the `hetzner-fsn1` node. Before switching that Site
 off, point it at another node's IP (all three serve the API).
+
+The platform Project's Databases have the same ids in every session, so
+their WAL goes to the same path in the backup bucket each time and
+archiving fails with `Expected empty archive` (the Cluster's
+`ContinuousArchiving` is `False`). Their backups do not work on the dev
+cluster, and after a Site failover the old primary cannot rejoin until its
+pod and PVC are deleted, after which CloudNativePG clones a new standby.
+Customer Databases get new ids and are not affected.
 
 When done:
 
