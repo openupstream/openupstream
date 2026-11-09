@@ -1131,7 +1131,19 @@ Decisions table once it is settled.
    crashed the process (the Kubernetes client pipes the body without an
    error handler; fixed in `src/kube.ts`) and that the kubelet answers 200
    with a sentence of its own for a log it cannot read (dropped: it has no
-   timestamp). Not yet run on the dev cluster under gVisor.
+   timestamp). Run on the dev cluster (k3s 1.36, gVisor, 2026-11-09)
+   with the `worker` demo app, as the control plane's ServiceAccount:
+   `oup service logs -f` on two replicas followed an `enqueue` run's tasks
+   from both, and through a rollout picked up the two new pods as they
+   started and the old ones' last lines on SIGTERM; the API gave each
+   entry its pod's Site (one per compute Site). `oup job logs` showed the
+   newest run whole, `-f` on a finished run ended at once (1.4 s), and
+   `--tail 0` sent nothing. A worker without a Database showed its
+   `DATABASE_URL is not set` from both crash-looping pods (k3s 1.36 keeps
+   such a container `terminated` during the back-off, so it is the
+   current log). No `Forbidden` or other error in the control plane's
+   log; `kubectl auth can-i` confirmed it may list pods, read their logs
+   and read a node, not list nodes.
 4. Containers, Cron job and One-off job modes. Done: Jobs API (#95,
    ADR-0003), the Jobs operator and runs, `oup job` (#96). Tested on the
    dev cluster (2026-11-01) with `oup job`: a Cron job every minute in
