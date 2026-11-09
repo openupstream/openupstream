@@ -17,7 +17,7 @@ export async function jobsPass(fetchJobs: FetchJobs, listNodes: ListNodes, kube:
     }
     const nodes = await readNodeBlocks(listNodes);
     if (!nodes.ok) {
-        // Fail closed (decision 104): pruning would delete the egress policy, and a new Project's pods would start
+        // Fail closed (decision 105): pruning would delete the egress policy, and a new Project's pods would start
         // without one, so nothing is applied or deleted and the policies in place keep excluding the nodes they know.
         return { msg: 'cannot get the Nodes, nothing applied', error: nodes.error };
     }

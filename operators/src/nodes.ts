@@ -1,6 +1,6 @@
 /**
  * The cluster's Nodes as the customer egress policies need them (decision
- * 104): every Node's addresses, which a Service's or Job's pod may reach on
+ * 105): every Node's addresses, which a Service's or Job's pod may reach on
  * 80 and 443 only. Pod traffic leaves with its node's address, so the host
  * firewall cannot tell it from the node-to-node traffic it admits; the
  * NetworkPolicy, enforced per pod, has to.

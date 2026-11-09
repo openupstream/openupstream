@@ -23,6 +23,9 @@ const fakes = () => {
         createJob: async () => err('not in this test'),
         listJobs: async () => ok([]),
         deleteJob: async () => ok('not-found'),
+        listPods: async () => ok([]),
+        nodeSite: async () => ok(undefined),
+        podLog: async () => err('not in this test'),
         remove: async (ref: ObjectRef) => {
             if (failKinds.has(ref.kind)) {
                 return err('forbidden');

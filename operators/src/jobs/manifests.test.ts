@@ -127,9 +127,11 @@ test('runs carry the Job id the control plane lists them by, and the label the e
     const egress = planJobs([row()], NODE_BLOCKS).find((o) => o.metadata.name === 'job-egress');
     const spec = egress?.['spec'] as { podSelector: unknown; egress: { to: { ipBlock?: { cidr: string; except?: string[] } }[]; ports?: unknown[] }[] };
     assert.deepEqual(spec.podSelector, { matchLabels: { 'openupstream.io/component': 'jobs' } });
-    // Runs, like Service pods, reach the nodes on 80 and 443 only (decision 104).
+    // Runs, like Service pods, reach the nodes on 80 and 443 only (decision 105).
     assert.ok(spec.egress.some((rule) => rule.to[0]?.ipBlock?.except?.includes('198.51.100.1/32')));
     assert.ok(spec.egress.some((rule) => rule.to[0]?.ipBlock?.cidr === '192.0.2.3/32' && rule.ports?.length === 2));
+    // Runs reach the platform's public hostnames through their own node too (decision 104).
+    assert.ok(spec.egress.some((rule) => JSON.stringify(rule.to).includes('"kubernetes.io/metadata.name":"traefik"') && rule.ports?.length === 2));
 });
 
 test("a run gets the Project's DATABASE_URLs as a Service does", () => {

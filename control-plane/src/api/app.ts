@@ -14,11 +14,13 @@ import {
     DNS_LABEL,
     HOSTNAME,
     JOB_LIMITS,
+    LOG_LIMITS,
     PATH_PREFIX,
     SECRET_NAME,
     SECRET_VALUE_MAX_BYTES,
     SECRETS_MAX_TOTAL_BYTES,
     SERVICE_LIMITS,
+    SERVICE_ID_LABEL,
     UUID,
     type Bucket,
     type BucketDetails,
@@ -47,6 +49,7 @@ import {
 } from '@openupstream/sdk';
 import { randomUUID } from 'node:crypto';
 import { type Context, Hono } from 'hono';
+import { stream } from 'hono/streaming';
 import type pg from 'pg';
 import { z } from 'zod';
 import { createAccount, holdsOf, listAccounts } from '../accounts/store.js';
@@ -58,6 +61,7 @@ import { GARAGE_REGION, type ObjectStorage } from '../garage.js';
 import { type JobChanges, createJob, deleteJob, getJob, jobRegistryAuthName, listJobRows, listJobs, sealedJobRegistryAuth, updateJob } from '../jobs/store.js';
 import { byNewest, isRunOf, runManifest, runOf } from '../jobs/runs.js';
 import { isTimeZone, scheduleError } from '../jobs/schedule.js';
+import { openLogStream } from '../logs/stream.js';
 import { type ControlPlaneKube, jobStateOf, serviceStateOf, stateOf } from '../kube.js';
 import { type RegistryDeps, type ResolveError, parseImageReference, resolveDigest } from '../registry.js';
 import { createProject, deleteProject, getProject, listProjects } from '../projects/store.js';
@@ -98,8 +102,22 @@ export interface ApiDeps {
     readonly cliLogin?: { readonly issuer: string; readonly clientId: string };
     /** The Holds every new Account starts with (ARCHITECTURE.md, decision 78). */
     readonly newAccountHolds?: readonly string[];
+    /** How often a followed log stream lists the pods again, and how long it lasts at most (default LOG_LIMITS). */
+    readonly logStream?: { readonly pollMs: number; readonly maxMs: number };
     readonly log?: (entry: Record<string, unknown>) => void;
 }
+
+/** `?tail=&follow=` of the log stream. */
+const logQuery = z.strictObject({
+    tail: z.string().regex(/^\d{1,5}$/, 'a whole number').transform(Number).pipe(z.number().max(LOG_LIMITS.maxTailLines)).optional(),
+    follow: z.enum(['true', 'false']).optional(),
+});
+
+/** Set by the Kubernetes Job controller on a run's pods: the run's name. */
+const RUN_POD_LABEL = 'batch.kubernetes.io/job-name';
+
+/** How often a followed log stream lists the pods again: new replicas show within this long. */
+const LOG_POLL_MS = 5_000;
 
 
 const accountInput = z.strictObject({
@@ -947,6 +965,85 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         return updated.ok ? c.json(await serviceDetails(updated.value)) : c.json(notFound, 404);
     });
 
+    /**
+     * The log stream of the pods `selector` picks in the Project's namespace,
+     * as NDJSON, one LogEntry per line (decision 21). 503 when Kubernetes
+     * cannot be asked before it starts.
+     */
+    const logs = async (c: Context<Env>, projectId: string, selector: string) => {
+        const query = logQuery.safeParse(c.req.query());
+        if (!query.success) {
+            return c.json(invalid(query.error.issues), 400);
+        }
+        const follow = query.data.follow === 'true';
+        const project = await projectOf(c.get('accountIds'), projectId);
+        if (project === undefined) {
+            return c.json(notFound, 404);
+        }
+        const following = follows.get(project.accountId) ?? 0;
+        if (follow && following >= LOG_LIMITS.maxFollowsPerAccount) {
+            return c.json({ error: `at most ${LOG_LIMITS.maxFollowsPerAccount} followed log streams at once; end one first` }, 429);
+        }
+        // The request's own signal: a client that goes before the stream starts is seen too.
+        const stop = new AbortController();
+        const request = c.req.raw.signal;
+        if (request.aborted) {
+            stop.abort();
+        } else {
+            request.addEventListener('abort', () => stop.abort(), { once: true });
+        }
+        const opened = await openLogStream(
+            kube,
+            {
+                namespace: projectNamespace(projectId),
+                selector,
+                tail: query.data.tail ?? LOG_LIMITS.defaultTailLines,
+                follow,
+                pollMs: deps.logStream?.pollMs ?? LOG_POLL_MS,
+                maxMs: deps.logStream?.maxMs ?? LOG_LIMITS.maxFollowSeconds * 1000,
+                log: deps.log,
+            },
+            stop.signal,
+        );
+        if (!opened.ok) {
+            deps.log?.({ msg: 'cannot list pods', selector, error: opened.error });
+            return kubernetesDown(c);
+        }
+        c.header('content-type', 'application/x-ndjson; charset=utf-8');
+        c.header('cache-control', 'no-store');
+        if (follow) {
+            follows.set(project.accountId, (follows.get(project.accountId) ?? 0) + 1);
+        }
+        return stream(c, async (body) => {
+            body.onAbort(() => stop.abort());
+            const heartbeat = follow ? setInterval(() => void body.write('\n'), LOG_LIMITS.heartbeatSeconds * 1000) : undefined;
+            try {
+                for await (const entry of opened.value) {
+                    // Hono drops write errors: a client that went is seen here.
+                    if (body.aborted) {
+                        stop.abort();
+                        break;
+                    }
+                    await body.write(`${JSON.stringify(entry)}\n`);
+                }
+            } finally {
+                clearInterval(heartbeat);
+                stop.abort();
+                if (follow) {
+                    follows.set(project.accountId, (follows.get(project.accountId) ?? 1) - 1);
+                }
+            }
+        });
+    };
+    /** Followed log streams open now, per Account, on this replica. */
+    const follows = new Map<string, number>();
+    const kubernetesDown = (c: Context<Env>) => c.json({ error: 'cannot reach Kubernetes now' }, 503);
+
+    app.get('/v1/projects/:projectId/services/:serviceId/logs', async (c) => {
+        const service = await serviceOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('serviceId'));
+        return service === undefined ? c.json(notFound, 404) : logs(c, service.projectId, `${SERVICE_ID_LABEL}=${service.id}`);
+    });
+
     app.delete('/v1/projects/:projectId/services/:serviceId', async (c) => {
         const service = await serviceOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('serviceId'));
         if (service === undefined) {
@@ -1133,7 +1230,6 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         return listed.value.map(runOf).sort(byNewest);
     };
-    const kubernetesDown = (c: Context<Env>) => c.json({ error: 'cannot reach Kubernetes now' }, 503);
 
     app.post('/v1/projects/:projectId/jobs/:jobId/runs', async (c) => {
         const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
@@ -1206,6 +1302,13 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         const run = runs.find((candidate) => candidate.id === runId);
         return run === undefined ? c.json(notFound, 404) : c.json(run);
+    });
+
+    app.get('/v1/projects/:projectId/jobs/:jobId/runs/:runId/logs', async (c) => {
+        const job = await jobOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('jobId'));
+        const runId = c.req.param('runId');
+        // The Job controller labels a run's pods with the run's name.
+        return job === undefined || !isRunOf(job.id, runId) ? c.json(notFound, 404) : logs(c, job.projectId, `${RUN_POD_LABEL}=${runId}`);
     });
 
     app.delete('/v1/projects/:projectId/jobs/:jobId/runs/:runId', async (c) => {

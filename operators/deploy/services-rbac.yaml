@@ -33,7 +33,7 @@ rules:
     resources: [networkpolicies]
     verbs: [create, patch, list, delete]
   # The nodes' addresses, left out of the egress policy but for 80 and 443
-  # (decision 104): listed every pass, watched to start a pass when a node
+  # (decision 105): listed every pass, watched to start a pass when a node
   # joins or changes its addresses.
   - apiGroups: [""]
     resources: [nodes]

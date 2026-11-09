@@ -42,7 +42,7 @@ export async function databasesPass(
 
 /**
  * The wait between passes, which something outside the loop can cut short:
- * a Node that joined or changed its addresses (decision 104). A wake during
+ * a Node that joined or changed its addresses (decision 105). A wake during
  * a pass makes the next one start right after it.
  */
 export interface Wakeup {

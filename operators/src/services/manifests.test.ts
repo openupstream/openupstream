@@ -157,6 +157,21 @@ test("Service pods reach the nodes' addresses on 80 and 443 only, not the Kubern
     ]);
 });
 
+test("Service pods reach Traefik's pods on their two ports, for the platform's public hostnames through their own node", () => {
+    const policy = planServices([row()], NODE_BLOCKS).find((o) => o.metadata.name === 'service-egress');
+    const spec = policy?.['spec'] as { egress: { to: unknown[]; ports?: unknown[] }[] };
+    const ingress = spec.egress.find((rule) =>
+        rule.to.some((peer) => JSON.stringify(peer).includes('"kubernetes.io/metadata.name":"traefik"')),
+    );
+    assert.deepEqual(ingress, {
+        to: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'traefik' } }, podSelector: { matchLabels: { 'app.kubernetes.io/name': 'traefik' } } }],
+        ports: [
+            { port: 8000, protocol: 'TCP' },
+            { port: 8443, protocol: 'TCP' },
+        ],
+    });
+});
+
 test('new Secrets roll the Service: the version is on the pod template', () => {
     const before = podOf(planServices([row()], NODE_BLOCKS).find((o) => o.kind === 'Deployment'));
     const after = podOf(planServices([{ ...row(), secretsVersion: 'v2' }], NODE_BLOCKS).find((o) => o.kind === 'Deployment'));
