@@ -4,7 +4,7 @@ import { networkPolicyFor, projectObjectsFor } from './kubernetes.js';
 
 const projectId = '11111111-1111-4111-8111-111111111111';
 
-test("a Project's pods accept connections only from each other, Traefik and CloudNativePG's operator", () => {
+test("a Project's pods accept connections only from each other, Traefik, CloudNativePG's operator and Prometheus on the Databases' metrics ports", () => {
     const policy = networkPolicyFor(projectId);
     assert.equal(policy.metadata.namespace, `project-${projectId}`);
     assert.deepEqual(policy.spec, {
@@ -14,6 +14,13 @@ test("a Project's pods accept connections only from each other, Traefik and Clou
             { from: [{ podSelector: {} }] },
             { from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'traefik' } } }] },
             { from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'cnpg-system' } } }] },
+            {
+                from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'monitoring' } } }],
+                ports: [
+                    { protocol: 'TCP', port: 9187 },
+                    { protocol: 'TCP', port: 9127 },
+                ],
+            },
         ],
     });
 });

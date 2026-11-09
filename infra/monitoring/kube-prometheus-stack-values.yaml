@@ -1,0 +1,162 @@
+# kube-prometheus-stack for the platform's own monitoring (ARCHITECTURE.md,
+# "Observability and customer logs"; decisions 106 and 107). Installed by
+# infra/dev-cluster/monitoring.sh into the namespace `monitoring`.
+#
+# Prometheus and Alertmanager run twice, one replica per compute Site, so a
+# dead Site is alerted on by the other one. Both Prometheus replicas scrape
+# everything; the two Alertmanagers gossip and send each alert once.
+
+# The values monitoring.sh sets: the alert recipient and the SES SMTP user.
+# Kept out of this file, which is public.
+alerts:
+  email: ""
+  smtpUser: ""
+
+crds:
+  enabled: true
+
+# k3s runs the scheduler, controller manager, proxy and etcd inside the k3s
+# process and does not expose their metrics: their scrapes and alerts would
+# only report them as down.
+kubeControllerManager: {enabled: false}
+kubeScheduler: {enabled: false}
+kubeProxy: {enabled: false}
+kubeEtcd: {enabled: false}
+
+defaultRules:
+  rules:
+    etcd: false
+    kubeControllerManager: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeProxy: false
+    windows: false
+  # The workload alerts (crash loops, unavailable replicas, failed Jobs)
+  # watch the platform's namespaces only. A customer's crashing Service is
+  # theirs to see in the log stream, not ours to be woken for; their
+  # Databases are watched by infra/monitoring/rules.yaml instead.
+  appNamespacesTarget: "kube-system|monitoring|traefik|cert-manager|cnpg-system|garage|openupstream-system|project-00000000-0000-4000-8000-000000000002"
+
+alertmanager:
+  # The config goes through Helm's tpl, so it can take alerts.* from above.
+  tplConfig: true
+  config:
+    global:
+      resolve_timeout: 5m
+      # Amazon SES over SMTP, with the send-only key (docs/self-hosting.md,
+      # sections 6 and 11); the password is derived from it by monitoring.sh.
+      smtp_smarthost: email-smtp.eu-central-1.amazonaws.com:587
+      smtp_from: openupstream alerts <no-reply@openupstream.com>
+      smtp_auth_username: '{{ .Values.alerts.smtpUser }}'
+      smtp_auth_password_file: /etc/alertmanager/secrets/alertmanager-credentials/smtp-password
+      smtp_require_tls: true
+    inhibit_rules:
+      - source_matchers: ['severity = critical']
+        target_matchers: ['severity =~ warning|info']
+        equal: [namespace, alertname]
+      - source_matchers: ['severity = warning']
+        target_matchers: ['severity = info']
+        equal: [namespace, alertname]
+      - source_matchers: ['alertname = InfoInhibitor']
+        target_matchers: ['severity = info']
+        equal: [namespace]
+      - target_matchers: ['alertname = InfoInhibitor']
+    route:
+      group_by: [alertname, namespace]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      receiver: email
+      routes:
+        # Always firing: pinged to healthchecks.io every minute, which mails
+        # when the pings stop, i.e. when the cluster or the alerting is down.
+        - receiver: dead-mans-switch
+          matchers: ['alertname = "Watchdog"']
+          group_wait: 0s
+          group_interval: 1m
+          repeat_interval: 1m
+        - receiver: "null"
+          matchers: ['alertname = "InfoInhibitor"']
+        - receiver: "null"
+          matchers: ['severity = "info"']
+    receivers:
+      - name: "null"
+      - name: email
+        email_configs:
+          - to: '{{ .Values.alerts.email }}'
+            send_resolved: true
+      - name: dead-mans-switch
+        webhook_configs:
+          - url_file: /etc/alertmanager/secrets/alertmanager-credentials/watchdog-url
+            send_resolved: false
+    templates:
+      - /etc/alertmanager/config/*.tmpl
+  alertmanagerSpec:
+    replicas: 2
+    # SMTP password and ping URL, written by monitoring.sh.
+    secrets: [alertmanager-credentials]
+    retention: 120h
+    affinity: &computeSites
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels: {app.kubernetes.io/name: alertmanager}
+    resources:
+      requests: {cpu: 10m, memory: 64Mi}
+      limits: {memory: 128Mi}
+
+prometheus:
+  prometheusSpec:
+    replicas: 2
+    retention: 15d
+    retentionSize: 18GB
+    # Pick up every ServiceMonitor, PodMonitor and rule in the cluster, not
+    # only those of this Helm release.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    affinity: *computeSites
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: DoNotSchedule
+        labelSelector:
+          matchLabels: {app.kubernetes.io/name: prometheus}
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests: {storage: 20Gi}
+    resources:
+      requests: {cpu: 100m, memory: 768Mi}
+      limits: {memory: 1536Mi}
+
+prometheus-node-exporter:
+  # Every node, the third Site too.
+  tolerations:
+    - {key: openupstream.io/third-site, operator: Exists, effect: NoSchedule}
+
+grafana:
+  # Reached by `kubectl port-forward`, later over Tailscale (decision on
+  # admin access); never through Traefik.
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  affinity: *computeSites
+  persistence:
+    enabled: false
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      uid: loki
+      url: http://loki.monitoring.svc:3100
+      access: proxy

@@ -64,10 +64,23 @@ export const namespaceFor = (project: Pick<Project, 'id' | 'name'>) => ({
 export const INGRESS_FROM_NAMESPACES = ['traefik', 'cnpg-system'] as const;
 
 /**
+ * Where Prometheus runs (infra/monitoring): admitted into every Project's
+ * namespace, but only to the metrics ports of its Databases.
+ */
+export const MONITORING_NAMESPACE = 'monitoring';
+
+/**
+ * The metrics ports of a Database's pods, as CloudNativePG serves them: the
+ * Postgres instances' exporter and the Poolers' PgBouncer exporter.
+ */
+export const DATABASE_METRICS_PORTS = [9187, 9127] as const;
+
+/**
  * Default deny for a Project's namespace (ARCHITECTURE.md, "Project
  * isolation"): its pods accept connections only from each other and from
  * INGRESS_FROM_NAMESPACES, so Projects reach each other only through public
- * Routes, also within one Account. Egress is not restricted here.
+ * Routes, also within one Account. Prometheus may reach only the Databases'
+ * metrics ports (decision 106). Egress is not restricted here.
  */
 export const networkPolicyFor = (projectId: Id) => ({
     apiVersion: 'networking.k8s.io/v1',
@@ -85,6 +98,10 @@ export const networkPolicyFor = (projectId: Id) => ({
             ...INGRESS_FROM_NAMESPACES.map((name) => ({
                 from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': name } } }],
             })),
+            {
+                from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': MONITORING_NAMESPACE } } }],
+                ports: DATABASE_METRICS_PORTS.map((port) => ({ protocol: 'TCP', port })),
+            },
         ],
     },
 });
