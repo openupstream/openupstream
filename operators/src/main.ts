@@ -19,10 +19,11 @@
 import { readFile } from 'node:fs/promises';
 import { KubeConfig } from '@kubernetes/client-node';
 import { controlPlaneJobs, controlPlaneRoutings, controlPlaneRows, controlPlaneServices } from './control-plane.js';
-import { type PassLog, databasesPass, runPasses } from './databases/loop.js';
+import { type PassLog, databasesPass, runPasses, wakeup } from './databases/loop.js';
 import type { DatabaseConfig } from './databases/manifests.js';
 import { jobsPass } from './jobs/loop.js';
 import { kubeFrom } from './kube.js';
+import { nodesFor } from './nodes.js';
 import { routesPass } from './routes/loop.js';
 import { servicesPass } from './services/loop.js';
 
@@ -56,6 +57,9 @@ const kubeConfig = new KubeConfig();
 kubeConfig.loadFromDefault();
 const kube = kubeFrom(kubeConfig);
 const token = () => readFile(tokenPath, 'utf8');
+const stop = new AbortController();
+process.once('SIGTERM', () => stop.abort());
+const wait = wakeup();
 
 const databases = async (): Promise<() => Promise<PassLog>> => {
     const [credentialsNamespace, credentialsName] = required('BACKUP_CREDENTIALS').split('/');
@@ -78,17 +82,17 @@ const routes = (): (() => Promise<PassLog>) => {
 
 const services = (): (() => Promise<PassLog>) => {
     const fetchServices = controlPlaneServices(controlPlaneUrl, token);
-    return () => servicesPass(fetchServices, kube);
+    const listNodes = nodesFor(kubeConfig, wait.wake, log, stop.signal);
+    return () => servicesPass(fetchServices, listNodes, kube);
 };
 
 const jobs = (): (() => Promise<PassLog>) => {
     const fetchJobs = controlPlaneJobs(controlPlaneUrl, token);
-    return () => jobsPass(fetchJobs, kube);
+    const listNodes = nodesFor(kubeConfig, wait.wake, log, stop.signal);
+    return () => jobsPass(fetchJobs, listNodes, kube);
 };
 
 const passes = { databases, routes, services, jobs } as const;
 const pass = await passes[operator]();
-const stop = new AbortController();
-process.once('SIGTERM', () => stop.abort());
 log({ msg: `${operator} operator started`, controlPlaneUrl, intervalMs });
-await runPasses(pass, intervalMs, log, stop.signal);
+await runPasses(pass, intervalMs, log, stop.signal, wait);

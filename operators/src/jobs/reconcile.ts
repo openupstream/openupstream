@@ -7,10 +7,11 @@
  */
 import type { JobRow } from '@openupstream/sdk';
 import type { Kube } from '../kube.js';
+import type { NodeBlocks } from '../nodes.js';
 import { COMPONENT_LABEL } from '../kubernetes.js';
 import { type OwnedReport, applyAndPrune } from '../owned.js';
 import { JOBS_COMPONENT, PRUNED_KINDS, planJobs } from './manifests.js';
 
-export async function reconcileJobs(kube: Kube, rows: readonly JobRow[]): Promise<OwnedReport> {
-    return applyAndPrune(kube, planJobs(rows), PRUNED_KINDS, `${COMPONENT_LABEL}=${JOBS_COMPONENT}`);
+export async function reconcileJobs(kube: Kube, rows: readonly JobRow[], nodes: NodeBlocks): Promise<OwnedReport> {
+    return applyAndPrune(kube, planJobs(rows, nodes), PRUNED_KINDS, `${COMPONENT_LABEL}=${JOBS_COMPONENT}`);
 }

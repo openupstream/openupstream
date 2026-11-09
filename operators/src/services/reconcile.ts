@@ -8,9 +8,10 @@
  */
 import type { ServiceRow } from '@openupstream/sdk';
 import type { Kube } from '../kube.js';
+import type { NodeBlocks } from '../nodes.js';
 import { type OwnedReport, applyAndPrune } from '../owned.js';
 import { COMPONENT_LABEL, PRUNED_KINDS, SERVICES_COMPONENT, planServices } from './manifests.js';
 
-export async function reconcileServices(kube: Kube, rows: readonly ServiceRow[]): Promise<OwnedReport> {
-    return applyAndPrune(kube, planServices(rows), PRUNED_KINDS, `${COMPONENT_LABEL}=${SERVICES_COMPONENT}`);
+export async function reconcileServices(kube: Kube, rows: readonly ServiceRow[], nodes: NodeBlocks): Promise<OwnedReport> {
+    return applyAndPrune(kube, planServices(rows, nodes), PRUNED_KINDS, `${COMPONENT_LABEL}=${SERVICES_COMPONENT}`);
 }

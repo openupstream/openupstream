@@ -4,6 +4,7 @@ import { type JobRow, jobSpecVersion } from '@openupstream/sdk';
 import type { KubeObject } from '../kube.js';
 import { err, ok } from '../result.js';
 import { fakeKube } from '../testing/kube.js';
+import { NODE_BLOCKS, listNodes } from '../testing/nodes.js';
 import { jobsPass } from './loop.js';
 import { planJobs } from './manifests.js';
 import { reconcileJobs } from './reconcile.js';
@@ -61,10 +62,10 @@ interface CronJobSpec {
     };
 }
 const specOf = (object: KubeObject | undefined) => object?.['spec'] as CronJobSpec;
-const cronJobOf = (rows: JobRow[]) => planJobs(rows).find((o) => o.kind === 'CronJob');
+const cronJobOf = (rows: JobRow[]) => planJobs(rows, NODE_BLOCKS).find((o) => o.kind === 'CronJob');
 
 test("a Project's namespace and NetworkPolicies first, then each Job's CronJob", () => {
-    const plan = planJobs([row(), row({ id: '33333333-3333-4333-8333-333333333333', name: 'once', schedule: null, timeZone: null })]);
+    const plan = planJobs([row(), row({ id: '33333333-3333-4333-8333-333333333333', name: 'once', schedule: null, timeZone: null })], NODE_BLOCKS);
     assert.deepEqual(
         plan.map((o) => `${o.kind} ${o.metadata.name}`),
         [
@@ -123,9 +124,12 @@ test('runs carry the Job id the control plane lists them by, and the label the e
         assert.equal(labels['openupstream.io/job-id'], jobId);
         assert.equal(labels['openupstream.io/component'], 'jobs');
     }
-    const egress = planJobs([row()]).find((o) => o.metadata.name === 'job-egress');
-    const spec = egress?.['spec'] as { podSelector: unknown; egress: { to: unknown[]; ports?: unknown[] }[] };
+    const egress = planJobs([row()], NODE_BLOCKS).find((o) => o.metadata.name === 'job-egress');
+    const spec = egress?.['spec'] as { podSelector: unknown; egress: { to: { ipBlock?: { cidr: string; except?: string[] } }[]; ports?: unknown[] }[] };
     assert.deepEqual(spec.podSelector, { matchLabels: { 'openupstream.io/component': 'jobs' } });
+    // Runs, like Service pods, reach the nodes on 80 and 443 only (decision 105).
+    assert.ok(spec.egress.some((rule) => rule.to[0]?.ipBlock?.except?.includes('198.51.100.1/32')));
+    assert.ok(spec.egress.some((rule) => rule.to[0]?.ipBlock?.cidr === '192.0.2.3/32' && rule.ports?.length === 2));
     // Runs reach the platform's public hostnames through their own node too (decision 104).
     assert.ok(spec.egress.some((rule) => JSON.stringify(rule.to).includes('"kubernetes.io/metadata.name":"traefik"') && rule.ports?.length === 2));
 });
@@ -148,16 +152,23 @@ test("a deleted Job's CronJob is removed; its runs are left to Kubernetes", asyn
         { apiVersion: 'batch/v1', kind: 'CronJob', namespace, name: gone },
         { apiVersion: 'batch/v1', kind: 'Job', namespace, name: `${gone}-abc123` },
     ]);
-    const report = await reconcileJobs(kube, [row()]);
+    const report = await reconcileJobs(kube, [row()], NODE_BLOCKS);
     assert.deepEqual(removed, [`CronJob ${gone}`]);
     assert.equal(report.failed.length, 0);
 });
 
 test('without the Jobs nothing is applied or deleted', async () => {
     const { kube, applied, removed } = fakeKube([{ apiVersion: 'batch/v1', kind: 'CronJob', namespace, name: 'job-x' }]);
-    const log = await jobsPass(async () => err({ kind: 'unreachable', message: 'down' }), kube);
+    const log = await jobsPass(async () => err({ kind: 'unreachable', message: 'down' }), listNodes, kube);
     assert.equal(log.msg, 'cannot get the Jobs');
     assert.deepEqual([applied, removed], [[], []]);
-    const done = await jobsPass(async () => ok([row()]), kube);
+    const done = await jobsPass(async () => ok([row()]), listNodes, kube);
     assert.equal(done['jobs'], 1);
+});
+
+test('without the Nodes nothing is applied or deleted', async () => {
+    const { kube, applied, removed } = fakeKube([{ apiVersion: 'batch/v1', kind: 'CronJob', namespace, name: 'job-x' }]);
+    const log = await jobsPass(async () => ok([row()]), async () => ok([]), kube);
+    assert.equal(log.msg, 'cannot get the Nodes, nothing applied');
+    assert.deepEqual([applied, removed], [[], []]);
 });

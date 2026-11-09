@@ -16,6 +16,7 @@
  */
 import { JOB_ID_LABEL, PROJECT_REGISTRY_AUTH, PROJECT_SECRETS, SPEC_VERSION_ANNOTATION, type JobRow, jobObjectName, jobSpecVersion } from '@openupstream/sdk';
 import type { KubeObject } from '../kube.js';
+import type { NodeBlocks } from '../nodes.js';
 import {
     COMPONENT_LABEL,
     LABELS,
@@ -124,12 +125,12 @@ const cronJob = (row: JobRow): KubeObject => {
 };
 
 /** Applied in this order, per Project: its namespace, NetworkPolicies, then each Job's CronJob. */
-export function planJobs(rows: readonly JobRow[]): KubeObject[] {
+export function planJobs(rows: readonly JobRow[], nodes: NodeBlocks): KubeObject[] {
     const projects = [...new Map(rows.map((row) => [row.project.id, row.project])).values()];
     return [
         ...projects.flatMap((project) => [
             ...projectObjectsFor(project),
-            customerEgressPolicy(project.id, 'job-egress', JOBS_COMPONENT, labels(project.id)),
+            customerEgressPolicy(project.id, 'job-egress', JOBS_COMPONENT, labels(project.id), nodes),
         ]),
         ...rows.map(cronJob),
     ];

@@ -11,6 +11,7 @@ import {
     databaseConnection,
     projectNamespace as namespaceOf,
 } from '@openupstream/sdk';
+import type { NodeBlocks } from './nodes.js';
 
 /** Each Site is one zone; every node carries its Site's name in this label. */
 export const ZONE_LABEL = 'topology.kubernetes.io/zone';
@@ -153,6 +154,9 @@ export const EGRESS_EXCEPT_V4 = [
 ];
 export const EGRESS_EXCEPT_V6 = ['::/127', 'fc00::/7', 'fe80::/10', 'ff00::/8', '64:ff9b::/96'];
 
+/** The ports a customer's container may reach on a node: Traefik's hostPorts, for a Bucket or Route at its public hostname. */
+export const NODE_EGRESS_PORTS = [80, 443] as const;
+
 /**
  * Traefik's pods and the ports they listen on behind the nodes' hostPorts
  * 80 and 443, as set in infra/ingress/traefik-values.yaml: change them
@@ -170,9 +174,19 @@ export const INGRESS_POD_PORTS = [8000, 8443] as const;
  * hostnames (a Bucket's endpoint, a Project's Routes): through the node a
  * pod runs on, the hostPort rewrites such a connection to Traefik's pod
  * address before the policy sees it, so Traefik's pods are allowed by
- * selector, on their two ports only (decision 104).
+ * selector, on their two ports only (decision 104). The internet leaves
+ * out the nodes' own addresses, where the Kubernetes API, kubelet and etcd
+ * listen: those are reachable on 80 and 443 only (decision 105). The
+ * `kubernetes` Service's address is rewritten to a node's before the
+ * policy sees it, so this closes it too.
  */
-export const customerEgressPolicy = (projectId: Id, name: string, component: string, labels: Readonly<Record<string, string>>) => ({
+export const customerEgressPolicy = (
+    projectId: Id,
+    name: string,
+    component: string,
+    labels: Readonly<Record<string, string>>,
+    nodes: NodeBlocks,
+) => ({
     apiVersion: 'networking.k8s.io/v1',
     kind: 'NetworkPolicy',
     metadata: { name, namespace: namespaceOf(projectId), labels },
@@ -192,7 +206,16 @@ export const customerEgressPolicy = (projectId: Id, name: string, component: str
                 to: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': INGRESS_NAMESPACE } }, podSelector: { matchLabels: { ...INGRESS_POD_LABELS } } }],
                 ports: INGRESS_POD_PORTS.map((port) => ({ port, protocol: 'TCP' })),
             },
-            { to: [{ ipBlock: { cidr: '0.0.0.0/0', except: EGRESS_EXCEPT_V4 } }, { ipBlock: { cidr: '::/0', except: EGRESS_EXCEPT_V6 } }] },
+            {
+                to: [
+                    { ipBlock: { cidr: '0.0.0.0/0', except: [...EGRESS_EXCEPT_V4, ...nodes.v4] } },
+                    { ipBlock: { cidr: '::/0', except: [...EGRESS_EXCEPT_V6, ...nodes.v6] } },
+                ],
+            },
+            {
+                to: [...nodes.v4, ...nodes.v6].map((cidr) => ({ ipBlock: { cidr } })),
+                ports: NODE_EGRESS_PORTS.map((port) => ({ port, protocol: 'TCP' })),
+            },
         ],
     },
 });
