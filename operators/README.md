@@ -10,8 +10,8 @@ Traefik already implements is configured, not reimplemented.
 
 - `src/databases/manifests.ts`: a Database → its CloudNativePG `Cluster`,
   PgBouncer `Pooler`, Barman Cloud `ObjectStore` and `ScheduledBackup`, and a
-  restored Database → the same with a Cluster that bootstraps from another
-  Database's backups. Pure functions; invalid input comes back as a list of
+  restored Database (a row with `restoredFrom`) → the same with a Cluster
+  that bootstraps from another Database's backups, on every pass. Pure functions; invalid input comes back as a list of
   errors.
 - `src/databases/reconcile.ts`: one reconcile pass. `planDatabases` (pure)
   turns rows into the objects to apply: per Project its namespace, its

@@ -36,6 +36,7 @@ const fakeKube = (failing: readonly string[] = [], missing: readonly string[] = 
     const applied = new Map<string, SecretManifest>();
     const kube: ControlPlaneKube = {
         readCluster: async () => ok(undefined),
+        readRecoveryWindow: async () => ok(undefined),
         readDeployment: async () => ok(undefined),
         readCronJob: async () => ok(undefined),
         createJob: async () => err('not in this test'),

@@ -23,7 +23,7 @@ import { getAccountRecord, liftHold, placeHold } from '../accounts/store.js';
 import { listDatabaseRows } from '../databases/rows.js';
 import { ensureDefaultDomains } from '../domains/store.js';
 import { listDomainRoutings } from '../routes/store.js';
-import { type ClusterStatus, type ControlPlaneKube, type CronJobStatus, type DeploymentStatus, type KubeJob, type PodInfo, type SecretManifest } from '../kube.js';
+import { type ClusterStatus, type ControlPlaneKube, type CronJobStatus, type DeploymentStatus, type KubeJob, type PodInfo, type RecoveryWindow, type SecretManifest } from '../kube.js';
 import type { RegistryDeps } from '../registry.js';
 import { listServiceRows } from '../services/store.js';
 import { listJobRows } from '../jobs/store.js';
@@ -110,6 +110,9 @@ const podLogs = new Map<string, string[]>();
 /** What the fake Kubernetes reports per Cluster name; a string is an error. */
 const clusters = new Map<string, ClusterStatus | string>();
 
+/** The recovery windows of the fake Kubernetes' ObjectStores, by name; a string is an error. */
+const recoveryWindows = new Map<string, RecoveryWindow | string>();
+
 /** The Secrets the fake Kubernetes received, latest last; namespaces in `missingNamespaces` do not exist. */
 const appliedSecrets: SecretManifest[] = [];
 const missingNamespaces = new Set<string>();
@@ -120,6 +123,10 @@ const kube: ControlPlaneKube = {
     readCluster: async (_namespace, name) => {
         const status = clusters.get(name);
         return typeof status === 'string' ? err(status) : ok(status);
+    },
+    readRecoveryWindow: async (_namespace, name) => {
+        const window = recoveryWindows.get(name);
+        return typeof window === 'string' ? err(window) : ok(window);
     },
     readDeployment: async (_namespace, name) => ok(deployments.get(name)),
     readCronJob: async (_namespace, name) => ok(cronJobs.get(name)),
@@ -453,6 +460,61 @@ describe('Databases', () => {
         assert.deepEqual(listed.map((d) => d.name), ['lim']);
         const again = await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name: 'orders', memoryMb: 256, storageGb: 1 });
         assert.equal(again.status, 201);
+    });
+
+    test('restored from another Database of the Project, live or deleted, within its recovery window', async () => {
+        const post = (body: unknown) => call('POST', `/v1/projects/${projectId}/databases`, 'alice', body);
+        const source = (await (await post({ name: 'source', memoryMb: 256, storageGb: 2 })).json()) as DatabaseDetails;
+        const restore = (name: string, restoreFrom: unknown) => post({ name, memoryMb: 256, storageGb: 2, restoreFrom });
+        const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000);
+
+        assert.equal((await restore('early', { databaseId: source.id })).status, 409, 'no ObjectStore yet');
+        recoveryWindows.set(`db-${source.id}`, { firstRecoverabilityPoint: undefined, lastSuccessfulBackupTime: undefined });
+        assert.equal((await restore('early', { databaseId: source.id })).status, 409, 'no finished base backup yet');
+
+        recoveryWindows.set(`db-${source.id}`, { firstRecoverabilityPoint: minutesAgo(60), lastSuccessfulBackupTime: minutesAgo(60) });
+        assert.equal((await restore('r', { databaseId: source.id, targetTime: minutesAgo(90).toISOString() })).status, 400, 'before the first backup');
+        assert.equal((await restore('r', { databaseId: source.id, targetTime: minutesAgo(2).toISOString() })).status, 400, 'WAL may not be archived yet');
+        assert.equal((await restore('r', { databaseId: source.id, targetTime: '2026-10-17T10:30:00' })).status, 400, 'no offset');
+        assert.equal((await restore('r', { databaseId: '00000000-0000-4000-8000-0000000000ff' })).status, 400, 'no such Database');
+
+        const target = minutesAgo(30);
+        const atTime = await restore('at-time', { databaseId: source.id, targetTime: target.toISOString().replace('Z', '+00:00') });
+        assert.equal(atTime.status, 201);
+        const restored = (await atTime.json()) as DatabaseDetails;
+        assert.deepEqual(restored.restoredFrom, { databaseId: source.id, targetTime: target.toISOString() });
+        const row = (await listDatabaseRows(db.pool)).find((r) => r.database.id === restored.id);
+        assert.deepEqual(row?.database.restoredFrom, { databaseId: source.id, targetTime: target.toISOString() });
+
+        assert.equal((await call('DELETE', `/v1/projects/${projectId}/databases/${source.id}`, 'alice')).status, 202);
+        const latest = await restore('latest', { databaseId: source.id });
+        assert.equal(latest.status, 201, 'a deleted source, to the latest point');
+        assert.deepEqual(((await latest.json()) as DatabaseDetails).restoredFrom, { databaseId: source.id });
+        assert.equal(
+            (await restore('after-delete', { databaseId: source.id, targetTime: minutesAgo(1).toISOString() })).status,
+            400,
+            'not after the deletion',
+        );
+
+        recoveryWindows.set(`db-${source.id}`, 'connect ETIMEDOUT');
+        assert.equal((await restore('later', { databaseId: source.id })).status, 503);
+        recoveryWindows.delete(`db-${source.id}`);
+    });
+
+    test("cannot restore another Project's Database", async () => {
+        const other = (await (await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'db-tests-other' })).json()) as Project;
+        const foreign = (await (
+            await call('POST', `/v1/projects/${other.id}/databases`, 'alice', { name: 'foreign', memoryMb: 256, storageGb: 1 })
+        ).json()) as DatabaseDetails;
+        recoveryWindows.set(`db-${foreign.id}`, { firstRecoverabilityPoint: new Date(0), lastSuccessfulBackupTime: new Date(0) });
+        const response = await call('POST', `/v1/projects/${projectId}/databases`, 'alice', {
+            name: 'stolen',
+            memoryMb: 256,
+            storageGb: 1,
+            restoreFrom: { databaseId: foreign.id },
+        });
+        assert.equal(response.status, 400);
+        recoveryWindows.delete(`db-${foreign.id}`);
     });
 
     test('deleting the Project deletes its Databases with it; nothing can be created in it afterwards', async () => {

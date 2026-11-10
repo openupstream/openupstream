@@ -17,8 +17,10 @@ import { type Result, err, ok } from '../result.js';
 import {
     BACKUP_CREDENTIAL_KEYS,
     type DatabaseConfig,
-    type DatabaseManifestError,
+    type DatabaseManifests,
+    type RestoreError,
     databaseManifests,
+    restoredDatabaseManifests,
 } from './manifests.js';
 
 export type { DatabaseRow };
@@ -35,7 +37,7 @@ export interface DatabasePlan {
     /** Per Database: ObjectStore, Cluster, Pooler, ScheduledBackup. */
     readonly databases: readonly ApplyChain[];
     /** Rows that cannot run; their existing objects are left alone. */
-    readonly invalid: readonly { readonly databaseId: string; readonly errors: readonly DatabaseManifestError[] }[];
+    readonly invalid: readonly { readonly databaseId: string; readonly errors: readonly RestoreError[] }[];
 }
 
 /** The platform's backup credentials, copied into a Project's namespace. */
@@ -56,6 +58,21 @@ const uniqueBy = <T>(items: readonly T[], key: (item: T) => string): T[] => [
 ];
 
 /**
+ * A restored Database keeps its recovery bootstrap for life: CloudNativePG
+ * only reads it when it creates the Cluster, and rendering the same spec on
+ * every pass keeps server-side apply from changing it afterwards.
+ */
+const manifestsFor = (row: DatabaseRow, config: DatabaseConfig): Result<DatabaseManifests, RestoreError[]> => {
+    const restore = row.database.restoredFrom;
+    return restore === undefined
+        ? databaseManifests(row.project, row.database, config)
+        : restoredDatabaseManifests(row.project, row.database, config, {
+              database: { id: restore.databaseId, projectId: row.project.id },
+              targetTime: restore.targetTime,
+          });
+};
+
+/**
  * What to apply so the cluster runs every Database in `rows`.
  * `backupCredentials` is the `data` of the platform's backup credentials
  * Secret.
@@ -65,7 +82,7 @@ export function planDatabases(
     config: DatabaseConfig,
     backupCredentials: Readonly<Record<string, string>>,
 ): DatabasePlan {
-    const results = rows.map((row) => ({ row, result: databaseManifests(row.project, row.database, config) }));
+    const results = rows.map((row) => ({ row, result: manifestsFor(row, config) }));
     const valid = results.flatMap(({ row, result }) => (result.ok ? [{ row, manifests: result.value }] : []));
     const projects = uniqueBy(
         valid.map(({ row }) => row.project),

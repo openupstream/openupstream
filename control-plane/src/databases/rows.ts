@@ -4,6 +4,7 @@
  */
 import type { DatabaseRow, Site } from '@openupstream/sdk';
 import type pg from 'pg';
+import { restoreOf } from './store.js';
 
 interface Row {
     project_id: string;
@@ -16,6 +17,8 @@ interface Row {
     memory_mb: number;
     storage_gb: number;
     database_created_at: Date;
+    restore_source_id: string | null;
+    restore_target_time: Date | null;
 }
 
 /** Every Database that is not deleted, oldest first, so the order is stable between calls. */
@@ -23,7 +26,7 @@ export async function listDatabaseRows(pool: pg.Pool): Promise<DatabaseRow[]> {
     const { rows } = await pool.query<Row>(`
         select p.id as project_id, p.account_id, p.name as project_name, p.created_at as project_created_at,
                d.id as database_id, d.name as database_name, d.home_site, d.memory_mb, d.storage_gb,
-               d.created_at as database_created_at
+               d.created_at as database_created_at, d.restore_source_id, d.restore_target_time
         from databases d
         join projects p on p.id = d.project_id
         where d.deleted_at is null
@@ -43,6 +46,7 @@ export async function listDatabaseRows(pool: pg.Pool): Promise<DatabaseRow[]> {
             memoryMb: row.memory_mb,
             storageGb: row.storage_gb,
             createdAt: row.database_created_at.toISOString(),
+            ...restoreOf(row),
         },
     }));
 }

@@ -69,6 +69,19 @@ test("the backup credentials are copied into the Project's namespace under the n
     assert.equal(namespaceObject?.metadata.labels?.[LABELS.projectName], 'shop-prod');
 });
 
+test('a restored row keeps its recovery bootstrap on every pass; a plain one bootstraps empty', () => {
+    const restored = database('3e9f1a22-6b7c-4d8e-9f0a-1b2c3d4e5f60', 'orders-restored', {
+        restoredFrom: { databaseId: orders.id, targetTime: '2026-10-17T10:30:00.000Z' },
+    });
+    const plan = planDatabases([{ project, database: orders }, { project, database: restored }], config, credentials);
+    const bootstraps = plan.databases.map((chain) => (chain.find((object) => object.kind === 'Cluster')?.['spec'] as { bootstrap?: unknown } | undefined)?.bootstrap);
+    assert.deepEqual(bootstraps, [
+        { initdb: { postInitApplicationSQL: ['CREATE EXTENSION IF NOT EXISTS vector'] } },
+        { recovery: { source: 'origin', recoveryTarget: { targetTime: '2026-10-17T10:30:00.000Z' } } },
+    ]);
+    assert.deepEqual(plan.invalid, []);
+});
+
 test('an invalid row is reported and applies nothing, the others still apply', () => {
     const broken = database('1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b', 'broken', { memoryMb: 64 });
     const plan = planDatabases(
