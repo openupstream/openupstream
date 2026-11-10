@@ -8,13 +8,6 @@
 # the last minutes it held in memory; Kubernetes reschedules it.
 deploymentMode: SingleBinary
 
-global:
-  # S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, from the Secret monitoring.sh
-  # writes with the bucket's own key; expanded into the config below.
-  extraArgs: [-config.expand-env=true]
-  extraEnvFrom:
-    - secretRef: {name: loki-s3}
-
 loki:
   auth_enabled: false
   commonConfig:
@@ -51,6 +44,12 @@ loki:
 
 singleBinary:
   replicas: 1
+  # S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, from the Secret monitoring.sh
+  # writes with the bucket's own key; expanded into the config above. (The
+  # chart's global.extraArgs do not reach this pod.)
+  extraArgs: [-config.expand-env=true]
+  extraEnvFrom:
+    - secretRef: {name: loki-s3}
   affinity:
     nodeAffinity:
       requiredDuringSchedulingIgnoredDuringExecution:

@@ -8,7 +8,10 @@ which is why it lives in the monorepo.
   firewalls, the Hetzner Object Storage bucket for backups, bunny.net DNS
   records and health checks.
 - `helm/` — values files for the off-the-shelf components: Traefik,
-  cert-manager, CloudNativePG, Prometheus/Loki/Grafana.
+  cert-manager, CloudNativePG.
+- `monitoring/` — the platform's own monitoring: kube-prometheus-stack,
+  Loki and Alloy values, scrape targets and alert rules (ARCHITECTURE.md,
+  decisions 106 and 107).
 - `gvisor/` — gVisor for customer containers: `install.sh` puts a pinned
   `runsc` on a compute node and into k3s's containerd template, before k3s
   starts; `runtimeclass.yaml` is the RuntimeClass `gvisor`, scheduled only

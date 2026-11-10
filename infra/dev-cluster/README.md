@@ -92,6 +92,23 @@ the waitlist at `https://dev.openupstream.com`, set `SIGNUP=closed`,
 own address, so you can still create users (docs/self-hosting.md, "Sign-up
 and the waitlist").
 
+For the platform's monitoring (docs/self-hosting.md, section 10), with
+the healthchecks.io ping URL in
+`~/.config/openupstream/healthchecks-ping-url-dev`:
+
+```bash
+ALERT_EMAIL=you@example.com ./monitoring.sh
+```
+
+It installs kube-prometheus-stack (Prometheus and Alertmanager once per
+compute Site, Grafana), the scrape targets and alert rules of
+`infra/monitoring`, and Loki with Alloy, Loki's data in a Garage bucket of
+its own. On the dev cluster `DatabaseWalNotArchived` fires for the
+platform's Databases, whose backups do not work there (see below), and
+mails the address once a while. The kubeconfig points at hetzner-fsn1's
+API server: to watch the cluster with that node switched off, use a copy
+with another node's address as `server`.
+
 A custom domain (control-plane README) needs a hostname outside both dev
 zones, which are reserved; `test.openupstream.com` is a third zone on
 bunny.net for that, empty between sessions. Claim e.g.

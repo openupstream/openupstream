@@ -364,6 +364,48 @@ waitlist route). The addresses stay in the table
 `waitlist` of the control plane's Database: write to the confirmed ones
 once, then delete them, as the privacy notice promises.
 
+## 10. Monitoring: alerts and the dead man's switch
+
+The platform watches itself with Prometheus, Alertmanager, Grafana and Loki
+(ARCHITECTURE.md, "Observability and customer logs"; decisions 106 and 107),
+installed by `infra/dev-cluster/monitoring.sh`. Alerts go by e-mail through
+SES; a dead man's switch at healthchecks.io notices when no alert can be
+sent at all.
+
+1. **SES.** Alertmanager sends through SES's SMTP interface with the same
+   send-only key as madAuth (section 6), so nothing new is created there:
+   the script derives the SMTP password from the key in the profile
+   `openupstream-ses` and writes it straight into the cluster. The sender is
+   `no-reply@openupstream.com`, which the key's policy allows. While the SES
+   account is in its sandbox, the recipient must be a verified address too.
+2. **healthchecks.io.** Create an account at https://healthchecks.io (EU
+   hosted, free for a few checks) and a check per cluster, e.g.
+   `openupstream-dev`, with **Period 1 minute** and **Grace 5 minutes**,
+   notifying you by e-mail. Alertmanager pings it every minute with the
+   always-firing `Watchdog` alert; when the pings stop, healthchecks.io
+   mails you. It receives the alert's labels, never customer data. Copy the
+   check's ping URL and save it from the clipboard, so it does not show on
+   screen:
+
+   ```bash
+   install -m 600 /dev/null ~/.config/openupstream/healthchecks-ping-url-dev
+   ```
+
+   ```bash
+   pbpaste > ~/.config/openupstream/healthchecks-ping-url-dev
+   ```
+
+3. **Install**, with the address alerts go to:
+
+   ```bash
+   ALERT_EMAIL=you@example.com ./monitoring.sh
+   ```
+
+4. **Check it**: the check at healthchecks.io turns green within a minute.
+   Grafana is at `kubectl -n monitoring port-forward
+   svc/kube-prometheus-stack-grafana 3000:80`, user `admin`, with the
+   password the script prints how to read.
+
 ## Coming with build step 2
 
 - **No payment method needed** when you run openupstream yourself: leave

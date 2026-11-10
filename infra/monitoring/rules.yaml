@@ -33,15 +33,21 @@ spec:
             summary: Standby of {{ $labels.cluster }} in {{ $labels.namespace }} is {{ $value | humanizeDuration }} behind
             description: A failover now would lose that much of the last writes.
         - alert: DatabaseWalNotArchived
-          # WAL waiting for the backup bucket: point-in-time restore falls
-          # behind. On the dev cluster the platform Databases always fire this
-          # (their archive path is reused; infra/dev-cluster/README.md).
-          expr: max by (namespace, cluster) (cnpg_collector_pg_wal_archive_status{value="ready"}) > 10
+          # Archiving keeps failing and nothing gets through: point-in-time
+          # restore falls behind. On a quiet Database few WAL files pile up,
+          # so the failures count, not the backlog. On the dev cluster the
+          # platform Databases always fire this (their archive path is
+          # reused; infra/dev-cluster/README.md).
+          expr: |
+            max by (namespace, cluster) (
+              increase(cnpg_pg_stat_archiver_failed_count[15m]) > 0
+              unless increase(cnpg_pg_stat_archiver_archived_count[15m]) > 0
+            )
           for: 15m
           labels: {severity: warning}
           annotations:
-            summary: Database {{ $labels.cluster }} in {{ $labels.namespace }} has {{ $value }} WAL files not archived
-            description: Backups and point-in-time restore fall behind.
+            summary: Database {{ $labels.cluster }} in {{ $labels.namespace }} cannot archive its WAL
+            description: Every archive attempt in the last 15 minutes failed; backups and point-in-time restore fall behind.
     - name: object-storage
       rules:
         - alert: GarageUnhealthy
