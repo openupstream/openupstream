@@ -3,8 +3,8 @@
 # components (ARCHITECTURE.md, "Observability and customer logs").
 #
 # Every Database's Postgres instances and Poolers, in any Project's
-# namespace: their metrics ports are the only ones each Project's
-# NetworkPolicy opens to the namespace `monitoring` (decision 106).
+# namespace: the Project's NetworkPolicy `database-metrics` opens their
+# metrics ports to Prometheus's pods, nothing else (decision 106).
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
@@ -70,4 +70,6 @@ spec:
   selector:
     matchLabels: {app.kubernetes.io/name: cert-manager, app.kubernetes.io/component: controller}
   podMetricsEndpoints:
-    - port: http-metrics
+    # Keep the Certificate's own `namespace` label instead of renaming it
+    # `exported_namespace`: the certificate alerts filter on it.
+    - {port: http-metrics, honorLabels: true}

@@ -28,8 +28,8 @@ GRAFANA_CHARTS=https://grafana.github.io/helm-charts
 
 [[ -s $HEALTHCHECKS_URL_FILE ]] || { echo "no healthchecks.io ping URL in $HEALTHCHECKS_URL_FILE (docs/self-hosting.md, section 10)" >&2; exit 1; }
 
-# Every Project's NetworkPolicy admits this namespace to its Databases'
-# metrics ports (MONITORING_NAMESPACE in operators/src/kubernetes.ts).
+# Each Project's NetworkPolicy database-metrics admits Prometheus's pods in
+# this namespace to its Databases' metrics ports (operators/src/kubernetes.ts).
 kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
 # Alertmanager's SMTP password, derived from the send-only SES key, and the

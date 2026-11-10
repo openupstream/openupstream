@@ -639,11 +639,15 @@ digest (#55).
   connections from each other (a Service to its Database's Pooler, a
   standby to its primary), from Traefik's namespace and from
   CloudNativePG's operator in `cnpg-system`, which asks each instance for
-  its status, and from Prometheus in `monitoring` on the Databases'
-  metrics ports only (9187 and 9127, decision 106); nothing else. Every operator that applies a Project's
+  its status; nothing else. Every operator that applies a Project's
   namespace applies it right after the namespace, before anything else goes
   in, so no pod of a Project runs unisolated. The operators' exception in
   the platform namespace is a second policy in `control-plane/deploy/`.
+- The NetworkPolicy `database-metrics`, applied by the Databases operator
+  with each Project that has a Database, adds one exception for
+  CloudNativePG's pods only (`cnpg.io/cluster`): Prometheus's pods in
+  `monitoring` may reach their metrics ports, 9187 and 9127 (decision
+  106). No other pod of a Project, and no other pod in `monitoring`.
 - Egress to the internet is allowed, with a per-pod bandwidth limit (not
   set yet). A Service's pods may connect only to DNS, their own Project's
   namespace (its Databases' Poolers) and public addresses: the
@@ -810,9 +814,16 @@ digest (#55).
   `ses-smtp-password.mjs`), and pings the always-firing `Watchdog` to
   healthchecks.io every minute, which mails when the pings stop: a dark
   cluster or a dead Alertmanager is noticed too (decision 107).
-- Loki runs once, in single-binary mode, with its chunks and index in the
-  Garage bucket `openupstream.platform-logs` (a dot, so no customer can
-  take the name), kept 14 days. Alloy on every node ships the logs of the
+- Loki runs in single-binary mode, once per compute Site, with its chunks
+  and index in the Garage bucket `openupstream.platform-logs` (a dot, so
+  no customer can take the name), kept 14 days. Each log stream lives in
+  one replica (replication factor 1; a factor of 2 with two replicas needs
+  both for every write). With a Site dark, the other replica forgets the
+  dark one after a minute without heartbeats (`autoforget_unhealthy`) and
+  takes every stream, while Alloy retries; the dark replica's unflushed
+  lines wait in its WAL on its node's disk and are flushed when the Site
+  returns. A single replica could not move: its WAL disk is bound to its
+  node. Alloy on every node ships the logs of the
   platform's namespaces only, never a Project's (decision 21): the list is
   the same as the workload alerts' (`kube-system`, `monitoring`,
   `traefik`, `cert-manager`, `cnpg-system`, `garage`,
@@ -827,6 +838,11 @@ digest (#55).
   pinging. Found there: the Loki chart's `global.extraArgs` do not reach
   the single-binary pod, and the first WAL rule (more than 10 files
   waiting) stayed silent through over a thousand failed archive attempts.
+  Changed after that run, from the pull request's review, and not yet run
+  on a cluster: Loki twice, the `database-metrics` policy in place of a
+  rule in `project-isolation`, and the certificate alerts limited to the
+  platform's namespaces (a customer's custom domain failing because they
+  moved its DNS is theirs to see in its status).
 - For customers: a log stream endpoint that tails the Kubernetes logs API
   (current and previous container). Nothing is retained. Per Service
   (`GET …/services/{id}/logs`, all replicas) and per run (`GET
@@ -962,7 +978,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 103 | The log stream is chunked HTTP of NDJSON, one LogEntry per line, read by the control plane from the Kubernetes logs API per container and merged; a followed stream lists the pods again every 5 s and lasts at most an hour | plain text lines with a pod prefix (Heroku `logs --tail`, `kubectl logs -f --prefix`); Server-Sent Events; WebSockets (Render, Railway); polling a JSON endpoint with a cursor (Fly.io) | structured entries need no parsing in the dashboard and can gain fields; `fetch()` reads a chunked body while sending the `Authorization` header, which `EventSource` cannot, so SSE would put the token in the URL; the pod list again picks up rollouts and restarts without a watch. Costs: each follower holds one Kubernetes API connection per container on a control-plane replica (hence 10 followed streams per Account and replica), an idle stream lists pods every 5 s, and a client that wants more than an hour reconnects |
 | 104 | The customer egress policy (`service-egress`, `job-egress`) also allows Traefik's pods by namespace and pod selector, on their container ports 8000 and 8443 | Traefik on `hostNetwork`; a Bucket endpoint inside the cluster for Services; leaving it and documenting it | a pod connecting to its own node's public IP is DNATed by the hostPort to Traefik's pod IP (10.42.x) before k3s's policy filter sees it, so the private-range exclusion refused it: a Service calling a Bucket or any platform hostname failed whenever DNS gave it its own node, always with one Site down (found by `spa-api` on the dev cluster, 2026-11-09). Kubernetes leaves ipBlock behaviour around such rewrites undefined; allowing the ingress controller by selector is the usual answer (Calico, Cilium). The pods gain nothing over the public address: Traefik routes by Host. `hostNetwork` would move Traefik's admin and metrics ports onto the hosts |
 | 105 | The customer egress policies (`service-egress`, `job-egress`) leave the nodes' addresses (InternalIP and ExternalIP, /32 and /128) out of the internet and allow them on TCP 80 and 443 only. The Services and Jobs operators list the Nodes on every pass and watch them to start a pass at once when a Node joins, goes or changes its addresses; with no Nodes, a Node without an address or a failed listing, the pass applies and deletes nothing. Their ClusterRoles gain `list` and `watch` on Nodes | a host firewall rule dropping pod traffic to the nodes but for 80 and 443; the node-to-node ports on Tailscale addresses; leaving it, as each port needs a certificate or token | pod traffic leaves with its node's address, so the host firewall, which admits everything between nodes, cannot tell a customer's pod from the platform's: a host rule would also cut off the platform pods that use the Kubernetes API (through the `kubernetes` Service, rewritten to a node's 6443) or kubelet, or need holes that reopen them. Tailscale as the node mesh reverses decision 28. k3s's policy controller has no notion of a node, so the operators supply the addresses, as Cilium's `world` entity leaves out `host` and `remote-node` and Calico users keep node addresses in a GlobalNetworkSet. Planning without the addresses is no fallback: pruning would delete the policy, and a new Project's pods would start without one; the cost is that while any Node has no address (a Node registering), no Service or Job is created, changed or deleted. Only the addresses a Node reports are left out, so a node's every public address must be given to k3s. The watch only wakes the pass, which lists the Nodes itself, so a broken watch costs at most one interval. Before, a Service's pod reached 6443, 10250 and 2379 on every node. Tested on the dev cluster (2026-11-09, with decision 104), the pass run under the Services operator's ServiceAccount: from a pod on each compute node 6443, 10250, 2379, 2380 and 3901 on all three nodes, `10.43.0.1:443` and the metadata endpoint were refused, while a Bucket answered through 443 of either compute node; the same policy without the node addresses left them open; with `list` on Nodes taken away the pass logged the 403 and left the policy as it was |
-| 106 | The platform's monitoring is kube-prometheus-stack (Prometheus and Alertmanager once per compute Site, Grafana once), Loki single-binary with its data in a Garage bucket, and Alloy shipping the platform's namespaces' logs; Prometheus may reach each Project's Databases' metrics ports, nothing else of a Project | VictoriaMetrics with VictoriaLogs; Prometheus alone without Grafana and Loki; one instance on the third Site; one instance anywhere | the standard stack: CloudNativePG, Traefik and cert-manager ship metrics and rules for it, and most documentation fits; one replica per compute Site keeps alerting through a Site failure; Loki's data in Garage survives a lost pod or Site with three copies. Costs: about 1.5 to 2 GB of RAM per compute Site, which each Site's spare capacity (decision 19) must hold, and two copies of the metrics |
+| 106 | The platform's monitoring is kube-prometheus-stack (Prometheus and Alertmanager once per compute Site, Grafana once), Loki single-binary once per compute Site (replication factor 1, unhealthy replicas forgotten) with its data in a Garage bucket, and Alloy shipping the platform's namespaces' logs; Prometheus's pods may reach each Project's CloudNativePG pods on their metrics ports, nothing else of a Project (NetworkPolicy `database-metrics`) | VictoriaMetrics with VictoriaLogs; Prometheus alone without Grafana and Loki; one instance on the third Site; one instance anywhere; one Loki (its WAL disk is bound to its node, so it cannot move off a dark Site); two Loki with replication factor 2 (both are needed for every write); the metrics ports opened in `project-isolation` (every pod of a Project, from every pod in `monitoring`) | the standard stack: CloudNativePG, Traefik and cert-manager ship metrics and rules for it, and most documentation fits; one replica per compute Site keeps alerting through a Site failure; Loki's data in Garage survives a lost pod or Site with three copies, and the second Loki keeps logs coming in while a Site is dark. Costs: about 1.5 to 2 GB of RAM per compute Site, once for the platform and not per customer, which each Site's spare capacity (decision 19) must hold, and two copies of the metrics |
 | 107 | Alerts go by e-mail through SES's SMTP interface with the existing send-only key; the always-firing Watchdog is pinged to healthchecks.io every minute as a dead man's switch | push through ntfy or Telegram; e-mail without a dead man's switch | no new provider for the alerts themselves; without the switch a dark cluster or a dead Alertmanager sends nothing, and silence looks like health. healthchecks.io gets no customer data, only the pings. Costs: e-mail is slow to notice at night; healthchecks.io is one more account (docs/self-hosting.md, section 10) |
 
 ## Open questions

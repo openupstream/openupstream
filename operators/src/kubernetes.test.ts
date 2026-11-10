@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { networkPolicyFor, projectObjectsFor } from './kubernetes.js';
+import { databaseMetricsPolicyFor, networkPolicyFor, projectObjectsFor } from './kubernetes.js';
 
 const projectId = '11111111-1111-4111-8111-111111111111';
 
-test("a Project's pods accept connections only from each other, Traefik, CloudNativePG's operator and Prometheus on the Databases' metrics ports", () => {
+test("a Project's pods accept connections only from each other, Traefik and CloudNativePG's operator", () => {
     const policy = networkPolicyFor(projectId);
     assert.equal(policy.metadata.namespace, `project-${projectId}`);
     assert.deepEqual(policy.spec, {
@@ -14,8 +14,24 @@ test("a Project's pods accept connections only from each other, Traefik, CloudNa
             { from: [{ podSelector: {} }] },
             { from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'traefik' } } }] },
             { from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'cnpg-system' } } }] },
+        ],
+    });
+});
+
+test("only Prometheus's pods reach only the Databases' pods, only on their metrics ports", () => {
+    const policy = databaseMetricsPolicyFor(projectId);
+    assert.equal(policy.metadata.namespace, `project-${projectId}`);
+    assert.deepEqual(policy.spec, {
+        podSelector: { matchExpressions: [{ key: 'cnpg.io/cluster', operator: 'Exists' }] },
+        policyTypes: ['Ingress'],
+        ingress: [
             {
-                from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'monitoring' } } }],
+                from: [
+                    {
+                        namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': 'monitoring' } },
+                        podSelector: { matchLabels: { 'app.kubernetes.io/name': 'prometheus' } },
+                    },
+                ],
                 ports: [
                     { protocol: 'TCP', port: 9187 },
                     { protocol: 'TCP', port: 9127 },

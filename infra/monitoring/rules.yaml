@@ -65,16 +65,20 @@ spec:
             summary: "{{ $value }} of Garage's storage nodes are up"
             description: Objects keep fewer than three copies until the node is back.
     - name: certificates
+      # The platform's own Certificates only: a customer's custom domain
+      # fails when they move its DNS away, which is theirs to see in the
+      # domain's status, not ours to be woken for. Same namespace list as
+      # defaultRules.appNamespacesTarget.
       rules:
         - alert: CertificateExpiresSoon
-          expr: certmanager_certificate_expiration_timestamp_seconds - time() < 14 * 24 * 3600
+          expr: certmanager_certificate_expiration_timestamp_seconds{namespace=~"kube-system|monitoring|traefik|cert-manager|cnpg-system|garage|openupstream-system|project-00000000-0000-4000-8000-000000000002"} - time() < 14 * 24 * 3600
           for: 1h
           labels: {severity: warning}
           annotations:
             summary: Certificate {{ $labels.name }} in {{ $labels.namespace }} expires in {{ $value | humanizeDuration }}
             description: cert-manager should have renewed it 30 days before expiry.
         - alert: CertificateNotReady
-          expr: max by (namespace, name) (certmanager_certificate_ready_status{condition="False"}) == 1
+          expr: max by (namespace, name) (certmanager_certificate_ready_status{condition="False", namespace=~"kube-system|monitoring|traefik|cert-manager|cnpg-system|garage|openupstream-system|project-00000000-0000-4000-8000-000000000002"}) == 1
           for: 30m
           labels: {severity: warning}
           annotations:

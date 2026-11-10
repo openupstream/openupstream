@@ -3,15 +3,22 @@
 # platform's namespaces (alloy-values.yaml), and customer logs are a live
 # tail only (decision 21).
 #
-# One single-binary replica. Its chunks and index go to a bucket in our own
-# Garage (three copies in three Sites), so a lost pod or Site loses at most
-# the last minutes it held in memory; Kubernetes reschedules it.
+# Two single-binary replicas, one per compute Site, each with its WAL on
+# its node's disk; chunks and index go to a bucket in our own Garage (three
+# copies in three Sites). Each log stream lives in one replica (replication
+# factor 1: with 2 of 2 as the write quorum, a factor of 2 would stop all
+# writes when either Site is dark). When a replica's Site goes dark, the
+# other forgets it after a minute without heartbeats and takes every
+# stream; Alloy retries meanwhile. The dark replica's unflushed lines stay
+# in its WAL and are flushed when its Site returns.
 deploymentMode: SingleBinary
 
 loki:
   auth_enabled: false
   commonConfig:
     replication_factor: 1
+  ingester:
+    autoforget_unhealthy: true
   schemaConfig:
     configs:
       - from: "2026-11-01"
@@ -47,7 +54,7 @@ loki:
     delete_request_store: s3
 
 singleBinary:
-  replicas: 1
+  replicas: 2
   # S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, from the Secret monitoring.sh
   # writes with the bucket's own key; expanded into the config above. (The
   # chart's global.extraArgs do not reach this pod.)
@@ -60,6 +67,12 @@ singleBinary:
         nodeSelectorTerms:
           - matchExpressions:
               - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: DoNotSchedule
+      labelSelector:
+        matchLabels: {app.kubernetes.io/name: loki, app.kubernetes.io/component: single-binary}
   persistence:
     # Write-ahead log and the chunks not yet flushed; small.
     size: 5Gi
