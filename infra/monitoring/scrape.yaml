@@ -1,0 +1,75 @@
+# What Prometheus scrapes beyond kube-prometheus-stack's defaults (nodes,
+# kubelet, the Kubernetes API, kube-state-metrics): the platform's own
+# components (ARCHITECTURE.md, "Observability and customer logs").
+#
+# Every Database's Postgres instances and Poolers, in any Project's
+# namespace: the Project's NetworkPolicy `database-metrics` opens their
+# metrics ports to Prometheus's pods, nothing else (decision 106).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cnpg-instances
+  namespace: monitoring
+spec:
+  namespaceSelector: {any: true}
+  selector:
+    matchLabels: {cnpg.io/podRole: instance}
+  podMetricsEndpoints:
+    - port: metrics
+      relabelings:
+        - {sourceLabels: [__meta_kubernetes_pod_label_cnpg_io_cluster], targetLabel: cluster}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cnpg-poolers
+  namespace: monitoring
+spec:
+  namespaceSelector: {any: true}
+  selector:
+    matchExpressions:
+      - {key: cnpg.io/poolerName, operator: Exists}
+  podMetricsEndpoints:
+    - port: metrics
+      relabelings:
+        - {sourceLabels: [__meta_kubernetes_pod_label_cnpg_io_poolerName], targetLabel: pooler}
+---
+# Garage's admin API serves /metrics on every node, each with its own view
+# of the cluster.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: garage
+  namespace: monitoring
+spec:
+  namespaceSelector: {matchNames: [garage]}
+  selector:
+    matchLabels: {app.kubernetes.io/name: garage}
+  podMetricsEndpoints:
+    - {port: admin, path: /metrics}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: traefik
+  namespace: monitoring
+spec:
+  namespaceSelector: {matchNames: [traefik]}
+  selector:
+    matchLabels: {app.kubernetes.io/name: traefik}
+  podMetricsEndpoints:
+    - port: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cert-manager
+  namespace: monitoring
+spec:
+  namespaceSelector: {matchNames: [cert-manager]}
+  selector:
+    matchLabels: {app.kubernetes.io/name: cert-manager, app.kubernetes.io/component: controller}
+  podMetricsEndpoints:
+    # Keep the Certificate's own `namespace` label instead of renaming it
+    # `exported_namespace`: the certificate alerts filter on it.
+    - {port: http-metrics, honorLabels: true}

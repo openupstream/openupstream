@@ -64,6 +64,19 @@ export const namespaceFor = (project: Pick<Project, 'id' | 'name'>) => ({
 export const INGRESS_FROM_NAMESPACES = ['traefik', 'cnpg-system'] as const;
 
 /**
+ * Where Prometheus runs (infra/monitoring), and the label of its pods there:
+ * the only peer databaseMetricsPolicyFor admits.
+ */
+export const MONITORING_NAMESPACE = 'monitoring';
+export const PROMETHEUS_POD_LABELS = { 'app.kubernetes.io/name': 'prometheus' } as const;
+
+/**
+ * The metrics ports of a Database's pods, as CloudNativePG serves them: the
+ * Postgres instances' exporter and the Poolers' PgBouncer exporter.
+ */
+export const DATABASE_METRICS_PORTS = [9187, 9127] as const;
+
+/**
  * Default deny for a Project's namespace (ARCHITECTURE.md, "Project
  * isolation"): its pods accept connections only from each other and from
  * INGRESS_FROM_NAMESPACES, so Projects reach each other only through public
@@ -85,6 +98,38 @@ export const networkPolicyFor = (projectId: Id) => ({
             ...INGRESS_FROM_NAMESPACES.map((name) => ({
                 from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': name } } }],
             })),
+        ],
+    },
+});
+
+/**
+ * Lets Prometheus scrape a Project's Databases (decision 106): only
+ * CloudNativePG's pods (instances and Poolers, which carry `cnpg.io/cluster`),
+ * only from Prometheus's pods, only on DATABASE_METRICS_PORTS. Policies add
+ * up, so these pods keep what project-isolation allows. Applied by the
+ * Databases operator, the only one that runs such pods.
+ */
+export const databaseMetricsPolicyFor = (projectId: Id) => ({
+    apiVersion: 'networking.k8s.io/v1',
+    kind: 'NetworkPolicy',
+    metadata: {
+        name: 'database-metrics',
+        namespace: namespaceOf(projectId),
+        labels: { [LABELS.projectId]: projectId, [LABELS.managedBy]: MANAGED_BY },
+    },
+    spec: {
+        podSelector: { matchExpressions: [{ key: 'cnpg.io/cluster', operator: 'Exists' }] },
+        policyTypes: ['Ingress'],
+        ingress: [
+            {
+                from: [
+                    {
+                        namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': MONITORING_NAMESPACE } },
+                        podSelector: { matchLabels: PROMETHEUS_POD_LABELS },
+                    },
+                ],
+                ports: DATABASE_METRICS_PORTS.map((port) => ({ protocol: 'TCP', port })),
+            },
         ],
     },
 });

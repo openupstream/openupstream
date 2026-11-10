@@ -1,0 +1,95 @@
+# The platform's own alerts, on top of kube-prometheus-stack's defaults
+# (nodes, disks, the Kubernetes API, workloads in the platform's
+# namespaces). ARCHITECTURE.md, "Observability and customer logs".
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: openupstream
+  namespace: monitoring
+spec:
+  groups:
+    - name: databases
+      rules:
+        - alert: DatabaseInstanceDown
+          expr: up{job="monitoring/cnpg-instances"} == 0
+          for: 5m
+          labels: {severity: critical}
+          annotations:
+            summary: Postgres instance {{ $labels.pod }} in {{ $labels.namespace }} does not answer
+            description: Its metrics have not been scraped for 5 minutes; the Database may run on one instance only.
+        - alert: DatabaseMissingStandby
+          # Every Database runs one instance per compute Site (decision 26).
+          expr: count by (namespace, cluster) (up{job="monitoring/cnpg-instances"} == 1) < 2
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: Database {{ $labels.cluster }} in {{ $labels.namespace }} has fewer than two instances up
+            description: A Site failure now loses it until a standby is back.
+        - alert: DatabaseReplicationLag
+          expr: max by (namespace, cluster) (cnpg_pg_replication_lag) > 60
+          for: 5m
+          labels: {severity: warning}
+          annotations:
+            summary: Standby of {{ $labels.cluster }} in {{ $labels.namespace }} is {{ $value | humanizeDuration }} behind
+            description: A failover now would lose that much of the last writes.
+        - alert: DatabaseWalNotArchived
+          # Archiving keeps failing and nothing gets through: point-in-time
+          # restore falls behind. On a quiet Database few WAL files pile up,
+          # so the failures count, not the backlog. On the dev cluster the
+          # platform Databases always fire this (their archive path is
+          # reused; infra/dev-cluster/README.md).
+          expr: |
+            max by (namespace, cluster) (
+              increase(cnpg_pg_stat_archiver_failed_count[15m]) > 0
+              unless increase(cnpg_pg_stat_archiver_archived_count[15m]) > 0
+            )
+          for: 15m
+          labels: {severity: warning}
+          annotations:
+            summary: Database {{ $labels.cluster }} in {{ $labels.namespace }} cannot archive its WAL
+            description: Every archive attempt in the last 15 minutes failed; backups and point-in-time restore fall behind.
+    - name: object-storage
+      rules:
+        - alert: GarageUnhealthy
+          expr: max(cluster_healthy) == 0
+          for: 5m
+          labels: {severity: critical}
+          annotations:
+            summary: Garage reports the cluster unhealthy
+            description: Some partitions have no write quorum; Buckets may refuse writes.
+        - alert: GarageNodeDown
+          expr: min(cluster_storage_nodes_ok) < max(cluster_storage_nodes)
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ $value }} of Garage's storage nodes are up"
+            description: Objects keep fewer than three copies until the node is back.
+    - name: certificates
+      # The platform's own Certificates only: a customer's custom domain
+      # fails when they move its DNS away, which is theirs to see in the
+      # domain's status, not ours to be woken for. Same namespace list as
+      # defaultRules.appNamespacesTarget.
+      rules:
+        - alert: CertificateExpiresSoon
+          expr: certmanager_certificate_expiration_timestamp_seconds{namespace=~"kube-system|monitoring|traefik|cert-manager|cnpg-system|garage|openupstream-system|project-00000000-0000-4000-8000-000000000002"} - time() < 14 * 24 * 3600
+          for: 1h
+          labels: {severity: warning}
+          annotations:
+            summary: Certificate {{ $labels.name }} in {{ $labels.namespace }} expires in {{ $value | humanizeDuration }}
+            description: cert-manager should have renewed it 30 days before expiry.
+        - alert: CertificateNotReady
+          expr: max by (namespace, name) (certmanager_certificate_ready_status{condition="False", namespace=~"kube-system|monitoring|traefik|cert-manager|cnpg-system|garage|openupstream-system|project-00000000-0000-4000-8000-000000000002"}) == 1
+          for: 30m
+          labels: {severity: warning}
+          annotations:
+            summary: Certificate {{ $labels.name }} in {{ $labels.namespace }} is not ready
+            description: Its domain is served without a valid certificate or not at all.
+    - name: ingress
+      rules:
+        - alert: IngressDown
+          expr: up{job="monitoring/traefik"} == 0
+          for: 2m
+          labels: {severity: critical}
+          annotations:
+            summary: Traefik pod {{ $labels.pod }} does not answer
+            description: Its Site serves no traffic until the DNS health check drops it.
