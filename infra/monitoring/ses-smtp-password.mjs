@@ -6,6 +6,7 @@
 // send-only key madAuth's sidecar uses through the API (docs/self-hosting.md).
 import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 const hmac = (key, message) => createHmac('sha256', key).update(message, 'utf8').digest();
 
@@ -15,7 +16,7 @@ export const smtpPassword = (secretAccessKey, region) => {
     return Buffer.concat([Buffer.from([0x04]), signature]).toString('base64');
 };
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
     const region = process.argv[2];
     const secret = readFileSync(0, 'utf8').trim();
     if (region === undefined || secret === '') {

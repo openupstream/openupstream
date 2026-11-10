@@ -11,6 +11,8 @@
 alerts:
   email: ""
   smtpUser: ""
+  # The SES region; the SMTP password is derived for it, so both must match.
+  sesRegion: eu-central-1
 
 crds:
   enabled: true
@@ -44,8 +46,8 @@ alertmanager:
     global:
       resolve_timeout: 5m
       # Amazon SES over SMTP, with the send-only key (docs/self-hosting.md,
-      # sections 6 and 11); the password is derived from it by monitoring.sh.
-      smtp_smarthost: email-smtp.eu-central-1.amazonaws.com:587
+      # sections 6 and 10); the password is derived from it by monitoring.sh.
+      smtp_smarthost: 'email-smtp.{{ .Values.alerts.sesRegion }}.amazonaws.com:587'
       smtp_from: openupstream alerts <no-reply@openupstream.com>
       smtp_auth_username: '{{ .Values.alerts.smtpUser }}'
       smtp_auth_password_file: /etc/alertmanager/secrets/alertmanager-credentials/smtp-password

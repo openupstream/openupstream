@@ -11,7 +11,7 @@
 #
 # ALERT_EMAIL is where alerts go (never committed). The healthchecks.io ping
 # URL is read from HEALTHCHECKS_URL_FILE, the SES key from the AWS profile
-# SES_PROFILE (docs/self-hosting.md, sections 6 and 11).
+# SES_PROFILE (docs/self-hosting.md, sections 6 and 10).
 #
 # Needs: KUBECONFIG, kubectl, helm, node, aws.
 set -euo pipefail
@@ -26,7 +26,7 @@ SES_REGION=${SES_REGION:-eu-central-1}
 LOKI_BUCKET=openupstream.platform-logs
 GRAFANA_CHARTS=https://grafana.github.io/helm-charts
 
-[[ -s $HEALTHCHECKS_URL_FILE ]] || { echo "no healthchecks.io ping URL in $HEALTHCHECKS_URL_FILE (docs/self-hosting.md, section 11)" >&2; exit 1; }
+[[ -s $HEALTHCHECKS_URL_FILE ]] || { echo "no healthchecks.io ping URL in $HEALTHCHECKS_URL_FILE (docs/self-hosting.md, section 10)" >&2; exit 1; }
 
 # Every Project's NetworkPolicy admits this namespace to its Databases'
 # metrics ports (MONITORING_NAMESPACE in operators/src/kubernetes.ts).
@@ -51,6 +51,7 @@ fi
 helm upgrade --install kube-prometheus-stack oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack --version 93.1.1 \
   -n "$NS" -f "$ROOT/infra/monitoring/kube-prometheus-stack-values.yaml" \
   --set-string alerts.email="$ALERT_EMAIL" --set-string alerts.smtpUser="$SES_KEY_ID" \
+  --set-string alerts.sesRegion="$SES_REGION" \
   --wait --timeout 10m >/dev/null
 unset SES_KEY_ID
 kubectl apply -f "$ROOT/infra/monitoring/scrape.yaml" -f "$ROOT/infra/monitoring/rules.yaml" >/dev/null
@@ -64,10 +65,14 @@ if ! garage bucket info "$LOKI_BUCKET" >/dev/null 2>&1; then
   garage bucket allow --read --write --key loki "$LOKI_BUCKET" >/dev/null
 fi
 key=$(garage key info --show-secret loki)
-kubectl -n "$NS" create secret generic loki-s3 --dry-run=client -o yaml \
-  --from-literal=S3_ACCESS_KEY_ID="$(awk '/Key ID:/ {print $NF}' <<<"$key")" \
-  --from-literal=S3_SECRET_ACCESS_KEY="$(awk '/Secret key:/ {print $NF}' <<<"$key")" | kubectl apply -f - >/dev/null
+key_id=$(awk '/Key ID:/ {print $NF}' <<<"$key")
+key_secret=$(awk '/Secret key:/ {print $NF}' <<<"$key")
 unset key
+[[ -n $key_id && -n $key_secret ]] || { echo "could not read the key 'loki' from garage key info" >&2; exit 1; }
+kubectl -n "$NS" create secret generic loki-s3 --dry-run=client -o yaml \
+  --from-literal=S3_ACCESS_KEY_ID="$key_id" \
+  --from-literal=S3_SECRET_ACCESS_KEY="$key_secret" | kubectl apply -f - >/dev/null
+unset key_id key_secret
 
 helm upgrade --install loki loki --repo "$GRAFANA_CHARTS" --version 7.5.0 \
   -n "$NS" -f "$ROOT/infra/monitoring/loki-values.yaml" --wait --timeout 10m >/dev/null
