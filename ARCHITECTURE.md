@@ -58,7 +58,7 @@ One k3s cluster spans three Sites, each at a different provider
 | --- | --- | --- | --- |
 | `hetzner-fsn1` | Hetzner, Falkenstein | k3s server (etcd), Databases, Services, Traefik, Garage zone | compute Site, default Home site |
 | `ovh-lim` | OVHcloud, Limburg (Frankfurt region) | k3s server (etcd), Databases, Services, Traefik, Garage zone | compute Site |
-| `netcup-nbg` | netcup, Nuremberg | k3s server (etcd), Garage zone; no Databases or Services | third vote for etcd and third copy for Garage |
+| `netcup-nbg` | netcup, Nuremberg | k3s server (etcd), Garage zone, one of the three Lokis (decision 106); no Databases or Services | third vote for etcd, third copy for Garage and for the platform's logs |
 
 The compute Sites are about 300 km and 6 ms round-trip apart; the third Site
 is about 3 ms from `hetzner-fsn1` (measured 2026-10-16). etcd heartbeat and
@@ -814,16 +814,19 @@ digest (#55).
   `ses-smtp-password.mjs`), and pings the always-firing `Watchdog` to
   healthchecks.io every minute, which mails when the pings stop: a dark
   cluster or a dead Alertmanager is noticed too (decision 107).
-- Loki runs in single-binary mode, once per compute Site, with its chunks
-  and index in the Garage bucket `openupstream.platform-logs` (a dot, so
-  no customer can take the name), kept 14 days. Each log stream lives in
-  one replica (replication factor 1; a factor of 2 with two replicas needs
-  both for every write). With a Site dark, the other replica forgets the
-  dark one after a minute without heartbeats (`autoforget_unhealthy`) and
-  takes every stream, while Alloy retries; the dark replica's unflushed
-  lines wait in its WAL on its node's disk and are flushed when the Site
-  returns. A single replica could not move: its WAL disk is bound to its
-  node. Alloy on every node ships the logs of the
+- Loki runs in single-binary mode three times, one per Site, the third
+  Site included, with its chunks and index in the Garage bucket
+  `openupstream.platform-logs` (a dot, so no customer can take the name),
+  kept 14 days. Every stream goes to all three and a write needs two
+  (replication factor 3, Loki's standard for high availability), so with
+  any one Site dark logs keep coming in and stay queryable; the dark
+  replica replays its WAL from its node's disk when the Site returns. The
+  third Site's Loki is limited to 1 GiB of memory so it cannot crowd out
+  etcd there. One known gap: a query started in the first minute of a
+  Site failure, before Loki marks the dark replica unhealthy, can hang
+  about 15 minutes (until TCP gives up on the dead host); it answers when
+  run again, as every later query skips the dark replica. Alloy on every
+  node ships the logs of the
   platform's namespaces only, never a Project's (decision 21): the list is
   the same as the workload alerts' (`kube-system`, `monitoring`,
   `traefik`, `cert-manager`, `cnpg-system`, `garage`,
@@ -838,11 +841,19 @@ digest (#55).
   pinging. Found there: the Loki chart's `global.extraArgs` do not reach
   the single-binary pod, and the first WAL rule (more than 10 files
   waiting) stayed silent through over a thousand failed archive attempts.
-  Changed after that run, from the pull request's review, and not yet run
-  on a cluster: Loki twice, the `database-metrics` policy in place of a
-  rule in `project-isolation`, and the certificate alerts limited to the
-  platform's namespaces (a customer's custom domain failing because they
-  moved its DNS is theirs to see in its status).
+  A second run tested what the pull request's review changed: the
+  `database-metrics` policy let a pod labelled as Prometheus reach a
+  Database instance (9187) and a Pooler (9127) but not the control plane,
+  and an unlabelled pod in `monitoring` reach neither; the certificate
+  alerts see each Certificate's own namespace, limited to the platform's
+  (a customer's custom domain failing because they moved its DNS is theirs
+  to see in its status). Two Lokis with replication factor 1 failed the
+  Site test: Loki never forgets the last other ring member (it might be a
+  partition), so the dark one's streams refused writes, Alloy dropped 20
+  minutes of logs and queries failed. With three, one per Site,
+  hetzner-fsn1 off for 25 minutes: every minute ingested, nothing dropped,
+  pushes and queries answered in 0.15 and 0.23 s, and loki-0 replayed its
+  WAL on return; Loki on the third Site used 21 m CPU and 166 MiB.
 - For customers: a log stream endpoint that tails the Kubernetes logs API
   (current and previous container). Nothing is retained. Per Service
   (`GET …/services/{id}/logs`, all replicas) and per run (`GET
@@ -896,7 +907,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 21 | Customer logs are a live tail only, nothing retained | Loki with per-Project retention | no customer log data (often personal data) to store, secure and list in the TOMs |
 | 22 | madAuth for Member sign-in and API keys | own auth code, Auth0/Cognito | already built (passkeys, OAuth, scoped API keys), self-hosted, no extra subprocessor |
 | 23 | Static-site cache headers set at upload; SPA fallback via a Garage routing rule | rewrite headers in Traefik, Traefik errors middleware | Garage only serves per-object `Cache-Control`; its v2 routing rules return `index.html` with status 200, the errors middleware keeps the 404 |
-| 24 | Three Sites at three providers: compute at Hetzner Falkenstein and OVHcloud Limburg, third Site (etcd + Garage only) at netcup Nuremberg ([ADR-0002](docs/adr/0002-three-sites.md)) | Hetzner FSN1 + NBG1 + HEL1; OVH Limburg + Strasbourg; two Sites without a tie-breaker | Hetzner has no standard dedicated servers in NBG1, and FSN1↔HEL1 is 25 ms / 1,500 km; FSN1↔Limburg is 6 ms / 300 km; with one Site per provider, no single provider outage or API incident costs two etcd votes; with two Sites, losing the larger one stops etcd and Garage |
+| 24 | Three Sites at three providers: compute at Hetzner Falkenstein and OVHcloud Limburg, third Site (etcd and Garage; since decision 106 also one of three Lokis) at netcup Nuremberg ([ADR-0002](docs/adr/0002-three-sites.md)) | Hetzner FSN1 + NBG1 + HEL1; OVH Limburg + Strasbourg; two Sites without a tie-breaker | Hetzner has no standard dedicated servers in NBG1, and FSN1↔HEL1 is 25 ms / 1,500 km; FSN1↔Limburg is 6 ms / 300 km; with one Site per provider, no single provider outage or API incident costs two etcd votes; with two Sites, losing the larger one stops etcd and Garage |
 | 25 | Garage replication factor 3 across three Sites ([ADR-0002](docs/adr/0002-three-sites.md)) | rf=2 across two Sites with a manual switch to `dangerous` mode | Garage has no witness node; writes must survive the loss of one Site, which needs three full copies |
 | 26 | One CloudNativePG Cluster per Database with one instance per compute Site; TopoLVM local storage; failback by runbook | replica cluster in NBG1; local-path-provisioner | replica clusters only fail over by hand; inside one k3s cluster the operator fails over automatically; local-path enforces no volume size |
 | 27 | Backups via the Barman Cloud Plugin to Hetzner Object Storage in NBG1, a separate Hetzner project; no client-side encryption | in-tree `barmanObjectStore`; a bucket opposite the Home site; archiving to two stores | NBG1 runs no Database instance, so backups never share a location with either instance, even after failover; the in-tree path is removed in CloudNativePG 1.31; one WAL archiver per Cluster; Barman Cloud cannot encrypt client-side |
@@ -978,7 +989,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 103 | The log stream is chunked HTTP of NDJSON, one LogEntry per line, read by the control plane from the Kubernetes logs API per container and merged; a followed stream lists the pods again every 5 s and lasts at most an hour | plain text lines with a pod prefix (Heroku `logs --tail`, `kubectl logs -f --prefix`); Server-Sent Events; WebSockets (Render, Railway); polling a JSON endpoint with a cursor (Fly.io) | structured entries need no parsing in the dashboard and can gain fields; `fetch()` reads a chunked body while sending the `Authorization` header, which `EventSource` cannot, so SSE would put the token in the URL; the pod list again picks up rollouts and restarts without a watch. Costs: each follower holds one Kubernetes API connection per container on a control-plane replica (hence 10 followed streams per Account and replica), an idle stream lists pods every 5 s, and a client that wants more than an hour reconnects |
 | 104 | The customer egress policy (`service-egress`, `job-egress`) also allows Traefik's pods by namespace and pod selector, on their container ports 8000 and 8443 | Traefik on `hostNetwork`; a Bucket endpoint inside the cluster for Services; leaving it and documenting it | a pod connecting to its own node's public IP is DNATed by the hostPort to Traefik's pod IP (10.42.x) before k3s's policy filter sees it, so the private-range exclusion refused it: a Service calling a Bucket or any platform hostname failed whenever DNS gave it its own node, always with one Site down (found by `spa-api` on the dev cluster, 2026-11-09). Kubernetes leaves ipBlock behaviour around such rewrites undefined; allowing the ingress controller by selector is the usual answer (Calico, Cilium). The pods gain nothing over the public address: Traefik routes by Host. `hostNetwork` would move Traefik's admin and metrics ports onto the hosts |
 | 105 | The customer egress policies (`service-egress`, `job-egress`) leave the nodes' addresses (InternalIP and ExternalIP, /32 and /128) out of the internet and allow them on TCP 80 and 443 only. The Services and Jobs operators list the Nodes on every pass and watch them to start a pass at once when a Node joins, goes or changes its addresses; with no Nodes, a Node without an address or a failed listing, the pass applies and deletes nothing. Their ClusterRoles gain `list` and `watch` on Nodes | a host firewall rule dropping pod traffic to the nodes but for 80 and 443; the node-to-node ports on Tailscale addresses; leaving it, as each port needs a certificate or token | pod traffic leaves with its node's address, so the host firewall, which admits everything between nodes, cannot tell a customer's pod from the platform's: a host rule would also cut off the platform pods that use the Kubernetes API (through the `kubernetes` Service, rewritten to a node's 6443) or kubelet, or need holes that reopen them. Tailscale as the node mesh reverses decision 28. k3s's policy controller has no notion of a node, so the operators supply the addresses, as Cilium's `world` entity leaves out `host` and `remote-node` and Calico users keep node addresses in a GlobalNetworkSet. Planning without the addresses is no fallback: pruning would delete the policy, and a new Project's pods would start without one; the cost is that while any Node has no address (a Node registering), no Service or Job is created, changed or deleted. Only the addresses a Node reports are left out, so a node's every public address must be given to k3s. The watch only wakes the pass, which lists the Nodes itself, so a broken watch costs at most one interval. Before, a Service's pod reached 6443, 10250 and 2379 on every node. Tested on the dev cluster (2026-11-09, with decision 104), the pass run under the Services operator's ServiceAccount: from a pod on each compute node 6443, 10250, 2379, 2380 and 3901 on all three nodes, `10.43.0.1:443` and the metadata endpoint were refused, while a Bucket answered through 443 of either compute node; the same policy without the node addresses left them open; with `list` on Nodes taken away the pass logged the 403 and left the policy as it was |
-| 106 | The platform's monitoring is kube-prometheus-stack (Prometheus and Alertmanager once per compute Site, Grafana once), Loki single-binary once per compute Site (replication factor 1, unhealthy replicas forgotten) with its data in a Garage bucket, and Alloy shipping the platform's namespaces' logs; Prometheus's pods may reach each Project's CloudNativePG pods on their metrics ports, nothing else of a Project (NetworkPolicy `database-metrics`) | VictoriaMetrics with VictoriaLogs; Prometheus alone without Grafana and Loki; one instance on the third Site; one instance anywhere; one Loki (its WAL disk is bound to its node, so it cannot move off a dark Site); two Loki with replication factor 2 (both are needed for every write); the metrics ports opened in `project-isolation` (every pod of a Project, from every pod in `monitoring`) | the standard stack: CloudNativePG, Traefik and cert-manager ship metrics and rules for it, and most documentation fits; one replica per compute Site keeps alerting through a Site failure; Loki's data in Garage survives a lost pod or Site with three copies, and the second Loki keeps logs coming in while a Site is dark. Costs: about 1.5 to 2 GB of RAM per compute Site, once for the platform and not per customer, which each Site's spare capacity (decision 19) must hold, and two copies of the metrics |
+| 106 | The platform's monitoring is kube-prometheus-stack (Prometheus and Alertmanager once per compute Site, Grafana once), Loki single-binary once per Site, the third Site included (replication factor 3), with its data in a Garage bucket, and Alloy shipping the platform's namespaces' logs; Prometheus's pods may reach each Project's CloudNativePG pods on their metrics ports, nothing else of a Project (NetworkPolicy `database-metrics`) | VictoriaMetrics with VictoriaLogs; Prometheus alone without Grafana and Loki; one instance on the third Site; one instance anywhere; one Loki (its WAL disk is bound to its node, so it cannot move off a dark Site); two Lokis with replication factor 2 (both are needed for every write) or 1 (tested: Loki never forgets the last other member, so a dark Site stopped all writes); two independent Lokis written twice by Alloy (no load on the third Site, but two copies and two datasources); the metrics ports opened in `project-isolation` (every pod of a Project, from every pod in `monitoring`) | the standard stack: CloudNativePG, Traefik and cert-manager ship metrics and rules for it, and most documentation fits; one replica per compute Site keeps alerting through a Site failure; Loki's data in Garage survives a lost pod or Site with three copies, and three Lokis keep logs coming in and queryable while any one Site is dark. This puts a platform workload on the third Site, which decision 24 had kept to etcd and Garage. Costs: up to 1 GiB of RAM for Loki on the third Site, which must be sized for it next to etcd (about 8 GB), and about 1.5 to 2 GB of RAM per compute Site, once for the platform and not per customer, which each Site's spare capacity (decision 19) must hold, and two copies of the metrics |
 | 107 | Alerts go by e-mail through SES's SMTP interface with the existing send-only key; the always-firing Watchdog is pinged to healthchecks.io every minute as a dead man's switch | push through ntfy or Telegram; e-mail without a dead man's switch | no new provider for the alerts themselves; without the switch a dark cluster or a dead Alertmanager sends nothing, and silence looks like health. healthchecks.io gets no customer data, only the pings. Costs: e-mail is slow to notice at night; healthchecks.io is one more account (docs/self-hosting.md, section 10) |
 
 ## Open questions

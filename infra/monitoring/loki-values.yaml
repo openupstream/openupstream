@@ -3,22 +3,20 @@
 # platform's namespaces (alloy-values.yaml), and customer logs are a live
 # tail only (decision 21).
 #
-# Two single-binary replicas, one per compute Site, each with its WAL on
-# its node's disk; chunks and index go to a bucket in our own Garage (three
-# copies in three Sites). Each log stream lives in one replica (replication
-# factor 1: with 2 of 2 as the write quorum, a factor of 2 would stop all
-# writes when either Site is dark). When a replica's Site goes dark, the
-# other forgets it after a minute without heartbeats and takes every
-# stream; Alloy retries meanwhile. The dark replica's unflushed lines stay
-# in its WAL and are flushed when its Site returns.
+# Three single-binary replicas, one per Site, the third Site included
+# (decision 106), each with its WAL on its node's disk; chunks and index go
+# to a bucket in our own Garage (three copies in three Sites). Every stream
+# is written to all three and a write needs two, so with any one Site dark
+# writes and queries go on and nothing is lost; the dark replica replays its
+# WAL when its Site returns. Two replicas were tried and failed: with a
+# factor of 1 the dark one's streams refuse writes until it is forgotten,
+# and Loki never forgets the last other member (it may be a partition).
 deploymentMode: SingleBinary
 
 loki:
   auth_enabled: false
   commonConfig:
-    replication_factor: 1
-  ingester:
-    autoforget_unhealthy: true
+    replication_factor: 3
   schemaConfig:
     configs:
       - from: "2026-11-01"
@@ -54,19 +52,17 @@ loki:
     delete_request_store: s3
 
 singleBinary:
-  replicas: 2
+  replicas: 3
   # S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY, from the Secret monitoring.sh
   # writes with the bucket's own key; expanded into the config above. (The
   # chart's global.extraArgs do not reach this pod.)
   extraArgs: [-config.expand-env=true]
   extraEnvFrom:
     - secretRef: {name: loki-s3}
-  affinity:
-    nodeAffinity:
-      requiredDuringSchedulingIgnoredDuringExecution:
-        nodeSelectorTerms:
-          - matchExpressions:
-              - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+  # One per Site, the third Site's node too (the chart already keeps one per
+  # node). Its etcd must not suffer, so Loki there is held to the limit below.
+  tolerations:
+    - {key: openupstream.io/third-site, operator: Exists, effect: NoSchedule}
   topologySpreadConstraints:
     - maxSkew: 1
       topologyKey: topology.kubernetes.io/zone
