@@ -1153,8 +1153,17 @@ Decisions table once it is settled.
    images; creating and deleting Projects and Databases through the
    public API, with the cleanup; madAuth with sign-up, API keys and
    Accounts created through the API (2026-10-17). Left: TopoLVM. Done
-   since: restore through the API and the `oup pg` commands (decision 108;
-   not yet run on the dev cluster); `oup login`
+   since: restore through the API and the `oup pg` commands (decision 108).
+   Tested on the dev cluster (2026-11-10) with `oup pg`: a restore to a
+   time between two rows held only the first, one to the latest point both
+   (once their WAL was archived), one of the deleted source by its id
+   both; a time before the first base backup, less than 5 minutes ago or
+   after the deletion was refused with the earliest or latest time. Each
+   restore was ready in 1 to 1.5 minutes and archived into its own folder.
+   The run found that a restored Database could not fail over once the
+   source's ObjectStore was gone (fixed: the recovery bootstrap is dropped
+   once the restore has finished); with the fix, two restored Databases
+   failed over within 10 s without it; `oup login`
    (2026-10-31, #87), tested on the dev cluster with madAuth 0.7.0: the
    code approved through madAuth's API, the tokens stored with mode 600,
    a refresh that rotated the refresh token, a logout that ended it, and
