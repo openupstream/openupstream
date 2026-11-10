@@ -58,13 +58,17 @@ const uniqueBy = <T>(items: readonly T[], key: (item: T) => string): T[] => [
 ];
 
 /**
- * A restored Database keeps its recovery bootstrap for life: CloudNativePG
- * only reads it when it creates the Cluster, and rendering the same spec on
- * every pass keeps server-side apply from changing it afterwards.
+ * A restoring Database gets the recovery bootstrap, which names the
+ * source's ObjectStore. Once the control plane has recorded the restore as
+ * finished, its Cluster is rendered like any other: the Barman Cloud plugin
+ * stops every reconcile of a Cluster that names a missing ObjectStore
+ * (failovers included, seen on the dev cluster 2026-11-10), and the source's
+ * goes after its retention window. CloudNativePG reads the bootstrap only
+ * when it creates the Cluster, so dropping it changes nothing else.
  */
 const manifestsFor = (row: DatabaseRow, config: DatabaseConfig): Result<DatabaseManifests, RestoreError[]> => {
     const restore = row.database.restoredFrom;
-    return restore === undefined
+    return restore === undefined || row.restoring !== true
         ? databaseManifests(row.project, row.database, config)
         : restoredDatabaseManifests(row.project, row.database, config, {
               database: { id: restore.databaseId, projectId: row.project.id },

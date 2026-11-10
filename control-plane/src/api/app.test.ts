@@ -485,6 +485,7 @@ describe('Databases', () => {
         assert.deepEqual(restored.restoredFrom, { databaseId: source.id, targetTime: target.toISOString() });
         const row = (await listDatabaseRows(db.pool)).find((r) => r.database.id === restored.id);
         assert.deepEqual(row?.database.restoredFrom, { databaseId: source.id, targetTime: target.toISOString() });
+        assert.equal(row?.restoring, true, 'the operator renders its recovery bootstrap');
 
         assert.equal((await call('DELETE', `/v1/projects/${projectId}/databases/${source.id}`, 'alice')).status, 202);
         const latest = await restore('latest', { databaseId: source.id });

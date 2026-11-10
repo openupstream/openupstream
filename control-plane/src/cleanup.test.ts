@@ -2,7 +2,8 @@ import { after, before, beforeEach, test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { BackupStore } from './backups.js';
 import { type CleanupDeps, cleanupPass, retentionInterval } from './cleanup.js';
-import type { ControlPlaneKube, ObjectRef } from './kube.js';
+import { listDatabaseRows } from './databases/rows.js';
+import type { ClusterStatus, ControlPlaneKube, ObjectRef } from './kube.js';
 import { err, ok } from './result.js';
 import { type TestDatabase, createTestDatabase } from './testing/postgres.js';
 import { type FakeStorage, fakeStorage } from './testing/storage.js';
@@ -11,13 +12,16 @@ let db: TestDatabase;
 let accountId: string;
 
 /** Records removes and prefix deletes; fails the kinds and prefixes listed. */
+/** What the fake Kubernetes reports per Cluster name. */
+const clusters = new Map<string, ClusterStatus>();
+
 const fakes = () => {
     const removed: string[] = [];
     const prefixes: string[] = [];
     const failKinds = new Set<string>();
     let failBackups = false;
     const kube: ControlPlaneKube = {
-        readCluster: async () => ok(undefined),
+        readCluster: async (_namespace, name) => ok(clusters.get(name)),
         readRecoveryWindow: async () => ok(undefined),
         readDeployment: async () => ok(undefined),
         readCronJob: async () => ok(undefined),
@@ -142,21 +146,44 @@ test('a deleted Database loses its running objects at once, keeps its backups un
     assert.equal(await row(databaseId), undefined);
 });
 
-test('a Database restored from within the last day keeps its source from being purged', async () => {
+test('an unfinished restore keeps its source from being purged; a ready instance finishes it', async () => {
     const { prefixes, deps } = fakes();
-    await db.pool.query('update databases set deleted_at = now() - interval \'8 days\', objects_removed_at = now() where id = $1', [databaseId]);
-    const restored = await db.pool.query<{ id: string }>(
+    await db.pool.query(`update databases set deleted_at = now() - interval '8 days', objects_removed_at = now() where id = $1`, [databaseId]);
+    const inserted = await db.pool.query<{ id: string }>(
         `insert into databases (project_id, name, memory_mb, storage_gb, restore_source_id) values ($1, 'copy', 256, 1, $2) returning id`,
         [projectId, databaseId],
     );
+    const restoredId = inserted.rows[0]?.id ?? '';
+    const finishedAt = async () =>
+        (await db.pool.query<{ restore_finished_at: Date | null }>('select restore_finished_at from databases where id = $1', [restoredId])).rows[0]
+            ?.restore_finished_at;
+    const restoring = async () => (await listDatabaseRows(db.pool)).find((r) => r.database.id === restoredId)?.restoring;
+
+    clusters.set(`db-${restoredId}`, { instances: 2, readyInstances: 0, ready: false });
     await cleanupPass(deps());
     assert.deepEqual(prefixes, [], 'its recovery may still read the archive');
     assert.ok(await row(databaseId));
+    assert.equal(await finishedAt(), null);
+    assert.equal(await restoring(), true);
 
-    await db.pool.query(`update databases set created_at = now() - interval '25 hours' where id = $1`, [restored.rows[0]?.id]);
+    clusters.set(`db-${restoredId}`, { instances: 2, readyInstances: 1, ready: false });
+    await cleanupPass(deps());
+    assert.notEqual(await finishedAt(), null);
+    assert.equal(await restoring(), undefined, 'the operator renders it like any other Database');
+    assert.deepEqual(prefixes, [`project-${projectId}/db-${databaseId}/`], 'and the source can go');
+    assert.equal(await row(databaseId), undefined);
+    clusters.delete(`db-${restoredId}`);
+});
+
+test('a restore that never finished stops holding its source back after a day', async () => {
+    const { prefixes, deps } = fakes();
+    await db.pool.query(`update databases set deleted_at = now() - interval '8 days', objects_removed_at = now() where id = $1`, [databaseId]);
+    await db.pool.query(
+        `insert into databases (project_id, name, memory_mb, storage_gb, restore_source_id, created_at) values ($1, 'stuck', 256, 1, $2, now() - interval '25 hours')`,
+        [projectId, databaseId],
+    );
     await cleanupPass(deps());
     assert.deepEqual(prefixes, [`project-${projectId}/db-${databaseId}/`]);
-    assert.equal(await row(databaseId), undefined);
 });
 
 test('a failed step is not recorded and is retried by the next pass', async () => {

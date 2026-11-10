@@ -19,6 +19,7 @@ interface Row {
     database_created_at: Date;
     restore_source_id: string | null;
     restore_target_time: Date | null;
+    restore_finished_at: Date | null;
 }
 
 /** Every Database that is not deleted, oldest first, so the order is stable between calls. */
@@ -26,7 +27,7 @@ export async function listDatabaseRows(pool: pg.Pool): Promise<DatabaseRow[]> {
     const { rows } = await pool.query<Row>(`
         select p.id as project_id, p.account_id, p.name as project_name, p.created_at as project_created_at,
                d.id as database_id, d.name as database_name, d.home_site, d.memory_mb, d.storage_gb,
-               d.created_at as database_created_at, d.restore_source_id, d.restore_target_time
+               d.created_at as database_created_at, d.restore_source_id, d.restore_target_time, d.restore_finished_at
         from databases d
         join projects p on p.id = d.project_id
         where d.deleted_at is null
@@ -48,5 +49,6 @@ export async function listDatabaseRows(pool: pg.Pool): Promise<DatabaseRow[]> {
             createdAt: row.database_created_at.toISOString(),
             ...restoreOf(row),
         },
+        ...(row.restore_source_id !== null && row.restore_finished_at === null ? { restoring: true } : {}),
     }));
 }

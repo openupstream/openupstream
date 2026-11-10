@@ -202,6 +202,13 @@ export const jobSpecVersion = (row: Pick<JobRow, 'job' | 'pinnedImage' | 'site' 
 export interface DatabaseRow {
     readonly project: Project;
     readonly database: Database;
+    /**
+     * A restored Database whose Cluster has not had a ready instance yet:
+     * the operator renders its recovery bootstrap from `database.restoredFrom`
+     * (decision 108). Once finished, its Cluster is rendered like any other,
+     * so it no longer depends on the source's ObjectStore.
+     */
+    readonly restoring?: boolean;
 }
 
 /**
