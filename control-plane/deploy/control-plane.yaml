@@ -38,7 +38,8 @@ subjects:
     name: control-plane
     namespace: project-00000000-0000-4000-8000-000000000002
 ---
-# Reads a Database's and a Service's state for the API; deletes what the cleanup removes
+# Reads a Database's and a Service's state for the API, and a restore
+# source's recovery window from its ObjectStore (decision 108); deletes what the cleanup removes
 # (ARCHITECTURE.md, decisions 48 and 58); writes the Projects' Secrets; reads
 # the log stream of Services' and runs' pods (decision 21).
 # Creating everything else is the operators' job.
@@ -55,7 +56,7 @@ rules:
     verbs: [delete]
   - apiGroups: [barmancloud.cnpg.io]
     resources: [objectstores]
-    verbs: [delete]
+    verbs: [get, delete]
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [delete]

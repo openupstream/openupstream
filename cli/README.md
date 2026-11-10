@@ -6,6 +6,7 @@
 npm i -g @openupstream/cli
 oup login
 oup link shop
+oup pg create main --memory 512 --storage 10
 oup service deploy api --image ghcr.io/acme/api:v3 --port 8080
 oup job deploy nightly --image ghcr.io/acme/api:v3 --schedule '0 3 * * *' --time-zone Europe/Berlin -- node dist/nightly.js
 oup job deploy migrate --image ghcr.io/acme/api:v3 -- npm run migrate && oup job run migrate
@@ -27,6 +28,22 @@ oup site deploy dist --bucket my-site
   find it, as git finds `.git`. It holds no secret and may be committed.
   `--project <name|id>`, or `OUP_PROJECT` in CI, names another Project for
   one command.
+- `oup pg create <name> [--memory <MB>] [--storage <GB>] [--site hetzner-fsn1|ovh-lim] [--no-wait]`:
+  a Database with its primary in the Site (default `hetzner-fsn1`) and a
+  standby in the other one, 256 MB and 1 GB unless told otherwise. It waits
+  until both instances are ready, unless `--no-wait`. The Project's
+  Services and Jobs get its URL as `DATABASE_URL_<NAME>` (decision 97).
+- `oup pg restore <source> <name> [--time <RFC 3339>] [--memory <MB>] [--storage <GB>] [--site …] [--no-wait]`:
+  a new Database `<name>` that starts as a copy of `<source>` at `--time`
+  (with its zone, e.g. `2026-11-10T09:30:00Z`), or at the latest point its
+  backups reach without it (decision 108). `<source>` keeps running; point
+  the application at the new Database (its own `DATABASE_URL_<NAME>`) once
+  it looks right. Size and Site default to the source's. A deleted Database
+  is restored by its id, which `oup pg delete` prints, within the backup
+  retention window, with `--storage`. The time must lie after the source's
+  oldest base backup and at least 5 minutes in the past (WAL reaches the
+  archive up to that late).
+- `oup pg list`, `oup pg show <name>` (JSON), `oup pg delete <name>`.
 - `oup service deploy <name> --image <ref> [--port <n> | --no-port] [--replicas <n>]
   [--memory <MB>] [--cpu <millicores>] [--site hetzner-fsn1|ovh-lim]
   [--registry-user <user> --registry-password-stdin] [--no-wait]`: brings

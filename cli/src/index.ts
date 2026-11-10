@@ -5,6 +5,9 @@
  *   oup login [--api <url>] [--no-browser]   sign in through the browser (device grant)
  *   oup logout
  *   oup link <project>                       this directory's Project (.openupstream.json)
+ *   oup pg list | show <name> | delete <name>
+ *   oup pg create <name> [--memory <MB>] [--storage <GB>] [--site …]   waits until ready
+ *   oup pg restore <source> <name> [--time <RFC 3339>] …   a new Database as a copy of <source>
  *   oup service list | show <name> | delete <name>
  *   oup service deploy <name> --image <ref> [--port … | --no-port] …
  *   oup service logs <name> [--tail <n>] [-f] [--timestamps]
@@ -17,11 +20,10 @@
  *   oup site deploy <dir> --bucket <name> [--keep] [--force]
  *   oup version
  *
- * Service, job and secret commands act on the linked Project; `--project`
+ * Database, service, job and secret commands act on the linked Project; `--project`
  * or `OUP_PROJECT` names another.
  *
- * Planned (ARCHITECTURE.md build order): oup pg, oup bucket, oup routes,
- * oup usage.
+ * Planned (ARCHITECTURE.md build order): oup bucket, oup routes, oup usage.
  *
  * `OUP_API_KEY` (a madAuth API key) replaces `oup login`, e.g. in CI, with
  * `OUP_API_URL` for another API than https://api.openupstream.com.
@@ -59,6 +61,7 @@ import {
     strayFlag,
 } from './jobs.js';
 import { formatLogEntry, parseTail } from './logs.js';
+import { DATABASE_DEFAULTS, formatDatabases, planRestore } from './databases.js';
 import { type DesiredService, formatServices, planServiceDeploy, waitUntilRunning } from './services.js';
 import { apiAccess } from './session.js';
 import { readSecretValue } from './stdin.js';
@@ -68,6 +71,11 @@ const USAGE = `usage:
   oup login [--api <url>] [--no-browser]
   oup logout
   oup link <project>
+  oup pg list
+  oup pg show <name>
+  oup pg create <name> [--memory <MB>] [--storage <GB>] [--site hetzner-fsn1|ovh-lim] [--no-wait]
+  oup pg restore <source> <name> [--time <RFC 3339>] [--memory <MB>] [--storage <GB>] [--site …] [--no-wait]
+  oup pg delete <name>
   oup service list
   oup service show <name>
   oup service deploy <name> --image <ref> [--port <n> | --no-port] [--replicas <n>] [--memory <MB>] [--cpu <millicores>]
@@ -90,8 +98,14 @@ const USAGE = `usage:
   oup site deploy <dir> --bucket <name> [--keep] [--force]
   oup version
 
-Service, job and secret commands take --project <name|id>; without it, the
-Project linked to this directory (oup link) or OUP_PROJECT.
+Database, service, job and secret commands take --project <name|id>; without
+it, the Project linked to this directory (oup link) or OUP_PROJECT.
+
+pg create gives a Database 256 MB and 1 GB unless told otherwise. pg restore
+creates a new Database that starts as a copy of <source> at --time, or at
+the latest point its backups reach; <source> keeps running. Its size and
+Site default to the source's. A deleted Database can be restored by its id
+(oup pg delete prints it) within the backup retention window, with --storage.
 
 logs prints the last lines (100 by default) of every replica or of a run,
 with -f also new ones as they are written, for up to an hour. Nothing is
@@ -217,6 +231,115 @@ const count = (flag: string, value: string | undefined): number | undefined => {
 };
 
 const isSite = (value: string): value is Site => (COMPUTE_SITES as readonly string[]).includes(value);
+
+/** A Database's flags of one verb that another verb does not take. */
+const PG_FLAGS = {
+    list: [],
+    show: [],
+    delete: [],
+    create: ['memory', 'storage', 'site', 'no-wait'],
+    restore: ['memory', 'storage', 'site', 'no-wait', 'time'],
+} as const satisfies Record<string, readonly string[]>;
+
+async function pg(args: string[]): Promise<void> {
+    const [verb, ...rest] = args;
+    const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+            project: { type: 'string' },
+            memory: { type: 'string' },
+            storage: { type: 'string' },
+            site: { type: 'string' },
+            time: { type: 'string' },
+            'no-wait': { type: 'boolean' },
+        },
+    });
+    if (verb === undefined || !Object.hasOwn(PG_FLAGS, verb)) {
+        return fail(USAGE);
+    }
+    const allowed: readonly string[] = PG_FLAGS[verb as keyof typeof PG_FLAGS];
+    const stray = Object.keys(values).find((flag) => flag !== 'project' && !allowed.includes(flag));
+    if (stray !== undefined) {
+        return fail(`oup pg ${verb} does not take --${stray}`);
+    }
+    const [name, second] = positionals;
+    if ((verb !== 'list' && name === undefined) || (verb === 'restore' && second === undefined)) {
+        return fail(USAGE);
+    }
+    if (values.site !== undefined && !isSite(values.site)) {
+        return fail(`--site is one of ${COMPUTE_SITES.join(', ')}`);
+    }
+    const memoryMb = count('memory', values.memory);
+    const storageGb = count('storage', values.storage);
+    const homeSite = values.site !== undefined && isSite(values.site) ? values.site : undefined;
+    const { client, project } = await inProject(values.project);
+    const databases = await client.listDatabases(project.id);
+    if (!databases.ok) {
+        return fail(databases.error.message);
+    }
+    const existing = databases.value.find((candidate) => candidate.name === name);
+    const found = () => existing ?? fail(`no Database ${name} in ${project.name}`);
+    switch (verb) {
+        case 'list':
+            console.log(databases.value.length === 0 ? `No Databases in ${project.name}.` : formatDatabases(databases.value).join('\n'));
+            return;
+        case 'show':
+            return console.log(JSON.stringify(found(), null, 2));
+        case 'delete': {
+            const database = found();
+            const deleted = await client.deleteDatabase(project.id, database.id);
+            return deleted.ok
+                ? console.log(
+                      `Deleted ${name}. Its backups are kept for the retention window; until then\n  oup pg restore ${database.id} <name> --storage ${database.storageGb}\nbrings it back as a new Database.`,
+                  )
+                : fail(deleted.error.message);
+        }
+        case 'create':
+        case 'restore': {
+            const planned =
+                verb === 'create'
+                    ? {
+                          ok: true as const,
+                          input: {
+                              name: name as string,
+                              memoryMb: memoryMb ?? DATABASE_DEFAULTS.memoryMb,
+                              storageGb: storageGb ?? DATABASE_DEFAULTS.storageGb,
+                              ...(homeSite === undefined ? {} : { homeSite }),
+                          },
+                      }
+                    : planRestore(databases.value, {
+                          source: name as string,
+                          name: second as string,
+                          ...(values.time === undefined ? {} : { time: values.time }),
+                          ...(memoryMb === undefined ? {} : { memoryMb }),
+                          ...(storageGb === undefined ? {} : { storageGb }),
+                          ...(homeSite === undefined ? {} : { homeSite }),
+                      });
+            if (!planned.ok) {
+                return fail(planned.reason);
+            }
+            const created = await client.createDatabase(project.id, planned.input);
+            if (!created.ok) {
+                return fail(created.error.message);
+            }
+            const { name: createdName, memoryMb: mb, storageGb: gb, homeSite: site, id } = created.value;
+            console.log(`${verb === 'create' ? 'Created' : 'Restoring into'} ${createdName}: ${mb} MB, ${gb} GB, primary in ${site}`);
+            if (values['no-wait'] === true) {
+                return;
+            }
+            // A restore first fetches the base backup and replays WAL; both take longer than an empty start.
+            const ready = await waitUntil(() => client.getDatabase(project.id, id), (database) => database.state === 'ready', {
+                timeoutMs: 20 * 60_000,
+                intervalMs: 5_000,
+                report: (state) => console.log(`  ${state}`),
+            });
+            return ready.ok ? undefined : fail(`${createdName} is not ready: ${ready.error}`);
+        }
+        default:
+            return fail(USAGE);
+    }
+}
 
 async function service(args: string[]): Promise<void> {
     const [verb, ...rest] = args;
@@ -667,6 +790,8 @@ const run = async (): Promise<void> => {
             return logout();
         case 'link':
             return link(rest);
+        case 'pg':
+            return pg(rest);
         case 'service':
             return service(rest);
         case 'job':

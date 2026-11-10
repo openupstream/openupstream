@@ -293,8 +293,11 @@ export interface RestoreSource {
      * exist, in the same Project: the restore reads it from its own namespace.
      */
     readonly database: Pick<Database, 'id' | 'projectId'>;
-    /** RFC 3339 with a time zone, e.g. `2026-10-17T10:30:00Z`. */
-    readonly targetTime: string;
+    /**
+     * RFC 3339 with a time zone, e.g. `2026-10-17T10:30:00Z`; undefined: the
+     * latest point the source's archive reaches.
+     */
+    readonly targetTime?: string | undefined;
 }
 
 export type RestoreError =
@@ -340,7 +343,7 @@ const RESTORE_SOURCE = 'origin';
 
 /**
  * The objects of a new Database that starts as a copy of `source` at its
- * target time, read from the source's ObjectStore (WAL replay across
+ * target time (or the latest point its archive reaches), read from the source's ObjectStore (WAL replay across
  * timelines, so also past a failover). The new Database archives into its
  * own folder; the source's archive is only read. Restoring in place is not
  * possible: CloudNativePG only bootstraps a Cluster when it is created.
@@ -358,7 +361,10 @@ export function restoredDatabaseManifests(
             source.database.projectId === project.id,
             { kind: 'source-in-other-project', projectId: project.id, sourceProjectId: source.database.projectId },
         ],
-        [isRfc3339(source.targetTime), { kind: 'invalid-target-time', value: source.targetTime }],
+        [
+            source.targetTime === undefined || isRfc3339(source.targetTime),
+            { kind: 'invalid-target-time', value: source.targetTime ?? '' },
+        ],
     ];
     const sourceErrors = checks.filter(([valid]) => !valid).map(([, error]) => error);
     const result = databaseManifests(project, database, config);
@@ -374,7 +380,13 @@ export function restoredDatabaseManifests(
             ...cluster,
             spec: {
                 ...cluster.spec,
-                bootstrap: { recovery: { source: RESTORE_SOURCE, recoveryTarget: { targetTime: source.targetTime } } },
+                bootstrap: {
+                    recovery: {
+                        source: RESTORE_SOURCE,
+                        // Without a target, recovery replays every WAL file in the archive.
+                        ...(source.targetTime === undefined ? {} : { recoveryTarget: { targetTime: source.targetTime } }),
+                    },
+                },
                 externalClusters: [
                     {
                         name: RESTORE_SOURCE,
