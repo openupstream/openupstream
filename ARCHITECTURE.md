@@ -793,7 +793,10 @@ digest (#55).
   now or before the source's deletion (CloudNativePG's `archive_timeout`;
   a later time can lie in WAL not archived yet, and Postgres refuses a
   recovery that ends before its target). A restore that could only fail
-  is refused instead of left `provisioning`. The platform's own
+  is refused instead of left `provisioning`. The cleanup does not purge a
+  source that a Database was restored from within the last day, so a
+  restore accepted just before the source's retention ends still finds its
+  archive. The platform's own
   Databases, whose loss stops the API, are restored by runbook:
   `docs/runbooks/restore-from-backup.md`.
 
@@ -1144,8 +1147,9 @@ Decisions table once it is settled.
    the Databases operator running in the cluster on it, both from GHCR
    images; creating and deleting Projects and Databases through the
    public API, with the cleanup; madAuth with sign-up, API keys and
-   Accounts created through the API (2026-10-17). Left: TopoLVM, restore
-   through the API, the `oup pg` commands. Done since: `oup login`
+   Accounts created through the API (2026-10-17). Left: TopoLVM. Done
+   since: restore through the API and the `oup pg` commands (decision 108;
+   not yet run on the dev cluster); `oup login`
    (2026-10-31, #87), tested on the dev cluster with madAuth 0.7.0: the
    code approved through madAuth's API, the tokens stored with mode 600,
    a refresh that rotated the refresh token, a logout that ended it, and

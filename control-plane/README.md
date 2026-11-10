@@ -188,7 +188,8 @@ Database's Cluster, Pooler and ScheduledBackup, and again on every pass for
 re-applies them; after `BACKUP_RETENTION` it
 deletes the Database's backup folder from the bucket, its ObjectStore and its
 row. Until the retention has passed a deleted Database can be restored
-into a new one (`restoreFrom` on create, decision 108).
+into a new one (`restoreFrom` on create, decision 108); one restored from
+within the last day (`RESTORE_GRACE`) is not purged yet.
 
 A deleted Bucket keeps nothing: the next pass deletes its key, if the
 DELETE could not already (so nothing written meanwhile is lost unnoticed),

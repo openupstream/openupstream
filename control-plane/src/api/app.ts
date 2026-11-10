@@ -401,6 +401,11 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         const { homeSite, restoreFrom, ...rest } = input.data;
         if (restoreFrom !== undefined) {
+            // A held Account learns that first, not after the backup checks.
+            const holds = await holdsOf(pool, project.accountId);
+            if (holds.length > 0) {
+                return held(c, holds);
+            }
             const source = await getRestoreSource(pool, project.id, restoreFrom.databaseId);
             if (source === undefined) {
                 return c.json({ error: `no Database ${restoreFrom.databaseId} in this Project to restore from` }, 400);

@@ -142,6 +142,23 @@ test('a deleted Database loses its running objects at once, keeps its backups un
     assert.equal(await row(databaseId), undefined);
 });
 
+test('a Database restored from within the last day keeps its source from being purged', async () => {
+    const { prefixes, deps } = fakes();
+    await db.pool.query('update databases set deleted_at = now() - interval \'8 days\', objects_removed_at = now() where id = $1', [databaseId]);
+    const restored = await db.pool.query<{ id: string }>(
+        `insert into databases (project_id, name, memory_mb, storage_gb, restore_source_id) values ($1, 'copy', 256, 1, $2) returning id`,
+        [projectId, databaseId],
+    );
+    await cleanupPass(deps());
+    assert.deepEqual(prefixes, [], 'its recovery may still read the archive');
+    assert.ok(await row(databaseId));
+
+    await db.pool.query(`update databases set created_at = now() - interval '25 hours' where id = $1`, [restored.rows[0]?.id]);
+    await cleanupPass(deps());
+    assert.deepEqual(prefixes, [`project-${projectId}/db-${databaseId}/`]);
+    assert.equal(await row(databaseId), undefined);
+});
+
 test('a failed step is not recorded and is retried by the next pass', async () => {
     const { removed, prefixes, failKinds, failBackupsWith, deps } = fakes();
     const logs: Record<string, unknown>[] = [];

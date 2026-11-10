@@ -10,7 +10,8 @@
  *    rows before the delete can still re-apply them until then;
  * 2. once the retention window has passed, deletes its backups from the
  *    bucket, then its ObjectStore, then its row. Until then it can be
- *    restored into a new Database;
+ *    restored into a new Database; one restored from it within RESTORE_GRACE
+ *    holds this back, so its recovery still finds the archive;
  * 3. deletes a deleted Bucket's key, objects and Garage bucket, then its
  *    row (decision 82): unlike a Database, nothing of it is kept;
  * 4. removes a deleted Project's namespace once it has no Database or
@@ -49,6 +50,13 @@ const CNPG = 'postgresql.cnpg.io/v1';
  * after 30 s): after this, no pass that still saw the row is running.
  */
 export const OPERATOR_GRACE = '5 minutes';
+
+/**
+ * How long a restore may still read its source's archive: longer than
+ * fetching a base backup and replaying its WAL takes for any Database we
+ * run. A source restored from within this long is not purged yet.
+ */
+export const RESTORE_GRACE = '1 day';
 
 const runningObjects = (database: { id: string; projectId: string }): ObjectRef[] => {
     const namespace = projectNamespace(database.projectId);
@@ -91,9 +99,11 @@ async function removeRunningObjects(deps: CleanupDeps): Promise<void> {
 
 async function purgeExpiredDatabases(deps: CleanupDeps): Promise<void> {
     const { rows } = await deps.pool.query<DeletedDatabase>(
-        `select id, project_id from databases
-         where objects_removed_at is not null and deleted_at < now() - $1::interval order by deleted_at`,
-        [deps.retention],
+        `select id, project_id from databases d
+         where objects_removed_at is not null and deleted_at < now() - $1::interval
+           and not exists (select 1 from databases r where r.restore_source_id = d.id and r.created_at > now() - $2::interval)
+         order by deleted_at`,
+        [deps.retention, RESTORE_GRACE],
     );
     for (const row of rows) {
         const deleted = await deps.backups.deletePrefix(backupPrefix(row.project_id, row.id));

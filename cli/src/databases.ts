@@ -2,12 +2,10 @@
  * `oup pg`: Databases of the linked Project (ARCHITECTURE.md, "Postgres" and
  * "Backups"). Pure helpers; index.ts does the calls.
  */
-import { DATABASE_MIN_MEMORY_MB, type DatabaseDetails, type DatabaseInput, type Site } from '@openupstream/sdk';
+import { DATABASE_MIN_MEMORY_MB, type DatabaseDetails, type DatabaseInput, type Site, UUID } from '@openupstream/sdk';
 
 /** What `oup pg create` gives a Database for the flags left out. */
 export const DATABASE_DEFAULTS = { memoryMb: DATABASE_MIN_MEMORY_MB, storageGb: 1 } as const;
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** RFC 3339 with an explicit offset, as the API wants it; a bare time would be read in some server's zone. */
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;

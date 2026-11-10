@@ -55,6 +55,6 @@ export const restoreCheckMessage = (sourceId: string, error: RestoreCheckError):
         case 'too-recent':
             return error.deleted
                 ? `targetTime is after ${error.latest.toISOString()}, the latest point the backups of ${sourceId} surely reach before it was deleted; leave targetTime out for the latest`
-                : `targetTime is after ${error.latest.toISOString()}: WAL reaches the archive up to 5 minutes late; leave targetTime out for the latest`;
+                : `targetTime is after ${error.latest.toISOString()}: WAL reaches the archive up to ${ARCHIVE_DELAY_MS / 60_000} minutes late; leave targetTime out for the latest`;
     }
 };

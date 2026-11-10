@@ -498,6 +498,9 @@ describe('Databases', () => {
 
         recoveryWindows.set(`db-${source.id}`, 'connect ETIMEDOUT');
         assert.equal((await restore('later', { databaseId: source.id })).status, 503);
+        assert.equal(await placeHold(db.pool, accountA, 'unpaid'), true);
+        assert.equal((await restore('later', { databaseId: source.id })).status, 402, 'a Hold before the backup checks');
+        assert.equal(await liftHold(db.pool, accountA, 'unpaid'), true);
         recoveryWindows.delete(`db-${source.id}`);
     });
 
