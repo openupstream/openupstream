@@ -52,7 +52,7 @@ test('a Project is created in the only Account, or in the one --account names', 
     const several = accountFor([acme, david], undefined);
     assert.ok(!several.ok && several.error.includes('pass --account') && several.error.includes('acme, david'));
     const none = accountFor([], undefined);
-    assert.ok(!none.ok && none.error.includes('not a Member'));
+    assert.ok(!none.ok && none.error.includes('not a Member') && none.error.includes('POST /v1/accounts'));
     const missing = accountFor([acme], 'nope');
     assert.ok(!missing.ok && missing.error.includes('you have acme'));
     const twins = accountFor([acme, account('c', 'acme')], 'acme');

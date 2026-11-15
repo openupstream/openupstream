@@ -104,7 +104,7 @@ export function accountFor(accounts: readonly Account[], reference: string | und
     if (reference === undefined || reference === '') {
         const [only, ...others] = accounts;
         if (only === undefined) {
-            return err('you are not a Member of any Account yet');
+            return err('you are not a Member of any Account yet; create one with POST /v1/accounts {"name": …} (the dashboard will do it on first visit)');
         }
         return others.length === 0 ? ok(only) : err(`you have several Accounts (${names}); pass --account <name|id>`);
     }
