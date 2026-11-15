@@ -73,7 +73,7 @@ Other names that are ours today and need yours:
 | --- | --- |
 | The backup bucket | `infra/dev-cluster/database-config.json` (section 4) |
 | madAuth's public URL | `MADAUTH_ISSUER` in `infra/dev-cluster/platform.sh` (on the dev cluster `http://localhost:8787`) |
-| Our hostnames (`openupstream.com`, `api.`) | decision 67; `PLATFORM_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
+| Our hostname (`openupstream.com`, the API under `/api`) | decisions 67 and 120; `PLATFORM_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
 | The customer domain (`openupstream.app`), under which Buckets are reached | decision 68; `CUSTOMER_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
 
 ## 3. Development clusters
@@ -138,7 +138,7 @@ not TopoLVM.
 Check from inside the network that the names resolve to the machine:
 
 ```bash
-dig +short api.home.dev.example.com
+dig +short home.dev.example.com
 ```
 
 ## 4. Hetzner Object Storage: backups
@@ -378,7 +378,7 @@ decision 87), as a client an admin registers once per madAuth:
    client in the browser instead, as the script's header shows.
 3. Set `CLI_CLIENT_ID` for the control plane (`platform.sh` takes it from
    the environment) and roll it out. `GET /v1/login` then answers, and
-   `oup login --api https://api.openupstream.com` works.
+   `oup login --api https://openupstream.com/api` works.
 
 ## 9. Sign-up and the waitlist
 

@@ -8,7 +8,7 @@
  * The API surface is defined here first and implemented in control-plane/.
  */
 
-export const SDK_VERSION = '0.2.0';
+export const SDK_VERSION = '0.3.0';
 
 export * from './model.js';
 export * from './internal.js';
@@ -43,7 +43,8 @@ import type {
     ServicePatch,
 } from './model.js';
 
-export const DEFAULT_API_URL = 'https://api.openupstream.com';
+/** The API is under `/api` of the platform's host (ARCHITECTURE.md, decision 120). */
+export const DEFAULT_API_URL = 'https://openupstream.com/api';
 
 export interface ClientOptions {
     baseUrl?: string;
@@ -52,8 +53,10 @@ export interface ClientOptions {
 }
 
 /**
- * In a browser on the dashboard's origin: no token, the browser sends
- * madAuth's session cookie along (`credentials: 'include'`).
+ * In a browser on the dashboard's origin, which is the API's too: no token,
+ * the browser sends madAuth's session cookie along. `baseUrl` can be a path
+ * there, e.g. `/api`. To another origin the browser sends no cookie, and
+ * the API answers 401.
  */
 export interface CookieSessionOptions {
     baseUrl?: string;
@@ -76,11 +79,11 @@ export type ApiResult<T> = { readonly ok: true; readonly value: T } | { readonly
 export class OpenUpstreamClient {
     readonly baseUrl: string;
     /** The credential of every request: the token as a header, or the browser's cookie. */
-    readonly #auth: { readonly headers: Record<string, string>; readonly credentials?: 'include' };
+    readonly #auth: { readonly headers: Record<string, string>; readonly credentials?: 'same-origin' };
 
     constructor(options: ClientOptions | CookieSessionOptions) {
         this.baseUrl = options.baseUrl ?? DEFAULT_API_URL;
-        this.#auth = 'token' in options ? { headers: { authorization: `Bearer ${options.token}` } } : { headers: {}, credentials: 'include' };
+        this.#auth = 'token' in options ? { headers: { authorization: `Bearer ${options.token}` } } : { headers: {}, credentials: 'same-origin' };
     }
 
     async health(): Promise<{ ok: boolean }> {

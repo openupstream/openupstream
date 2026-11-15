@@ -7,8 +7,7 @@
 # 2. the Let's Encrypt ClusterIssuers;
 # 3. Traefik on the compute nodes (both, or the single node), on their
 #    ports 80 and 443;
-# 4. the platform hostnames in bunny.net DNS (dns.sh), PLATFORM_DOMAIN and
-#    api.PLATFORM_DOMAIN.
+# 4. the platform hostname in bunny.net DNS (dns.sh), PLATFORM_DOMAIN.
 #
 # platform.sh then adds the platform's routes and certificate.
 #

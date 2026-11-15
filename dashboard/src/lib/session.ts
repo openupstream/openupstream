@@ -3,7 +3,6 @@
 import type { MadauthUser } from '@madauth/web';
 import { OpenUpstreamClient } from '@openupstream/sdk';
 import { useEffect, useState } from 'react';
-import { apiUrlFor } from './api-url';
 
 /** madAuth's client. It defines web components, so it only loads in the browser. */
 const madauth = () => import('@madauth/web');
@@ -70,13 +69,16 @@ export const signIn = () => madauth().then(({ Madauth }) => Madauth.showSignInDi
 export const signOut = () => madauth().then(({ Madauth }) => Madauth.signOut());
 export const manageApiKeys = () => madauth().then(({ Madauth }) => Madauth.showManageApiKeysDialog());
 
+/** The API is under `/api` of the dashboard's own host (ARCHITECTURE.md, decision 120). */
+const API_PATH = '/api';
+
 /**
  * The API as the signed-in Member: the browser sends madAuth's session
- * cookie (decision 116). Waits for a session that expired to be renewed
+ * cookie to its own origin. Waits for a session that expired to be renewed
  * first, so the API finds a valid one.
  */
 export async function api(): Promise<OpenUpstreamClient> {
     const { Madauth } = await madauth();
     await Madauth.sessionReady();
-    return new OpenUpstreamClient({ baseUrl: apiUrlFor(window.location, process.env['NEXT_PUBLIC_API_URL']), session: 'cookie' });
+    return new OpenUpstreamClient({ baseUrl: API_PATH, session: 'cookie' });
 }

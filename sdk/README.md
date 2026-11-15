@@ -16,9 +16,12 @@ if (project.ok) {
 }
 ```
 
-In a browser on the dashboard's origin the client takes `{ session:
-'cookie' }` in place of a token: the browser then sends madAuth's session
-cookie with every call (ARCHITECTURE.md, decision 116).
+The API is at `https://openupstream.com/api` (`baseUrl` for another
+installation: `https://<its platform domain>/api`). In a browser on the
+dashboard's origin, which is the API's too, the client takes `{ baseUrl:
+'/api', session: 'cookie' }` in place of a token: the browser then sends
+madAuth's session cookie with every call (ARCHITECTURE.md, decisions 116
+and 120).
 
 Every call returns `{ ok: true, value }` or `{ ok: false, error: { status, message } }`
 (status 0: the API was not reached); nothing throws. For a refused request

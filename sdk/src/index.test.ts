@@ -6,21 +6,22 @@ import { OpenUpstreamClient, errorMessage, txtRecordName } from './index.js';
 
 test('client defaults to the production API', () => {
     const client = new OpenUpstreamClient({ token: 'x' });
-    assert.equal(client.baseUrl, 'https://api.openupstream.com');
+    assert.equal(client.baseUrl, 'https://openupstream.com/api');
 });
 
-test("with the session cookie, the browser sends the credential: no authorization header, credentials 'include'", async (t) => {
+test("with the session cookie, the browser sends the credential: no authorization header, cookies for the same origin only", async (t) => {
     const fetched = mock.method(globalThis, 'fetch', async () => new Response('[]', { headers: { 'content-type': 'application/json' } }));
     t.after(() => fetched.mock.restore());
-    const client = new OpenUpstreamClient({ baseUrl: 'https://api.example.test', session: 'cookie' });
+    const client = new OpenUpstreamClient({ baseUrl: '/api', session: 'cookie' });
     assert.deepEqual(await client.listProjects(), { ok: true, value: [] });
     await client.createProject({ accountId: 'a', name: 'shop' });
+    assert.deepEqual(fetched.mock.calls.map((call) => call.arguments[0]), ['/api/v1/projects', '/api/v1/projects']);
     const inits = fetched.mock.calls.map((call) => call.arguments[1] as RequestInit);
     assert.deepEqual(
         inits.map((init) => [init.credentials, init.headers]),
         [
-            ['include', {}],
-            ['include', { 'content-type': 'application/json' }],
+            ['same-origin', {}],
+            ['same-origin', { 'content-type': 'application/json' }],
         ],
     );
 });
