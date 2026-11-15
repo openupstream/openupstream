@@ -1306,7 +1306,11 @@ Decisions table once it is settled.
       (Falkenstein by default). Costs: memory still has to fit on one
       node, so this doubles CPU capacity only; an idle Service still
       holds half its CPU; the promise becomes "half the CPU during a Site
-      outage", which is when many pods start at once. To test on the dev
+      outage", which is when many pods start at once; a request below
+      its limit also moves a Service's pods from Kubernetes' Guaranteed
+      to its Burstable QoS class, so they rank before Databases when a
+      node runs out of memory and are the pods swap would apply to (next
+      but one option). To test on the dev
       cluster: start times and the failover at half the CPU.
     - A memory request below the limit. Costs: without swap a full node
       means evictions and OOM kills, on nodes that also run Databases;
