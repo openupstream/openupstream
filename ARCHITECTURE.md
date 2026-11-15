@@ -593,8 +593,9 @@ digest (#55).
   one fails; two or more have a hard topology spread over the compute
   Sites that leaves out a dark Site's tainted node (as in decision 46).
   Rollouts start the new pod before stopping the old one. Requests and
-  limits are both the configured memory and CPU, so what is billed is
-  reserved and no Service takes another's CPU. Pods mount no
+  limits are both the configured memory and CPU, so the memory billed is
+  reserved and no Service takes another's CPU; CPU is billed as measured,
+  not as reserved (Open question 23). Pods mount no
   ServiceAccount token, read `project-secrets` with `envFrom` and do not
   start before it exists; a version of the Project's Secrets on the pod
   template rolls the Service when they change. The control plane records
@@ -1298,8 +1299,10 @@ Decisions table once it is settled.
       so a full node means evictions and OOM kills, on nodes that also
       run Databases; metering reads memory from the pods' requests
       (decision 114) and would have to read the limit.
-    - Billing reserved instead of measured CPU, as Fargate, Cloud Run and
-      Fly.io do. Contradicts decision 115.
+    - Billing reserved instead of measured CPU while a pod runs, as
+      Fargate and Fly.io do (Cloud Run only with instance-based billing;
+      by default it bills CPU while a request is handled). Contradicts
+      decision 115.
     - A price per memory GB-h that carries the reserved CPU, with a cap on
       CPU per GB of memory.
     - Scale-to-zero for Services with a port: an activator in the request
