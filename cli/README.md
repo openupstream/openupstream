@@ -119,7 +119,7 @@ oup site deploy dist --bucket my-site
   `index.html` `no-cache`, the rest five minutes.
 
 In CI, set `OUP_API_KEY` to a madAuth API key instead of signing in, and
-`OUP_API_URL` for another API than `https://openupstream.com/api`.
+`OUP_API_URL` for another API than `https://console.openupstream.com/api`.
 
 `src/oidc.ts` is the device grant and refresh, `src/session.ts` the token
 for each call, `src/deploy.ts` the site deploy (`planDeploy` is pure),

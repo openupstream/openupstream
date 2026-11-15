@@ -59,6 +59,7 @@ let dnsDown = false;
 const domainDeps = {
     customerDomain: 'openupstream.test',
     platformDomain: 'platform.test',
+    waitlistDomain: 'welcome.test',
     lookupTxt: async (name: string) => (dnsDown ? err('ETIMEOUT') : ok(txt.get(name) ?? [])),
     registry: fakeRegistry(),
     kek: (() => {
@@ -902,7 +903,7 @@ describe('Custom domains', () => {
         for (const hostname of ['localhost', 'a..example', '-a.example', 'a_b.example', `${'a'.repeat(64)}.example`, 'shop.example/x']) {
             assert.equal((await claim(projectId, hostname)).status, 400, hostname);
         }
-        for (const hostname of ['openupstream.test', 'x.openupstream.test', 'api.platform.test']) {
+        for (const hostname of ['openupstream.test', 'x.openupstream.test', 'api.platform.test', 'welcome.test', 'www.welcome.test']) {
             assert.equal((await claim(projectId, hostname)).status, 400, hostname);
         }
         assert.equal((await claim(projectId, 'www.shop.example')).status, 409);

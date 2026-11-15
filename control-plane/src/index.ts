@@ -154,6 +154,7 @@ async function main(): Promise<void> {
         registry: registryDeps(),
         customerDomain: config.value.customerDomain,
         platformDomain: config.value.platformDomain,
+        ...(config.value.waitlist === undefined ? {} : { waitlistDomain: new URL(config.value.waitlist.url).hostname }),
         lookupTxt: txtLookup(),
         newAccountHolds: config.value.newAccountHolds,
         ...(auth.cliClientId === undefined ? {} : { cliLogin: { issuer: auth.issuer, clientId: auth.cliClientId } }),

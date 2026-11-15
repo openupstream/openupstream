@@ -148,7 +148,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
     }
     const platformDomain = required('PLATFORM_DOMAIN');
     if (platformDomain !== '' && !domainName.test(platformDomain)) {
-        problems.push('PLATFORM_DOMAIN must be a domain name, e.g. openupstream.com');
+        problems.push('PLATFORM_DOMAIN must be a domain name, e.g. console.openupstream.com');
     }
     const publicPort = port(env['PORT'], 8080);
     const internalPort = port(env['INTERNAL_PORT'], 8081);

@@ -6,7 +6,7 @@ import { OpenUpstreamClient, errorMessage, txtRecordName } from './index.js';
 
 test('client defaults to the production API', () => {
     const client = new OpenUpstreamClient({ token: 'x' });
-    assert.equal(client.baseUrl, 'https://openupstream.com/api');
+    assert.equal(client.baseUrl, 'https://console.openupstream.com/api');
 });
 
 test("with the session cookie, the browser sends the credential: no authorization header, cookies for the same origin only", async (t) => {

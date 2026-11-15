@@ -47,10 +47,11 @@ included in the unit price, not billed separately.
 
 Anyone can sign up; a payment method (card, PayPal or SEPA direct debit) is needed
 before the first Database, Bucket or Service is created. Until the hosted
-service can invoice, its sign-up is closed: `openupstream.com` says it is
-coming soon and takes e-mail addresses for a waitlist (double opt-in), to
+service can invoice, its sign-up is closed: `openupstream.com`, the product's welcome page,
+says it is coming soon and takes e-mail addresses for a waitlist (double opt-in), to
 tell them when it opens. Whoever runs openupstream themselves has open
-sign-up by default and can close it the same way.
+sign-up by default and can close it the same way. The hosted service
+itself, with its dashboard, is at `console.openupstream.com`.
 
 ## Deliberately not offered
 

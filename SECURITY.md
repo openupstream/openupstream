@@ -13,6 +13,6 @@ notes if you want it.
 
 ## Scope
 
-- This repository and the hosted service at openupstream.com.
+- This repository and the hosted service at console.openupstream.com and openupstream.com.
 - Out of scope: issues in upstream dependencies (report those upstream, but a
   heads-up is appreciated), denial of service by volume, social engineering.

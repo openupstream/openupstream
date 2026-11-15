@@ -16,7 +16,7 @@ if (project.ok) {
 }
 ```
 
-The API is at `https://openupstream.com/api` (`baseUrl` for another
+The API is at `https://console.openupstream.com/api` (`baseUrl` for another
 installation: `https://<its platform domain>/api`). In a browser on the
 dashboard's origin, which is the API's too, the client takes `{ baseUrl:
 '/api', session: 'cookie' }` in place of a token: the browser then sends

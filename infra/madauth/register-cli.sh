@@ -3,7 +3,7 @@
 # the device authorization grant (ARCHITECTURE.md, decision 87), and prints
 # its client ID for the control plane's CLI_CLIENT_ID. Once per madAuth.
 #
-#   ./register-cli.sh https://openupstream.com
+#   ./register-cli.sh https://console.openupstream.com
 #
 # Signs in as an admin with e-mail and password (asked here, never on the
 # command line): madAuth lets only an admin who signed in within the last
@@ -16,7 +16,7 @@
 # certificate.
 set -euo pipefail
 
-ISSUER=${1:?usage: register-cli.sh <madAuth issuer, e.g. https://openupstream.com>}
+ISSUER=${1:?usage: register-cli.sh <madAuth issuer, e.g. https://console.openupstream.com>}
 read -r -p 'admin e-mail: ' EMAIL
 read -r -s -p 'password: ' PASSWORD
 echo

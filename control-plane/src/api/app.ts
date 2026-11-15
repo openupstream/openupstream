@@ -100,6 +100,8 @@ export interface ApiDeps {
     readonly customerDomain: string;
     /** Our own hostnames (decision 67); neither it nor the customer domain can be claimed as a custom domain. */
     readonly platformDomain: string;
+    /** The waitlist's host, when it is served (decision 123): ours as well. */
+    readonly waitlistDomain?: string;
     /** Where custom domains' TXT ownership proofs are looked up. */
     readonly lookupTxt: TxtLookup;
     /** Where `oup login` signs in (decision 87); without it, `GET /v1/login` answers 404. */
@@ -731,7 +733,8 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             return c.json(invalid(input.error.issues), 400);
         }
         const { hostname } = input.data;
-        if (isReserved(hostname, [deps.customerDomain, deps.platformDomain])) {
+        const ours = [deps.customerDomain, deps.platformDomain, ...(deps.waitlistDomain === undefined ? [] : [deps.waitlistDomain])];
+        if (isReserved(hostname, ours)) {
             return c.json({ error: `hostnames under ${deps.customerDomain} and ${deps.platformDomain} are the platform's` }, 400);
         }
         const created = await createCustomDomain(pool, project.id, hostname);

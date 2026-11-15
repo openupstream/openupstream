@@ -30,7 +30,7 @@ Postgres), transactional mail, DNS, CDN. See [docs/scope.md](docs/scope.md).
 
 ```
 control-plane/   API: accounts, projects, routing table, secrets, metering, provisioning
-dashboard/       Next.js web UI
+dashboard/       Next.js web UI, served on a cluster by its own nginx image
 cli/             `oup` command line tool
 sdk/             @openupstream/sdk, TypeScript client used by cli and dashboard
 operators/       Kubernetes reconcilers (routing table → IngressRoutes, database → CloudNativePG)

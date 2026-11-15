@@ -53,9 +53,26 @@ prefix, to the control plane at `API_URL` (default
   kubeconfig selects.
 
 `npm run build -w dashboard` writes the static files to `dashboard/out`.
-Nothing serves them on a cluster yet (ARCHITECTURE.md, Open question 22);
-at `openupstream.com` they take the paths the waitlist page serves while
-sign-up on the hosted service is closed (decision 86).
+
+## On a cluster
+
+`dashboard/Dockerfile` puts the static files into an unprivileged nginx
+image (`deploy/nginx.conf`: no framing by other sites, `no-cache` for the
+pages, a year for the content-named files under `/_next/static/`). The
+Images workflow publishes it as `ghcr.io/openupstream/dashboard`, and
+`infra/dev-cluster/platform.sh` installs `deploy/dashboard.yaml`: two
+replicas, one per compute Site, behind every path of the platform domain
+that madAuth and the API do not have (decision 123). It has no settings
+and talks to nothing. For the hosted service that host is
+`console.openupstream.com`; `openupstream.com` is the welcome page with the
+waitlist and never shows the dashboard.
+
+```sh
+docker build -f dashboard/Dockerfile -t dashboard . && docker run --rm --read-only --tmpfs /tmp -p 8080:8080 dashboard
+```
+
+serves the files alone at `http://localhost:8080`, without madAuth or the
+API behind it.
 
 ## Tests
 
