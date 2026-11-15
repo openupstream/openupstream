@@ -195,11 +195,14 @@ async function unblockFull(deps: GrowthDeps, usage: ReadonlyMap<string, VolumeUs
             continue;
         }
         const grown = await deps.kube.growVolumes(namespace, clusterName(row), row.storage_gb);
-        deps.log(
-            grown.ok
-                ? { msg: 'growth: full volumes grown for CloudNativePG', database: row.id, toGb: row.storage_gb, volumes: grown.value }
-                : { msg: 'growth: cannot grow full volumes', database: row.id, error: grown.error },
-        );
+        // Until the instance restarts, the pass sees it full every time; only what it changed is news.
+        if (!grown.ok || grown.value.length > 0) {
+            deps.log(
+                grown.ok
+                    ? { msg: 'growth: full volumes grown for CloudNativePG', database: row.id, toGb: row.storage_gb, volumes: grown.value }
+                    : { msg: 'growth: cannot grow full volumes', database: row.id, error: grown.error },
+            );
+        }
     }
 }
 

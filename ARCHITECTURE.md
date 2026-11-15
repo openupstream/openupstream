@@ -1204,7 +1204,18 @@ Decisions table once it is settled.
    images; creating and deleting Projects and Databases through the
    public API, with the cleanup; madAuth with sign-up, API keys and
    Accounts created through the API (2026-10-17). Storage that grows by
-   itself (decision 111) is built, not yet run on the dev cluster. TopoLVM and resizing (decisions 109 and 110),
+   itself (decision 111), tested on the dev cluster (2026-11-15) with
+   Prometheus and the alerts installed: a 1 GB Database filled to 93% was
+   raised to 2 GB within one pass; one with auto-grow off and one at its
+   maximum stayed and fired `DatabaseVolumeFull`; a create larger than a
+   node's free memory was refused with 507. The run found that a volume
+   that filled up faster than a pass stops Postgres and CloudNativePG
+   never grows its PVCs (fixed: the pass does); with that, a full
+   Database resized through the API was back in a minute, one whose
+   maximum was raised in five (Kubernetes' crash-loop back-off). A grow
+   TopoLVM could not carry out fired `DatabaseVolumeResizeFailed`, which
+   first used a PVC condition metric kube-state-metrics does not have
+   (fixed: it compares the sizes). TopoLVM and resizing (decisions 109 and 110),
    tested on the dev cluster (2026-11-15): every Database instance got a
    logical volume of its size in its node's volume group, the third Site
    none; `oup pg resize` grew 2 to 5 to 8 GB online without restarting
