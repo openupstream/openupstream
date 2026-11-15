@@ -8,11 +8,17 @@
  * Usage comes from the platform's Prometheus (decision 106), which scrapes
  * every volume's kubelet stats. Without PROMETHEUS_URL the pass does not run.
  *
+ * A volume that filled up anyway (faster than a pass) stops Postgres, and
+ * CloudNativePG then waits for its PVCs to grow without growing them when
+ * the Cluster's size rises; the pass grows them for every such Database
+ * whose Cluster already has its row's size, whether grown by itself or by
+ * a resize.
+ *
  * `planGrowth` is pure; `growthPass` reads, decides and writes.
  */
 import { clusterName, projectNamespace } from '@openupstream/sdk';
 import type pg from 'pg';
-import type { ControlPlaneKube } from '../kube.js';
+import { type ControlPlaneKube, DISK_FULL_PHASE } from '../kube.js';
 import { type Result, err, ok } from '../result.js';
 import { GiB, roomForGrowth } from './capacity.js';
 import { updateDatabase } from './store.js';
@@ -151,9 +157,11 @@ export async function growthPass(deps: GrowthDeps): Promise<void> {
          from databases d join projects p on p.id = d.project_id
          where d.deleted_at is null and d.auto_grow`,
     );
+    const usage = usageOf(used.value, capacity.value);
+    await unblockFull(deps, usage);
     const steps = planGrowth(
         rows.map((row) => ({ id: row.id, projectId: row.project_id, name: row.name, storageGb: row.storage_gb, maxStorageGb: row.max_storage_gb, held: row.held })),
-        usageOf(used.value, capacity.value),
+        usage,
     );
     for (const step of steps) {
         if (step.kind !== 'grow') {
@@ -167,6 +175,31 @@ export async function growthPass(deps: GrowthDeps): Promise<void> {
         }
         await updateDatabase(deps.pool, step.row.projectId, step.row.id, { storageGb: toGb.value });
         deps.log({ msg: 'growth: grown', database: step.row.id, fromGb: step.row.storageGb, toGb: toGb.value });
+    }
+}
+
+/** Grows the PVCs of every nearly full Database whose Cluster CloudNativePG stopped for a full disk. */
+async function unblockFull(deps: GrowthDeps, usage: ReadonlyMap<string, VolumeUsage>): Promise<void> {
+    const full = [...usage].filter(([, volume]) => volume.used >= GROW_AT).map(([id]) => id);
+    if (full.length === 0) {
+        return;
+    }
+    const { rows } = await deps.pool.query<{ id: string; project_id: string; storage_gb: number }>(
+        'select id, project_id, storage_gb from databases where id = any($1) and deleted_at is null',
+        [full],
+    );
+    for (const row of rows) {
+        const namespace = projectNamespace(row.project_id);
+        const cluster = await deps.kube.readCluster(namespace, clusterName(row));
+        if (!cluster.ok || cluster.value?.phase !== DISK_FULL_PHASE || cluster.value.storageGb !== row.storage_gb) {
+            continue;
+        }
+        const grown = await deps.kube.growVolumes(namespace, clusterName(row), row.storage_gb);
+        deps.log(
+            grown.ok
+                ? { msg: 'growth: full volumes grown for CloudNativePG', database: row.id, toGb: row.storage_gb, volumes: grown.value }
+                : { msg: 'growth: cannot grow full volumes', database: row.id, error: grown.error },
+        );
     }
 }
 

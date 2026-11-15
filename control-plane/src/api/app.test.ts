@@ -137,6 +137,7 @@ const kube: ControlPlaneKube = {
     storageCapacity: async () => ok(storageCapacity),
     volumeNodes: async (_namespace, name) => ok(volumeNodes.get(name) ?? []),
     memoryFree: async (node) => ok(memoryFree.get(node)),
+    growVolumes: async () => ok([]),
     readRecoveryWindow: async (_namespace, name) => {
         const window = recoveryWindows.get(name);
         return typeof window === 'string' ? err(window) : ok(window);

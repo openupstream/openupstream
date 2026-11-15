@@ -263,7 +263,10 @@ operator has created it.
 `PROMETHEUS_URL` for each Database volume's use (`kubelet_volume_stats_*`)
 and raises `storageGb` by half for every Database with `autoGrow` whose
 fullest volume is 90% used, up to `maxStorageGb` and the room on its nodes,
-except while the Account has a Hold. Each decision is logged (`growth:`).
+except while the Account has a Hold. A Cluster CloudNativePG stopped for a
+full disk (phase `Not enough disk space`) gets its PVCs grown to the row's
+size once its spec has it, as CloudNativePG waits for that without doing
+it. Each decision is logged (`growth:`).
 Without `PROMETHEUS_URL` the pass does not run.
 
 ## Tests

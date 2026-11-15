@@ -88,6 +88,7 @@ describe('growthPass', () => {
         ({
             storageCapacity: async () => ok(new Map([['node-fsn', freeGb * GiB], ['node-lim', freeGb * GiB]])),
             volumeNodes: async () => ok(['node-fsn', 'node-lim']),
+            readCluster: async () => ok({ instances: 2, readyInstances: 2, ready: true }),
         }) as unknown as ControlPlaneKube;
 
     test('grows full Databases with auto-grow by half, by what fits, and leaves the others', async () => {
@@ -124,6 +125,31 @@ describe('growthPass', () => {
         await growthPass({ pool: db.pool, kube: kube(0.5), prometheus, log: (entry) => logs.push(entry) });
         assert.equal(await sizeOf(tight), 10);
         assert.ok(logs.some((entry) => entry['msg'] === 'growth: no room on its nodes' && entry['database'] === tight));
+    });
+
+    test("a Cluster CloudNativePG stopped for a full disk gets its PVCs grown to the row's size, once the Cluster has it", async () => {
+        const stuck = await insert('stuck', 2, 'auto_grow', [false]);
+        const grown: [string, number][] = [];
+        let clusterGb = 1;
+        const fakeKube = {
+            readCluster: async () => ok({ instances: 2, readyInstances: 1, ready: false, storageGb: clusterGb, phase: 'Not enough disk space' }),
+            growVolumes: async (_namespace: string, name: string, gb: number) => {
+                grown.push([name, gb]);
+                return ok([`${name}-1`, `${name}-2`]);
+            },
+            storageCapacity: async () => ok(undefined),
+            volumeNodes: async () => ok([]),
+        } as unknown as ControlPlaneKube;
+        const prometheus = async (query: string) =>
+            ok([{ labels: { persistentvolumeclaim: `db-${stuck}-1` }, value: query === USED_QUERY ? 0.9999 : 0.98 * GiB }]);
+        const logs: Record<string, unknown>[] = [];
+        await growthPass({ pool: db.pool, kube: fakeKube, prometheus, log: (entry) => logs.push(entry) });
+        assert.deepEqual(grown, [], 'the operator has not applied the 2 GB yet');
+        clusterGb = 2;
+        await growthPass({ pool: db.pool, kube: fakeKube, prometheus, log: (entry) => logs.push(entry) });
+        assert.deepEqual(grown, [[`db-${stuck}`, 2]], 'also with auto-grow off: the customer resized it');
+        assert.ok(logs.some((entry) => entry['msg'] === 'growth: full volumes grown for CloudNativePG'));
+        await db.pool.query('delete from databases where id = $1', [stuck]);
     });
 
     test('a held Account is not grown; Prometheus down grows nothing', async () => {

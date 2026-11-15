@@ -28,7 +28,16 @@ export interface ClusterStatus {
     readonly storageGb?: number | undefined;
     /** Volumes CloudNativePG is still growing (`status.resizingPVC`). */
     readonly resizingVolumes?: number;
+    /** CloudNativePG's phase, e.g. `Cluster in healthy state` or DISK_FULL_PHASE. */
+    readonly phase?: string | undefined;
 }
+
+/**
+ * CloudNativePG's phase once a volume is full: it stops the instance and
+ * waits for the volume to grow, but does not grow the PVCs itself when the
+ * Cluster's size rises (dev cluster, 2026-11-15).
+ */
+export const DISK_FULL_PHASE = 'Not enough disk space';
 
 /**
  * How far back a Database's backups reach, from its ObjectStore's status
@@ -146,6 +155,8 @@ export interface ControlPlaneKube {
      * the node is gone.
      */
     memoryFree(nodeName: string): Promise<Result<number | undefined, string>>;
+    /** Raises every PVC of the Cluster `name` asking for less than `storageGb` to it; the names it raised. */
+    growVolumes(namespace: string, name: string, storageGb: number): Promise<Result<string[], string>>;
     /** The nodes holding the volumes of the Cluster `name` (its PVCs' selected node). */
     volumeNodes(namespace: string, name: string): Promise<Result<string[], string>>;
     /** The Site (zone label) of a node; undefined when it has none or is gone. */
@@ -229,7 +240,7 @@ interface ClusterObject {
     kind: string;
     metadata: { name: string; namespace: string };
     spec?: { instances?: number; resources?: { limits?: { memory?: string } }; storage?: { size?: string } };
-    status?: { readyInstances?: number; conditions?: { type: string; status: string }[]; resizingPVC?: string[] };
+    status?: { readyInstances?: number; conditions?: { type: string; status: string }[]; resizingPVC?: string[]; phase?: string };
 }
 
 interface ObjectStoreObject {
@@ -321,6 +332,7 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
                 memoryMb: quantityIn(cluster.spec?.resources?.limits?.memory, 'Mi'),
                 storageGb: quantityIn(cluster.spec?.storage?.size, 'Gi'),
                 resizingVolumes: cluster.status?.resizingPVC?.length ?? 0,
+                phase: cluster.status?.phase,
             });
         },
         readRecoveryWindow: async (namespace, name) => {
@@ -444,6 +456,47 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
                 .flatMap((pod) => pod.spec?.containers ?? [])
                 .reduce((sum, container) => sum + (bytesOf(container.resources?.requests?.['memory'] ?? '0') ?? 0), 0);
             return ok(allocatable - requested);
+        },
+        growVolumes: async (namespace, name, storageGb) => {
+            const pvcs = await within(
+                api.list<{ apiVersion: string; kind: string; metadata: { name: string }; spec?: { resources?: { requests?: Record<string, string> } } }>(
+                    'v1',
+                    'PersistentVolumeClaim',
+                    namespace,
+                    undefined,
+                    undefined,
+                    undefined,
+                    undefined,
+                    `cnpg.io/cluster=${name}`,
+                ),
+                timeoutMs,
+            );
+            if (!pvcs.ok) {
+                return err(pvcs.error.message);
+            }
+            const small = pvcs.value.items.filter((pvc) => (bytesOf(pvc.spec?.resources?.requests?.['storage'] ?? '0') ?? 0) < storageGb * 1024 ** 3);
+            const results = await Promise.all(
+                small.map((pvc) =>
+                    within(
+                        api.patch(
+                            {
+                                apiVersion: 'v1',
+                                kind: 'PersistentVolumeClaim',
+                                metadata: { name: pvc.metadata.name, namespace },
+                                spec: { resources: { requests: { storage: `${storageGb}Gi` } } },
+                            },
+                            undefined,
+                            undefined,
+                            FIELD_MANAGER,
+                            undefined,
+                            PatchStrategy.MergePatch,
+                        ),
+                        timeoutMs,
+                    ),
+                ),
+            );
+            const failed = results.find((result) => !result.ok);
+            return failed !== undefined && !failed.ok ? err(failed.error.message) : ok(small.map((pvc) => pvc.metadata.name));
         },
         volumeNodes: async (namespace, name) => {
             const result = await within(
