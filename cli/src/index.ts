@@ -67,6 +67,7 @@ import { type DesiredService, formatServices, planServiceDeploy, waitUntilRunnin
 import { apiAccess } from './session.js';
 import { readSecretValue } from './stdin.js';
 import { waitUntil } from './wait.js';
+import { CLI_VERSION } from './version.js';
 
 const USAGE = `usage:
   oup login [--api <url>] [--no-browser]
@@ -845,7 +846,7 @@ const run = async (): Promise<void> => {
         case 'version':
         case '--version':
         case '-v':
-            console.log(`oup ${SDK_VERSION}`);
+            console.log(`oup ${CLI_VERSION} (sdk ${SDK_VERSION})`);
             return;
         case undefined:
         case 'help':

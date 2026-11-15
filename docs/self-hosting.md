@@ -272,10 +272,12 @@ the domain's DNS is (ours: domaindiscount24).
    aws sesv2 send-email --profile openupstream-ses --region eu-central-1 --from-email-address no-reply@openupstream.com --destination ToAddresses=<you> --content 'Simple={Subject={Data="SES test"},Body={Text={Data="Sent with the send-only key."}}}'
    ```
 
-## 7. npm: the SDK
+## 7. npm: the SDK and the CLI
 
-`@openupstream/sdk` is published from GitHub Actions without a token (#80).
-Only needed by whoever publishes it; using the SDK needs nothing.
+`@openupstream/sdk` and `@openupstream/cli` are published from GitHub
+Actions without a token (#80). Only needed by whoever publishes them;
+using them needs nothing. Steps 2 to 4 are once per package (`sdk`, then
+`cli`; the CLI needs the SDK version it depends on on npm first).
 
 1. **An npm account** with two-factor authentication, and an
    **organization** `openupstream` (free plan, public packages) at
@@ -292,21 +294,24 @@ Only needed by whoever publishes it; using the SDK needs nothing.
    npm ci && npm run build -w sdk && npm publish -w sdk
    ```
 
+   For the CLI, `npm run build -w sdk -w cli && npm publish -w cli`.
+
 3. **On GitHub**, in the repository's settings:
    - an **Environment** `npm-release` with the maintainers as required
      reviewers and, under deployment branches and tags, only the tag
-     pattern `sdk-v*`;
-   - a **tag ruleset** "sdk release tags" for `refs/tags/sdk-v*` that
-     restricts creation, update and deletion, bypassed only by repository
-     and organization admins.
+     patterns `sdk-v*` and `cli-v*`;
+   - **tag rulesets** "sdk release tags" for `refs/tags/sdk-v*` and "cli
+     release tags" for `refs/tags/cli-v*` that restrict creation, update
+     and deletion, bypassed only by repository and organization admins.
 4. **Trusted publishing**: on the package's page on npmjs.com, **Settings →
    Trusted publisher → GitHub Actions**: organization `openupstream`,
-   repository `openupstream`, workflow `sdk-release.yml`, environment
-   `npm-release`, allowed action **npm publish**. Then, under
+   repository `openupstream`, workflow `sdk-release.yml` (for the CLI
+   `cli-release.yml`), environment `npm-release`, allowed action **npm
+   publish**. Then, under
    **Publishing access**, require two-factor authentication and disallow
    tokens, so only the workflow can publish.
-5. Later versions: a `sdk-v<version>` tag, then an approval on GitHub
-   (sdk/README.md, "Releasing").
+5. Later versions: a `sdk-v<version>` or `cli-v<version>` tag, then an
+   approval on GitHub (sdk/README.md and cli/README.md, "Releasing").
 
 ## 8. The CLI's sign-in
 
