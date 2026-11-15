@@ -52,7 +52,7 @@ url=$1
 case "$method $url" in
   "GET https://api.bunny.net/dnszone?search=dev.example.com") echo '{"Items":[{"Domain":"dev.example.com","Id":7},{"Domain":"a.dev.example.com","Id":8}]}' ;;
   "GET https://api.bunny.net/dnszone?search="*) echo '{"Items":[]}' ;;
-  "GET https://api.bunny.net/dnszone/7") echo '{"Records":[{"Id":1,"Type":0,"Name":"home","Value":"10.0.0.9"},{"Id":2,"Type":0,"Name":"other","Value":"1.1.1.1"}]}' ;;
+  "GET https://api.bunny.net/dnszone/7") echo '{"Records":[{"Id":1,"Type":0,"Name":"home","Value":"10.0.0.9"},{"Id":2,"Type":0,"Name":"other","Value":"1.1.1.1"},{"Id":3,"Type":0,"Name":"api.home","Value":"10.0.0.9"}]}' ;;
   PUT*) echo "PUT $(jq -c . <<<"$body")" >>"$STUB_LOG"; echo '{}' ;;
   DELETE*) echo "DELETE \${url##*/}" >>"$STUB_LOG" ;;
   *) echo "unexpected: curl $method $url" >&2; exit 9 ;;
@@ -201,7 +201,7 @@ test('dns.sh puts names inside a zone and points them at the single node\'s IPv4
     ]);
     // The stale `home` record goes; someone else's `other` stays.
     assert.match(platform.log, /^DELETE 1$/m);
-    assert.doesNotMatch(platform.log, /^DELETE 2$/m);
+    assert.doesNotMatch(platform.log, /^DELETE [23]$/m);
     const customer = run('./dns.sh', { ...env, DNS_NAMES: '* *.s3' });
     assert.deepEqual(
         puts(customer.log).map((record) => record.Name),
@@ -225,10 +225,10 @@ test('dns.sh points a zone apex at every compute node\'s ExternalIP, health-chec
     );
 });
 
-test('dns.sh --delete removes only its own names and needs no cluster', () => {
+test('dns.sh --delete removes only its own names, the former api record included, and needs no cluster', () => {
     const { status, log } = run('./dns.sh --delete', { DNS_DOMAIN: 'home.dev.example.com', KUBECTL_FAIL: '1' });
     assert.equal(status, 0);
-    assert.equal(log.trim(), 'DELETE 1');
+    assert.equal(log.trim(), 'DELETE 1\nDELETE 3');
 });
 
 test('dns.sh fails for a domain in no bunny.net zone', () => {

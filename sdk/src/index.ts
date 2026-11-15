@@ -55,7 +55,8 @@ export interface ClientOptions {
 /**
  * In a browser on the dashboard's origin, which is the API's too: no token,
  * the browser sends madAuth's session cookie along. `baseUrl` can be a path
- * there, e.g. `/api`.
+ * there, e.g. `/api`. To another origin the browser sends no cookie, and
+ * the API answers 401.
  */
 export interface CookieSessionOptions {
     baseUrl?: string;

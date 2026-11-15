@@ -22,7 +22,10 @@ Pages for Databases, Buckets, Domains, Services, Jobs and Secrets follow.
   cookie, so no script holds a credential.
 - The API is under `/api` of the dashboard's own host (decision 117), so
   the browser sends the session cookie along (`session: 'cookie'` in the
-  SDK) and no other host ever receives it.
+  SDK) and no other host ever receives it. The API accepts the cookie
+  only with the browser's `Sec-Fetch-Site: same-origin`, which browsers
+  send to HTTPS and localhost origins only: the dashboard does not work
+  over plain HTTP on another host.
 
 ## Development
 
