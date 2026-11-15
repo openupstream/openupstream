@@ -62,6 +62,12 @@ Traefik already implements is configured, not reimplemented.
   runs go with them, by Kubernetes' garbage collection.
 - `src/owned.ts`: the apply-then-prune pass the Routes, Services and Jobs
   operators share.
+- `src/cpu-agent/`: the CPU agent (ARCHITECTURE.md, decision 113), the
+  image's other entry point (`node operators/dist/cpu-agent/main.js`, a
+  DaemonSet in `deploy/cpu-agent.yaml`): every pod's CPU total from its
+  cgroup on the node, read every second and when its last process exits,
+  served on :9101/metrics as `openupstream_pod_cpu_usage_seconds_total` and
+  kept 15 minutes after the pod ended. `totals.ts` is the pure bookkeeping.
 - `src/main.ts`: the image's entry point; `OPERATOR` (`databases`, the
   default, `routes`, `services` or `jobs`) picks which operator the process runs,
   each in its own Deployment with its own ServiceAccount.

@@ -3,9 +3,9 @@
  * completed hour becomes usage events, one per Resource and unit, which the
  * billing service rates once a month.
  *
- * - `cpu_seconds`: what the Resource's pods used, from cAdvisor's per-pod
- *   counter in Prometheus (both Database instances and the Pooler, every
- *   replica of a Service, every run of a Job).
+ * - `cpu_seconds`: what the Resource's pods used, from the CPU agent's
+ *   per-pod totals in Prometheus (both Database instances and the Pooler,
+ *   every replica of a Service, every run of a Job, short ones included).
  * - `memory_gb_hours`: the reserved size. A Database's from its row, once
  *   (its standby is in the price), for the part of the hour it existed; a
  *   Service's and Job's from Prometheus, each running pod's memory request
@@ -58,11 +58,23 @@ export interface MeteredBucket {
     readonly deletedAt: Date | undefined;
 }
 
+/** One run of a Job (a pod), from kube-state-metrics: when it started and ended, and its memory request. */
+export interface JobRun {
+    readonly namespace: string;
+    readonly pod: string;
+    readonly start: Date;
+    /** Its completion, or when it was last seen (a run stopped or still running). */
+    readonly end: Date;
+    readonly memoryBytes: number;
+}
+
 export interface HourFigures {
     /** CPU seconds per (namespace, pod) over the hour. */
     readonly cpu: readonly PrometheusSample[];
-    /** Memory requested by running Service and Job pods, in byte-minutes, per (namespace, pod). */
+    /** Memory requested by running Service pods, in byte-minutes, per (namespace, pod). */
     readonly memory: readonly PrometheusSample[];
+    /** Job runs that overlapped the hour: their memory for exactly the time they ran (a run lasts seconds, too short to sample). */
+    readonly jobRuns: readonly JobRun[];
     /** Response bytes per Traefik service over the hour. */
     readonly egress: readonly PrometheusSample[];
     readonly databases: readonly MeteredDatabase[];
@@ -119,6 +131,10 @@ export function eventsForHour(start: Date, figures: HourFigures): { readonly eve
     fromPods(figures.cpu, 'cpu_seconds', 1);
     // Byte-minutes to GB-hours.
     fromPods(figures.memory, 'memory_gb_hours', 1 / 60 / GiB);
+    for (const run of figures.jobRuns) {
+        const share = shareOfHour(start, run.start, run.end);
+        fromPods([{ labels: { namespace: run.namespace, pod: run.pod }, value: run.memoryBytes * share }], 'memory_gb_hours', 1 / GiB);
+    }
     for (const sample of figures.egress) {
         const service = TRAEFIK_SERVICE.exec(sample.labels['service'] ?? '');
         const kind = KIND_OF_PREFIX[service?.[2] ?? ''];
@@ -148,14 +164,44 @@ export function eventsForHour(start: Date, figures: HourFigures): { readonly eve
 }
 
 const PROJECTS = 'namespace=~"project-.*"';
+const AGENT_CPU = `openupstream_pod_cpu_usage_seconds_total{${PROJECTS}, pod=~"(db|svc|job)-.*"}`;
 /**
  * Every pod's CPU seconds over the hour ending at the query time, from the
- * pod-level cgroup (container="" and image="": not a container's, not the
- * sandbox's), which also covers gVisor's sandbox.
+ * CPU agent's totals (decision 113): the kernel's count for the pod's whole
+ * life, gVisor's sandbox included, kept after the pod ended. A pod's hour is
+ * its total at the end of the hour less its total at the end of the hour
+ * before (none for a pod that started in this hour), per uid, so a restarted
+ * pod of the same name starts from zero. Absolute totals, not increase():
+ * nothing is lost before a first scrape or after a last one.
  */
-export const CPU_QUERY = `sum by (namespace, pod) (increase(container_cpu_usage_seconds_total{${PROJECTS}, container="", image="", pod=~"(db|svc|job)-.*"}[1h]))`;
-/** Byte-minutes of memory requested by Service and Job pods while Running, minute by minute over the hour. */
-export const MEMORY_QUERY = `sum by (namespace, pod) (sum_over_time((sum by (namespace, pod) (kube_pod_container_resource_requests{${PROJECTS}, resource="memory", pod=~"(svc|job)-.*"}) * on (namespace, pod) (max by (namespace, pod) (kube_pod_status_phase{${PROJECTS}, phase="Running"}) == 1))[1h:1m]))`;
+export const CPU_QUERY = `sum by (namespace, pod) (max by (namespace, pod, uid) (max_over_time(${AGENT_CPU}[1h])) - (max by (namespace, pod, uid) (max_over_time(${AGENT_CPU}[1h] offset 1h)) or max by (namespace, pod, uid) (max_over_time(${AGENT_CPU}[1h])) * 0))`;
+/** Byte-minutes of memory requested by Service pods while Running, minute by minute over the hour. */
+export const MEMORY_QUERY = `sum by (namespace, pod) (sum_over_time((sum by (namespace, pod) (kube_pod_container_resource_requests{${PROJECTS}, resource="memory", pod=~"svc-.*"}) * on (namespace, pod) (max by (namespace, pod) (kube_pod_status_phase{${PROJECTS}, phase="Running"}) == 1))[1h:1m]))`;
+const JOB_PODS = `${PROJECTS}, pod=~"job-.*"`;
+/** Job runs seen in the hour: start (epoch seconds), completion, last seen, memory request. */
+export const JOB_START_QUERY = `max by (namespace, pod) (max_over_time(kube_pod_start_time{${JOB_PODS}}[1h]))`;
+export const JOB_COMPLETION_QUERY = `max by (namespace, pod) (max_over_time(kube_pod_completion_time{${JOB_PODS}}[1h]))`;
+export const JOB_LAST_SEEN_QUERY = `max by (namespace, pod) (max_over_time(timestamp(kube_pod_start_time{${JOB_PODS}})[1h:30s]))`;
+export const JOB_MEMORY_QUERY = `sum by (namespace, pod) (max_over_time(kube_pod_container_resource_requests{${JOB_PODS}, resource="memory"}[1h]))`;
+
+/** Job runs from the four queries' answers; a run needs at least a start and a memory request. */
+export function jobRunsOf(
+    starts: readonly PrometheusSample[],
+    completions: readonly PrometheusSample[],
+    lastSeen: readonly PrometheusSample[],
+    memory: readonly PrometheusSample[],
+): JobRun[] {
+    const key = (sample: PrometheusSample) => `${sample.labels['namespace'] ?? ''}/${sample.labels['pod'] ?? ''}`;
+    const byKey = (samples: readonly PrometheusSample[]) => new Map(samples.map((sample) => [key(sample), sample.value]));
+    const [completion, seen, bytes] = [byKey(completions), byKey(lastSeen), byKey(memory)];
+    return starts.flatMap((sample): JobRun[] => {
+        const end = completion.get(key(sample)) ?? seen.get(key(sample));
+        const memoryBytes = bytes.get(key(sample));
+        return end === undefined || memoryBytes === undefined
+            ? []
+            : [{ namespace: sample.labels['namespace'] ?? '', pod: sample.labels['pod'] ?? '', start: new Date(sample.value * 1000), end: new Date(end * 1000), memoryBytes }];
+    });
+}
 /** Whether Prometheus scraped anything at the hour's end: without that, empty answers mean no data, not no usage. */
 export const COVERAGE_QUERY = 'count(up == 1)';
 /** Response bytes per rule's service over the hour. */
@@ -248,8 +294,13 @@ async function meterHour(
     sizes: ReadonlyMap<string, number>,
 ): Promise<Result<{ events: number; unattributed: number }, string>> {
     const end = new Date(start.getTime() + HOUR_MS);
-    const [cpu, memory, egress, coverage] = await Promise.all([CPU_QUERY, MEMORY_QUERY, EGRESS_QUERY, COVERAGE_QUERY].map((query) => deps.prometheus(query, end)));
-    const failed = [cpu, memory, egress, coverage].find((result) => result !== undefined && !result.ok);
+    const answers = await Promise.all(
+        [CPU_QUERY, MEMORY_QUERY, EGRESS_QUERY, COVERAGE_QUERY, JOB_START_QUERY, JOB_COMPLETION_QUERY, JOB_LAST_SEEN_QUERY, JOB_MEMORY_QUERY].map((query) =>
+            deps.prometheus(query, end),
+        ),
+    );
+    const [cpu, memory, egress, coverage, jobStarts, jobCompletions, jobLastSeen, jobMemory] = answers;
+    const failed = answers.find((result) => !result.ok);
     if (failed !== undefined && !failed.ok) {
         return err(`Prometheus: ${failed.error}`);
     }
@@ -281,6 +332,12 @@ async function meterHour(
         cpu: cpu?.ok ? cpu.value : [],
         memory: memory?.ok ? memory.value : [],
         egress: egress?.ok ? egress.value : [],
+        jobRuns: jobRunsOf(
+            jobStarts?.ok ? jobStarts.value : [],
+            jobCompletions?.ok ? jobCompletions.value : [],
+            jobLastSeen?.ok ? jobLastSeen.value : [],
+            jobMemory?.ok ? jobMemory.value : [],
+        ),
         databases: databases.rows.map((row) => ({
             id: row.id,
             projectId: row.project_id,

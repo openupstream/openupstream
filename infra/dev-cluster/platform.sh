@@ -220,3 +220,8 @@ kubectl apply -f "$ROOT/operators/deploy/jobs-rbac.yaml" >/dev/null
 sed "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" "$ROOT/operators/deploy/jobs-operator.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n openupstream-system rollout status deployment/jobs-operator --timeout=5m
+
+# The CPU agent on each compute node, for metering (decision 113).
+sed "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" "$ROOT/operators/deploy/cpu-agent.yaml" |
+  kubectl apply -f - >/dev/null
+kubectl -n openupstream-system rollout status daemonset/cpu-agent --timeout=5m

@@ -73,3 +73,20 @@ spec:
     # Keep the Certificate's own `namespace` label instead of renaming it
     # `exported_namespace`: the certificate alerts filter on it.
     - {port: http-metrics, honorLabels: true}
+---
+# The CPU agent on each compute node (operators/deploy/cpu-agent.yaml,
+# decision 113): every pod's CPU total for metering. honorLabels keeps the
+# measured pod's namespace and pod rather than the agent's own.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cpu-agent
+  namespace: monitoring
+spec:
+  namespaceSelector: {matchNames: [openupstream-system]}
+  selector:
+    matchLabels: {app.kubernetes.io/name: cpu-agent}
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 30s
+      honorLabels: true

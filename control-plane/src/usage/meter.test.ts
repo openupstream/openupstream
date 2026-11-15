@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { err, ok } from '../result.js';
 import { fakeStorage } from '../testing/storage.js';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
-import { COVERAGE_QUERY, CPU_QUERY, HOUR_MS, eventsForHour, hoursToMeter, meteringPass, shareOfHour } from './meter.js';
+import { COVERAGE_QUERY, CPU_QUERY, HOUR_MS, eventsForHour, hoursToMeter, jobRunsOf, meteringPass, shareOfHour } from './meter.js';
 import { accountUsage, monthBounds } from './store.js';
 
 const GiB = 1024 ** 3;
@@ -15,7 +15,7 @@ const job = '55555555-5555-4555-8555-555555555555';
 const bucket = '66666666-6666-4666-8666-666666666666';
 const hour = new Date('2026-11-15T10:00:00Z');
 const ns = `project-${project}`;
-const empty = { cpu: [], memory: [], egress: [], databases: [], buckets: [], accountOf: new Map([[project, account]]) };
+const empty = { cpu: [], memory: [], jobRuns: [], egress: [], databases: [], buckets: [], accountOf: new Map([[project, account]]) };
 
 test('the share of an hour a Resource existed', () => {
     const at = (minute: number) => new Date(hour.getTime() + minute * 60_000);
@@ -86,6 +86,21 @@ describe('eventsForHour', () => {
         assert.equal(unattributed, 1);
     });
 
+    test("a Job's runs bill their memory for exactly the seconds they ran, also when they cross the hour", () => {
+        const at = (minute: number, second = 0) => new Date(hour.getTime() + minute * 60_000 + second * 1000);
+        const GiB256 = 256 * 1024 ** 2;
+        const { events } = eventsForHour(hour, {
+            ...empty,
+            jobRuns: [
+                // 120 runs of 3 s at 256 MiB: 360 s × 0.25 GB.
+                ...Array.from({ length: 120 }, (_, i) => ({ namespace: ns, pod: `job-${job}-${i}-abcde`, start: at(Math.floor(i / 2), (i % 2) * 30), end: at(Math.floor(i / 2), (i % 2) * 30 + 3), memoryBytes: GiB256 })),
+                // A run from 30 s before the hour to 30 s into it: half counts here.
+                { namespace: ns, pod: `job-${job}-x-fghij`, start: at(0, -30), end: at(0, 30), memoryBytes: GiB256 },
+            ],
+        });
+        assert.deepEqual(events.map((e) => [e.kind, e.unit, e.quantity]), [['job', 'memory_gb_hours', Math.round(((360 + 30) / 3600) * 0.25 * 1e6) / 1e6]]);
+    });
+
     test('nothing for zero, and nothing for a Project whose Account is unknown', () => {
         const { events, unattributed } = eventsForHour(hour, {
             ...empty,
@@ -105,6 +120,20 @@ test('the hours to meter: after the last one, complete and settled, at most a da
     assert.deepEqual(hoursToMeter(new Date('2026-11-15T08:00:00Z'), new Date('2026-11-15T10:06:00Z')).map((h) => h.toISOString()), ['2026-11-15T09:00:00.000Z']);
     assert.equal(hoursToMeter(new Date('2026-11-13T00:00:00Z'), now).length, 24);
     assert.equal(hoursToMeter(new Date('2026-10-01T00:00:00Z'), now)[0]?.toISOString(), '2026-11-01T11:00:00.000Z', 'from 14 days back');
+});
+
+test('Job runs from the start, completion, last-seen and memory answers; a run without completion ends when last seen', () => {
+    const at = (labels: Record<string, string>, value: number) => ({ labels, value });
+    const a = { namespace: ns, pod: `job-${job}-1-a` };
+    const b = { namespace: ns, pod: `job-${job}-2-b` };
+    const runs = jobRunsOf([at(a, 1000), at(b, 2000), at({ namespace: ns, pod: 'job-x' }, 5)], [at(a, 1003)], [at(a, 1100), at(b, 2050)], [at(a, 2 ** 28), at(b, 2 ** 28)]);
+    assert.deepEqual(
+        runs.map((r) => [r.pod, r.start.getTime() / 1000, r.end.getTime() / 1000]),
+        [
+            [a.pod, 1000, 1003],
+            [b.pod, 2000, 2050],
+        ],
+    );
 });
 
 test('months in UTC', () => {
