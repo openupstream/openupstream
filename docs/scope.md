@@ -17,7 +17,8 @@ deletes it all.
    in the Frankfurt region (async), automatic failover, PgBouncer
    (transaction pooling; session features such as `LISTEN` need a direct
    connection), always on with a 256 MB floor, backups and point-in-time
-   recovery, pgvector enabled.
+   recovery into a new Database (also of a deleted one, within the backup
+   retention window), pgvector enabled.
 2. **Object storage**: S3-compatible Buckets (Garage), every object stored in
    three Sites. Reads and writes keep working when one Site is down. Each
    Bucket has an access key of its own and is reached at its own hostname,

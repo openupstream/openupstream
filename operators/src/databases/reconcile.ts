@@ -17,8 +17,10 @@ import { type Result, err, ok } from '../result.js';
 import {
     BACKUP_CREDENTIAL_KEYS,
     type DatabaseConfig,
-    type DatabaseManifestError,
+    type DatabaseManifests,
+    type RestoreError,
     databaseManifests,
+    restoredDatabaseManifests,
 } from './manifests.js';
 
 export type { DatabaseRow };
@@ -35,7 +37,7 @@ export interface DatabasePlan {
     /** Per Database: ObjectStore, Cluster, Pooler, ScheduledBackup. */
     readonly databases: readonly ApplyChain[];
     /** Rows that cannot run; their existing objects are left alone. */
-    readonly invalid: readonly { readonly databaseId: string; readonly errors: readonly DatabaseManifestError[] }[];
+    readonly invalid: readonly { readonly databaseId: string; readonly errors: readonly RestoreError[] }[];
 }
 
 /** The platform's backup credentials, copied into a Project's namespace. */
@@ -56,6 +58,25 @@ const uniqueBy = <T>(items: readonly T[], key: (item: T) => string): T[] => [
 ];
 
 /**
+ * A restoring Database gets the recovery bootstrap, which names the
+ * source's ObjectStore. Once the control plane has recorded the restore as
+ * finished, its Cluster is rendered like any other: the Barman Cloud plugin
+ * stops every reconcile of a Cluster that names a missing ObjectStore
+ * (failovers included, seen on the dev cluster 2026-11-10), and the source's
+ * goes after its retention window. CloudNativePG reads the bootstrap only
+ * when it creates the Cluster, so dropping it changes nothing else.
+ */
+const manifestsFor = (row: DatabaseRow, config: DatabaseConfig): Result<DatabaseManifests, RestoreError[]> => {
+    const restore = row.database.restoredFrom;
+    return restore === undefined || row.restoring !== true
+        ? databaseManifests(row.project, row.database, config)
+        : restoredDatabaseManifests(row.project, row.database, config, {
+              database: { id: restore.databaseId, projectId: row.project.id },
+              targetTime: restore.targetTime,
+          });
+};
+
+/**
  * What to apply so the cluster runs every Database in `rows`.
  * `backupCredentials` is the `data` of the platform's backup credentials
  * Secret.
@@ -65,7 +86,7 @@ export function planDatabases(
     config: DatabaseConfig,
     backupCredentials: Readonly<Record<string, string>>,
 ): DatabasePlan {
-    const results = rows.map((row) => ({ row, result: databaseManifests(row.project, row.database, config) }));
+    const results = rows.map((row) => ({ row, result: manifestsFor(row, config) }));
     const valid = results.flatMap(({ row, result }) => (result.ok ? [{ row, manifests: result.value }] : []));
     const projects = uniqueBy(
         valid.map(({ row }) => row.project),

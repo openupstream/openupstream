@@ -10,7 +10,13 @@
  *    rows before the delete can still re-apply them until then;
  * 2. once the retention window has passed, deletes its backups from the
  *    bucket, then its ObjectStore, then its row. Until then it can be
- *    restored into a new Database;
+ *    restored into a new Database; an unfinished restore from it, created
+ *    within RESTORE_GRACE, holds this back, so its recovery still finds the
+ *    archive. Before that, each pass records the restores whose Cluster has
+ *    had a ready instance (decision 108): from then on the operator renders
+ *    their Cluster without the source's ObjectStore, which CloudNativePG's
+ *    Barman Cloud plugin would otherwise need for every reconcile, failover
+ *    included;
  * 3. deletes a deleted Bucket's key, objects and Garage bucket, then its
  *    row (decision 82): unlike a Database, nothing of it is kept;
  * 4. removes a deleted Project's namespace once it has no Database or
@@ -49,6 +55,14 @@ const CNPG = 'postgresql.cnpg.io/v1';
  * after 30 s): after this, no pass that still saw the row is running.
  */
 export const OPERATOR_GRACE = '5 minutes';
+
+/**
+ * How long an unfinished restore may still read its source's archive:
+ * longer than fetching a base backup and replaying its WAL takes for any
+ * Database we run. A restore that has not finished by then has failed, and
+ * no longer keeps its source from being purged.
+ */
+export const RESTORE_GRACE = '1 day';
 
 const runningObjects = (database: { id: string; projectId: string }): ObjectRef[] => {
     const namespace = projectNamespace(database.projectId);
@@ -89,11 +103,33 @@ async function removeRunningObjects(deps: CleanupDeps): Promise<void> {
     }
 }
 
-async function purgeExpiredDatabases(deps: CleanupDeps): Promise<void> {
+/** Records each live restored Database whose Cluster has a ready instance as finished. */
+async function recordFinishedRestores(deps: CleanupDeps): Promise<void> {
     const { rows } = await deps.pool.query<DeletedDatabase>(
         `select id, project_id from databases
-         where objects_removed_at is not null and deleted_at < now() - $1::interval order by deleted_at`,
-        [deps.retention],
+         where restore_source_id is not null and restore_finished_at is null and deleted_at is null`,
+    );
+    for (const row of rows) {
+        const cluster = await deps.kube.readCluster(projectNamespace(row.project_id), clusterName(row));
+        if (!cluster.ok) {
+            deps.log({ msg: 'cleanup: cannot read a restored Cluster', database: row.id, error: cluster.error });
+            continue;
+        }
+        if (cluster.value !== undefined && cluster.value.readyInstances > 0) {
+            await deps.pool.query('update databases set restore_finished_at = now() where id = $1', [row.id]);
+            deps.log({ msg: 'cleanup: restore finished', database: row.id });
+        }
+    }
+}
+
+async function purgeExpiredDatabases(deps: CleanupDeps): Promise<void> {
+    const { rows } = await deps.pool.query<DeletedDatabase>(
+        `select id, project_id from databases d
+         where objects_removed_at is not null and deleted_at < now() - $1::interval
+           and not exists (select 1 from databases r where r.restore_source_id = d.id
+                           and r.restore_finished_at is null and r.created_at > now() - $2::interval)
+         order by deleted_at`,
+        [deps.retention, RESTORE_GRACE],
     );
     for (const row of rows) {
         const deleted = await deps.backups.deletePrefix(backupPrefix(row.project_id, row.id));
@@ -157,6 +193,7 @@ export async function cleanupPass(deps: CleanupDeps): Promise<void> {
         deps.log({ msg: 'cleanup: unconfirmed waitlist addresses deleted', count: unconfirmed });
     }
     await removeRunningObjects(deps);
+    await recordFinishedRestores(deps);
     await purgeExpiredDatabases(deps);
     await purgeDeletedBuckets(deps);
     await purgeEmptyProjects(deps);

@@ -85,7 +85,7 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `GET /v1/projects/{id}` | |
 | `DELETE /v1/projects/{id}` | 202: the Project and its Databases and Buckets are deleted, see Cleanup; its Domains and Routes at once |
 | `GET /v1/projects/{id}/databases` | with each Database's `state` and in-cluster `connection` (no password: the Project's Services and Jobs get the URL as `DATABASE_URL_<NAME>`, the oldest's as `DATABASE_URL`) |
-| `POST /v1/projects/{id}/databases` | `{name, homeSite?, memoryMb, storageGb}` → 201, `state: provisioning`; 402 if the Account has a Hold |
+| `POST /v1/projects/{id}/databases` | `{name, homeSite?, memoryMb, storageGb, restoreFrom?}` → 201, `state: provisioning`; 402 if the Account has a Hold. `restoreFrom: {databaseId, targetTime?}` makes it a copy of another Database of the Project, live or deleted within the retention window, at that time (RFC 3339 with its zone) or the latest point its backups reach (decision 108): 400 for a time before its oldest base backup or less than 5 minutes before now (or its deletion), 409 before its first base backup has finished |
 | `GET /v1/projects/{id}/databases/{id}` | `state` read live from the Cluster |
 | `DELETE /v1/projects/{id}/databases/{id}` | 202 |
 | `GET /v1/projects/{id}/buckets` | the Buckets, without their keys |
@@ -188,7 +188,11 @@ Database's Cluster, Pooler and ScheduledBackup, and again on every pass for
 re-applies them; after `BACKUP_RETENTION` it
 deletes the Database's backup folder from the bucket, its ObjectStore and its
 row. Until the retention has passed a deleted Database can be restored
-into a new one (`docs/runbooks/restore-from-backup.md`).
+into a new one (`restoreFrom` on create, decision 108); while a restore
+from it is unfinished (for at most `RESTORE_GRACE`, a day) it is not
+purged. Each pass first records restores whose Cluster has a ready
+instance as finished (`restore_finished_at`); the operator then renders
+their Cluster without the source's ObjectStore.
 
 A deleted Bucket keeps nothing: the next pass deletes its key, if the
 DELETE could not already (so nothing written meanwhile is lost unnoticed),

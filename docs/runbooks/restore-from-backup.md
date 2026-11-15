@@ -1,6 +1,12 @@
 # Restore a Database to a point in time
 
-Creates a new Database that starts as a copy of an existing one at a given
+A customer's Database is restored through the API (`restoreFrom` on
+creating a Database) or `oup pg restore` (ARCHITECTURE.md, decision 108);
+the operator then does what follows by itself. This runbook is for the
+platform's own Databases, whose loss stops the API, and for restoring by
+hand on a dev cluster.
+
+It creates a new Database that starts as a copy of an existing one at a given
 time, from the base backups and WAL on Hetzner Object Storage NBG1
 (ARCHITECTURE.md, "Backups", decision 51). The source is not touched; the
 restore archives into its own folder. First done on the dev cluster on
@@ -29,7 +35,8 @@ and the platform's `config.json`:
 npx tsx scripts/render-database.ts project.json database.json config.json --restore-from <source id> --target-time 2026-10-17T10:30:00Z > restore.yaml
 ```
 
-The target time needs an explicit zone (`Z` or `+02:00`).
+The target time needs an explicit zone (`Z` or `+02:00`). Without
+`--target-time` the restore replays the whole archive.
 
 ```bash
 kubectl apply --server-side --field-manager=openupstream-operators --dry-run=server -f restore.yaml

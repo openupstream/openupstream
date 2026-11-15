@@ -4,10 +4,12 @@
  * themselves.
  *
  *   npx tsx scripts/render-database.ts <project.json> <database.json> <config.json>
- *     [--restore-from <database id> --target-time <RFC 3339>]
+ *     [--restore-from <database id> [--target-time <RFC 3339>]]
  *
  * With --restore-from, the Database starts as a copy of that Database at the
- * target time (docs/runbooks/restore-from-backup.md).
+ * target time, or at the latest point its archive reaches without one
+ * (docs/runbooks/restore-from-backup.md). The API does this itself for a
+ * Database created with `restoreFrom`.
  */
 import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
@@ -25,10 +27,10 @@ if (
     projectPath === undefined ||
     databasePath === undefined ||
     configPath === undefined ||
-    (restoreFrom === undefined) !== (targetTime === undefined)
+    (restoreFrom === undefined && targetTime !== undefined)
 ) {
     console.error(
-        'usage: render-database.ts <project.json> <database.json> <config.json> [--restore-from <id> --target-time <time>]',
+        'usage: render-database.ts <project.json> <database.json> <config.json> [--restore-from <id> [--target-time <time>]]',
     );
     process.exit(2);
 }
@@ -36,7 +38,7 @@ const read = (path: string) => JSON.parse(readFileSync(path, 'utf8'));
 const [project, database, config] = [read(projectPath), read(databasePath), read(configPath)];
 
 const result =
-    restoreFrom === undefined || targetTime === undefined
+    restoreFrom === undefined
         ? databaseManifests(project, database, config)
         : // The source is in the same Project: its ObjectStore is read from this namespace.
           restoredDatabaseManifests(project, database, config, {

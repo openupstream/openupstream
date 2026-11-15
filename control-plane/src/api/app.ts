@@ -54,7 +54,8 @@ import type pg from 'pg';
 import { z } from 'zod';
 import { createAccount, holdsOf, listAccounts } from '../accounts/store.js';
 import { type BucketRecord, createBucket, deleteBucket, getBucket, listBuckets } from '../buckets/store.js';
-import { createDatabase, deleteDatabase, getDatabase, listDatabases } from '../databases/store.js';
+import { checkRestore, restoreCheckMessage } from '../databases/restore.js';
+import { createDatabase, deleteDatabase, getDatabase, getRestoreSource, listDatabases } from '../databases/store.js';
 import type { TxtLookup } from '../domains/dns.js';
 import { createCustomDomain, deleteDomain, getDomain, isReserved, listDomains, verifyDomain } from '../domains/store.js';
 import { GARAGE_REGION, type ObjectStorage } from '../garage.js';
@@ -140,6 +141,13 @@ const databaseInput = z.strictObject({
     homeSite: z.enum(COMPUTE_SITES).optional(),
     memoryMb: z.int().min(DATABASE_MIN_MEMORY_MB),
     storageGb: z.int().min(1),
+    restoreFrom: z
+        .strictObject({
+            databaseId: z.string().regex(UUID),
+            // An explicit offset: a bare time would be read in some server's zone.
+            targetTime: z.iso.datetime({ offset: true }).optional(),
+        })
+        .optional(),
 });
 
 const bucketInput = z.strictObject({
@@ -391,8 +399,40 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (!input.success) {
             return c.json(invalid(input.error.issues), 400);
         }
-        const { homeSite, ...rest } = input.data;
-        const created = await createDatabase(pool, project.id, homeSite === undefined ? rest : { ...rest, homeSite });
+        const { homeSite, restoreFrom, ...rest } = input.data;
+        if (restoreFrom !== undefined) {
+            // A held Account learns that first, not after the backup checks.
+            const holds = await holdsOf(pool, project.accountId);
+            if (holds.length > 0) {
+                return held(c, holds);
+            }
+            const source = await getRestoreSource(pool, project.id, restoreFrom.databaseId);
+            if (source === undefined) {
+                return c.json({ error: `no Database ${restoreFrom.databaseId} in this Project to restore from` }, 400);
+            }
+            const window = await kube.readRecoveryWindow(projectNamespace(project.id), clusterName(source));
+            if (!window.ok) {
+                deps.log?.({ msg: 'cannot read ObjectStore', database: source.id, error: window.error });
+                return c.json({ error: 'cannot check the backups now' }, 503);
+            }
+            const targetTime = restoreFrom.targetTime === undefined ? undefined : new Date(restoreFrom.targetTime);
+            const checked = checkRestore(source, window.value, targetTime, new Date());
+            if (!checked.ok) {
+                return c.json({ error: restoreCheckMessage(source.id, checked.error) }, checked.error.kind === 'no-backup' ? 409 : 400);
+            }
+        }
+        const created = await createDatabase(pool, project.id, {
+            ...rest,
+            ...(homeSite === undefined ? {} : { homeSite }),
+            ...(restoreFrom === undefined
+                ? {}
+                : {
+                      restoreFrom: {
+                          databaseId: restoreFrom.databaseId,
+                          ...(restoreFrom.targetTime === undefined ? {} : { targetTime: new Date(restoreFrom.targetTime).toISOString() }),
+                      },
+                  }),
+        });
         if (!created.ok) {
             return created.error.kind === 'held'
                 ? held(c, await holdsOf(pool, project.accountId))

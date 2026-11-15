@@ -25,6 +25,17 @@ export interface ClusterStatus {
     readonly ready: boolean;
 }
 
+/**
+ * How far back a Database's backups reach, from its ObjectStore's status
+ * (the Barman Cloud plugin writes it after each backup and retention run).
+ * Both undefined before the first base backup has finished.
+ */
+export interface RecoveryWindow {
+    /** The earliest point a restore can reach: the end of the oldest base backup. */
+    readonly firstRecoverabilityPoint: Date | undefined;
+    readonly lastSuccessfulBackupTime: Date | undefined;
+}
+
 /** The fields of a Service's Deployment that decide its state. */
 export interface DeploymentStatus {
     readonly replicas: number;
@@ -105,6 +116,8 @@ export interface PodLogOptions {
 export interface ControlPlaneKube {
     /** undefined when the Cluster does not exist (yet). */
     readCluster(namespace: string, name: string): Promise<Result<ClusterStatus | undefined, string>>;
+    /** The recovery window of the archive of the Cluster `name` in its ObjectStore of that name; undefined when there is no ObjectStore. */
+    readRecoveryWindow(namespace: string, name: string): Promise<Result<RecoveryWindow | undefined, string>>;
     /** undefined when the Deployment does not exist (yet). */
     readDeployment(namespace: string, name: string): Promise<Result<DeploymentStatus | undefined, string>>;
     /** undefined when the CronJob does not exist (yet). */
@@ -170,6 +183,15 @@ interface ClusterObject {
     spec?: { instances?: number };
     status?: { readyInstances?: number; conditions?: { type: string; status: string }[] };
 }
+
+interface ObjectStoreObject {
+    apiVersion: string;
+    kind: string;
+    metadata: { name: string; namespace: string };
+    status?: { serverRecoveryWindow?: Record<string, { firstRecoverabilityPoint?: string; lastSuccessfulBackupTime?: string }> };
+}
+
+const dateOf = (value: string | undefined): Date | undefined => (value === undefined ? undefined : new Date(value));
 
 interface DeploymentObject {
     apiVersion: string;
@@ -248,6 +270,21 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
                 instances: cluster.spec?.instances ?? 0,
                 readyInstances: cluster.status?.readyInstances ?? 0,
                 ready: (cluster.status?.conditions ?? []).some((c) => c.type === 'Ready' && c.status === 'True'),
+            });
+        },
+        readRecoveryWindow: async (namespace, name) => {
+            const result = await within(
+                api.read<ObjectStoreObject>({ apiVersion: 'barmancloud.cnpg.io/v1', kind: 'ObjectStore', metadata: { name, namespace } }),
+                timeoutMs,
+            );
+            if (!result.ok) {
+                return result.error.status === NOT_FOUND ? ok(undefined) : err(result.error.message);
+            }
+            // One ObjectStore per Database, its server named like its Cluster.
+            const window = result.value.status?.serverRecoveryWindow?.[name];
+            return ok({
+                firstRecoverabilityPoint: dateOf(window?.firstRecoverabilityPoint),
+                lastSuccessfulBackupTime: dateOf(window?.lastSuccessfulBackupTime),
             });
         },
         readDeployment: async (namespace, name) => {

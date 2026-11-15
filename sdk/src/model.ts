@@ -56,6 +56,18 @@ export interface Database {
     memoryMb: number;
     storageGb: number;
     createdAt: Timestamp;
+    /** Set when the Database started as a copy of another one. */
+    restoredFrom?: DatabaseRestore;
+}
+
+/**
+ * Where a restored Database's data comes from (decision 108): another
+ * Database of the same Project, live or deleted within the backup retention
+ * window, at `targetTime`; without it, the latest point its backups reach.
+ */
+export interface DatabaseRestore {
+    databaseId: Id;
+    targetTime?: Timestamp;
 }
 
 /** Creates an Account; the caller becomes its first Member. */
@@ -79,12 +91,16 @@ export interface ProjectInput {
     name: string;
 }
 
-/** Creates a Database; homeSite defaults to `hetzner-fsn1`. */
+/**
+ * Creates a Database; homeSite defaults to `hetzner-fsn1`. With
+ * `restoreFrom`, it starts as a copy of that Database instead of empty.
+ */
 export interface DatabaseInput {
     name: string;
     homeSite?: Site;
     memoryMb: number;
     storageGb: number;
+    restoreFrom?: DatabaseRestore;
 }
 
 /**

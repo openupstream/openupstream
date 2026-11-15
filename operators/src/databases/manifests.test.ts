@@ -296,6 +296,12 @@ test("a restored Database replays the source's archive up to the target time", (
     assert.deepEqual(cluster.spec.plugins?.[0]?.parameters, { barmanObjectName: `db-${restoredDatabase.id}` });
 });
 
+test('without a target time a restored Database replays the whole archive', () => {
+    const result = restoredDatabaseManifests(project, restoredDatabase, config, { database });
+    assert.ok(result.ok, JSON.stringify(!result.ok && result.error));
+    assert.deepEqual(result.value.cluster.spec.bootstrap, { recovery: { source: 'origin' } });
+});
+
 test('everything else about a restored Database is that of a new one', () => {
     const restored = restoredDatabaseManifests(project, restoredDatabase, config, source);
     const fresh = databaseManifests(project, restoredDatabase, config);
