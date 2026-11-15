@@ -1181,7 +1181,15 @@ Decisions table once it is settled.
    public API, with the cleanup; madAuth with sign-up, API keys and
    Accounts created through the API (2026-10-17). Left: storage that grows
    by itself (decision 111). TopoLVM and resizing (decisions 109 and 110),
-   not yet run on the dev cluster. Done
+   tested on the dev cluster (2026-11-15): every Database instance got a
+   logical volume of its size in its node's volume group, the third Site
+   none; `oup pg resize` grew 2 to 5 to 8 GB online without restarting
+   Postgres and refused shrinking; a memory resize paused writes through
+   PgBouncer once for 11 s and kept the primary in its Home site; a size
+   beyond the free space was refused with 507. The run found three things,
+   fixed: the API accepted sizes TopoLVM had no room for, said `ready`
+   before every volume had grown, and a memory resize took 4 minutes with
+   a 16 s pause under CloudNativePG's and PgBouncer's defaults. Done
    since: restore through the API and the `oup pg` commands (decision 108).
    Tested on the dev cluster (2026-11-10) with `oup pg`: a restore to a
    time between two rows held only the first, one to the latest point both
