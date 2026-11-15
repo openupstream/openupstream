@@ -1549,7 +1549,20 @@ Decisions table once it is settled.
    such a container `terminated` during the back-off, so it is the
    current log). No `Forbidden` or other error in the control plane's
    log; `kubectl auth can-i` confirmed it may list pods, read their logs
-   and read a node, not list nodes.
+   and read a node, not list nodes. The disk and bandwidth limits
+   (decisions 121 and 122), tested on the single-node dev cluster
+   (2026-11-15, k3s 1.36) with gVisor pods made by hand with a Service's
+   annotations and limits, and the bandwidth agent as its DaemonSet from
+   the built image with `UPLINK_MBIT=100`: a pod that wrote 2.4 GB was
+   evicted within seconds, and its QoS class stayed Guaranteed; a new
+   pod's burst was 3.75 MB a moment after it started, and it then held
+   296 Mbit/s each way from the first second (2.1 Gbit/s for two seconds
+   with the CNI's burst); two pods downloading from the internet were cut
+   to 39 Mbit/s each with the uplink at 79.8 Mbit/s, one alone to 79; the
+   limits were back at 300 a second after the downloads ended, and at
+   once when the DaemonSet was deleted during a cut. Left: the limits on
+   a Service deployed through the API, the cut in the sending direction
+   (the same code), and more than one node.
 4. Containers, Cron job and One-off job modes. Done: Jobs API (#95,
    ADR-0003), the Jobs operator and runs, `oup job` (#96). Tested on the
    dev cluster (2026-11-01) with `oup job`: a Cron job every minute in
