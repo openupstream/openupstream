@@ -17,6 +17,10 @@ which is why it lives in the monorepo.
   starts; `runtimeclass.yaml` is the RuntimeClass `gvisor`, scheduled only
   on nodes labelled `openupstream.io/gvisor=true` (ARCHITECTURE.md,
   decision 90).
+- `topolvm/` — TopoLVM, the Databases' local volumes: thick logical
+  volumes in the volume group `openupstream` on the compute Sites
+  (`values.yaml`), made by `vgcreate.sh` from a block device
+  (ARCHITECTURE.md, decision 109).
 - `garage/` — Garage cluster layout and configuration: replication factor 3,
   one zone per site.
 - `ingress/` — Traefik's values, cert-manager's DNS-01 webhook for bunny.net

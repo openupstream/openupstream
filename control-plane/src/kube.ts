@@ -23,6 +23,9 @@ export interface ClusterStatus {
     readonly instances: number;
     readonly readyInstances: number;
     readonly ready: boolean;
+    /** The sizes its spec asks for (`resources.limits.memory`, `storage.size`); undefined when unreadable. */
+    readonly memoryMb?: number | undefined;
+    readonly storageGb?: number | undefined;
 }
 
 /**
@@ -146,12 +149,28 @@ export interface ControlPlaneKube {
     applySecret(secret: SecretManifest): Promise<Result<'applied' | 'no-namespace', string>>;
 }
 
-/** No Cluster yet, or no instance up: provisioning; all up: ready; some: degraded. */
-export const stateOf = (status: ClusterStatus | undefined): DatabaseState => {
+/**
+ * No Cluster yet, or no instance up: provisioning; a spec with other sizes
+ * than the Database's (the operator has not applied a resize yet):
+ * resizing; all instances up: ready; some: degraded. While CloudNativePG
+ * restarts the instances for a new memory size, its Ready condition is
+ * false, so that reads as degraded.
+ */
+export const stateOf = (status: ClusterStatus | undefined, wanted?: { readonly memoryMb: number; readonly storageGb: number }): DatabaseState => {
     if (status === undefined || status.readyInstances === 0) {
         return 'provisioning';
     }
+    const differs = (applied: number | undefined, asked: number | undefined) => applied !== undefined && asked !== undefined && applied !== asked;
+    if (differs(status.memoryMb, wanted?.memoryMb) || differs(status.storageGb, wanted?.storageGb)) {
+        return 'resizing';
+    }
     return status.ready && status.readyInstances >= status.instances ? 'ready' : 'degraded';
+};
+
+/** `512Mi` → 512, `10Gi` → 10; undefined for any other form (the operator writes only these). */
+export const quantityIn = (quantity: string | undefined, unit: 'Mi' | 'Gi'): number | undefined => {
+    const match = quantity === undefined ? null : new RegExp(`^(\\d+)${unit}$`).exec(quantity);
+    return match === null ? undefined : Number(match[1]);
 };
 
 /** The client sets no timeout; an API server in a dark Site must not hang a request. */
@@ -180,7 +199,7 @@ interface ClusterObject {
     apiVersion: string;
     kind: string;
     metadata: { name: string; namespace: string };
-    spec?: { instances?: number };
+    spec?: { instances?: number; resources?: { limits?: { memory?: string } }; storage?: { size?: string } };
     status?: { readyInstances?: number; conditions?: { type: string; status: string }[] };
 }
 
@@ -270,6 +289,8 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
                 instances: cluster.spec?.instances ?? 0,
                 readyInstances: cluster.status?.readyInstances ?? 0,
                 ready: (cluster.status?.conditions ?? []).some((c) => c.type === 'Ready' && c.status === 'True'),
+                memoryMb: quantityIn(cluster.spec?.resources?.limits?.memory, 'Mi'),
+                storageGb: quantityIn(cluster.spec?.storage?.size, 'Gi'),
             });
         },
         readRecoveryWindow: async (namespace, name) => {

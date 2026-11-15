@@ -43,6 +43,10 @@ oup site deploy dist --bucket my-site
   retention window, with `--storage`. The time must lie after the source's
   oldest base backup and at least 5 minutes in the past (WAL reaches the
   archive up to that late).
+- `oup pg resize <name> [--memory <MB>] [--storage <GB>] [--no-wait]`:
+  storage only grows, online; a new memory size restarts the two instances
+  one after the other, the standby first (writes pause for seconds). Waits
+  until the Database is ready again, unless `--no-wait`.
 - `oup pg list`, `oup pg show <name>` (JSON), `oup pg delete <name>`.
 - `oup service deploy <name> --image <ref> [--port <n> | --no-port] [--replicas <n>]
   [--memory <MB>] [--cpu <millicores>] [--site hetzner-fsn1|ovh-lim]

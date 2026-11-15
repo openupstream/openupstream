@@ -10,8 +10,11 @@ stand in for the Sites; the nodes carry the real Site names:
 | `oup-dev-ovh-lim` | hel1 | `ovh-lim`, compute Site (Hetzner Cloud has no Limburg) |
 | `oup-dev-netcup-nbg` | nbg1 | `netcup-nbg`, third Site, tainted `openupstream.io/third-site` |
 
-Three `cpx32` cost about €0.20 an hour together (gross, October 2026). Storage is k3s's
-local-path provisioner, not TopoLVM.
+Three `cpx32` cost about €0.20 an hour together (gross, October 2026). The
+two compute VMs each get a 40 GB Hetzner Cloud Volume as the LVM volume
+group `openupstream`, where TopoLVM puts the Databases' volumes, as on the
+servers' NVMe (decision 109); both cost about €0.005 an hour. `down.sh`
+deletes them with the VMs.
 
 ## Use
 
@@ -36,11 +39,14 @@ export KUBECONFIG=$PWD/.state/kubeconfig
 
 `up.sh` creates the VMs, a firewall (SSH and the Kubernetes API only from
 your IP, HTTP and HTTPS from everywhere, everything between the nodes),
-gVisor on the two compute nodes (`infra/gvisor`), and
+gVisor on the two compute nodes (`infra/gvisor`), their volumes with the
+volume group (`infra/topolvm/vgcreate.sh`), and
 k3s with embedded etcd and
 flannel `wireguard-native`, then the RuntimeClass `gvisor`. `operators.sh` installs cert-manager, whose
 Certificates own their Secrets (so a custom domain's key goes with its
-Certificate), CloudNativePG and the Barman Cloud Plugin at the versions in
+Certificate), TopoLVM on the compute nodes (`infra/topolvm`, StorageClass
+`topolvm-provisioner`, which `database-config.json` names), CloudNativePG
+and the Barman Cloud Plugin at the versions in
 `operators/crds`, spreads CoreDNS and the CloudNativePG operator over the
 compute Sites, and creates the backup credentials Secret in
 `openupstream-system`. Then:
@@ -158,7 +164,7 @@ npx tsx scripts/reconcile-databases.ts rows.json config.json --dry-run
 ```
 
 where `rows.json` is `[{ "project": …, "database": … }]` and `config.json` a
-`DatabaseConfig` (storage class `local-path`).
+`DatabaseConfig` (storage class `topolvm-provisioner`).
 
 The kubeconfig points at the `hetzner-fsn1` node. Before switching that Site
 off, point it at another node's IP (all three serve the API).

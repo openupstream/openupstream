@@ -462,6 +462,37 @@ describe('Databases', () => {
         assert.equal(again.status, 201);
     });
 
+    test('resized: storage only grows, memory either way; resizing until the Cluster has the new sizes', async () => {
+        const created = (await (
+            await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name: 'sized', memoryMb: 512, storageGb: 5 })
+        ).json()) as DatabaseDetails;
+        const patch = (body: unknown, who = 'alice') => call('PATCH', `/v1/projects/${projectId}/databases/${created.id}`, who, body);
+        clusters.set(`db-${created.id}`, { instances: 2, readyInstances: 2, ready: true, memoryMb: 512, storageGb: 5 });
+
+        assert.equal((await patch({ storageGb: 4 })).status, 400, 'a volume cannot shrink');
+        assert.equal((await patch({})).status, 400);
+        assert.equal((await patch({ memoryMb: 128 })).status, 400, 'below the floor');
+        assert.equal((await patch({ storageGb: 10 }, 'bob')).status, 404);
+
+        const grown = await patch({ storageGb: 10, memoryMb: 1024 });
+        assert.equal(grown.status, 200);
+        const details = (await grown.json()) as DatabaseDetails;
+        assert.deepEqual([details.storageGb, details.memoryMb, details.state], [10, 1024, 'resizing']);
+        const row = (await listDatabaseRows(db.pool)).find((r) => r.database.id === created.id);
+        assert.deepEqual([row?.database.storageGb, row?.database.memoryMb], [10, 1024], 'the operator renders the new sizes');
+
+        clusters.set(`db-${created.id}`, { instances: 2, readyInstances: 2, ready: true, memoryMb: 1024, storageGb: 10 });
+        const state = async () =>
+            ((await (await call('GET', `/v1/projects/${projectId}/databases/${created.id}`, 'alice')).json()) as DatabaseDetails).state;
+        assert.equal(await state(), 'ready');
+
+        assert.equal(await placeHold(db.pool, accountA, 'unpaid'), true);
+        assert.equal((await patch({ storageGb: 20 })).status, 402, 'growing costs more');
+        assert.equal((await patch({ memoryMb: 512 })).status, 200, 'shrinking memory is allowed while held');
+        assert.equal(await liftHold(db.pool, accountA, 'unpaid'), true);
+        clusters.delete(`db-${created.id}`);
+    });
+
     test('restored from another Database of the Project, live or deleted, within its recovery window', async () => {
         const post = (body: unknown) => call('POST', `/v1/projects/${projectId}/databases`, 'alice', body);
         const source = (await (await post({ name: 'source', memoryMb: 256, storageGb: 2 })).json()) as DatabaseDetails;

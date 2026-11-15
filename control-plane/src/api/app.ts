@@ -55,7 +55,7 @@ import { z } from 'zod';
 import { createAccount, holdsOf, listAccounts } from '../accounts/store.js';
 import { type BucketRecord, createBucket, deleteBucket, getBucket, listBuckets } from '../buckets/store.js';
 import { checkRestore, restoreCheckMessage } from '../databases/restore.js';
-import { createDatabase, deleteDatabase, getDatabase, getRestoreSource, listDatabases } from '../databases/store.js';
+import { createDatabase, deleteDatabase, getDatabase, getRestoreSource, listDatabases, updateDatabase } from '../databases/store.js';
 import type { TxtLookup } from '../domains/dns.js';
 import { createCustomDomain, deleteDomain, getDomain, isReserved, listDomains, verifyDomain } from '../domains/store.js';
 import { GARAGE_REGION, type ObjectStorage } from '../garage.js';
@@ -149,6 +149,13 @@ const databaseInput = z.strictObject({
         })
         .optional(),
 });
+
+const databasePatch = z
+    .strictObject({
+        memoryMb: z.int().min(DATABASE_MIN_MEMORY_MB).optional(),
+        storageGb: z.int().min(1).optional(),
+    })
+    .refine((patch) => patch.memoryMb !== undefined || patch.storageGb !== undefined, 'memoryMb or storageGb');
 
 const bucketInput = z.strictObject({
     name: z.string().regex(BUCKET_NAME, 'a hostname label of 3 to 63 lowercase letters, digits and hyphens'),
@@ -288,7 +295,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             deps.log?.({ msg: 'cannot read Cluster', database: database.id, error: cluster.error });
             return 'unknown';
         }
-        return stateOf(cluster.value);
+        return stateOf(cluster.value, database);
     };
     const details = async (database: Database): Promise<DatabaseDetails> => ({
         ...database,
@@ -452,6 +459,35 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     app.get('/v1/projects/:projectId/databases/:databaseId', async (c) => {
         const database = await databaseOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('databaseId'));
         return database === undefined ? c.json(notFound, 404) : c.json(await details(database));
+    });
+
+    app.patch('/v1/projects/:projectId/databases/:databaseId', async (c) => {
+        const database = await databaseOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('databaseId'));
+        if (database === undefined) {
+            return c.json(notFound, 404);
+        }
+        const patch = databasePatch.safeParse(await body(c));
+        if (!patch.success) {
+            return c.json(invalid(patch.error.issues), 400);
+        }
+        const { memoryMb, storageGb } = patch.data;
+        if (storageGb !== undefined && storageGb < database.storageGb) {
+            return c.json({ error: `storage only grows: ${database.name} has ${database.storageGb} GB, and a volume cannot shrink` }, 400);
+        }
+        // Growing costs more, so a held Account may only shrink memory (decision 78).
+        const grows = (memoryMb ?? 0) > database.memoryMb || (storageGb ?? 0) > database.storageGb;
+        if (grows) {
+            const project = await projectOf(c.get('accountIds'), database.projectId);
+            const holds = project === undefined ? [] : await holdsOf(pool, project.accountId);
+            if (holds.length > 0) {
+                return held(c, holds);
+            }
+        }
+        const updated = await updateDatabase(pool, database.projectId, database.id, {
+            ...(memoryMb === undefined ? {} : { memoryMb }),
+            ...(storageGb === undefined ? {} : { storageGb }),
+        });
+        return updated === undefined ? c.json(notFound, 404) : c.json(await details(updated));
     });
 
     app.delete('/v1/projects/:projectId/databases/:databaseId', async (c) => {
