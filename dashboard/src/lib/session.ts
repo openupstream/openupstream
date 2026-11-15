@@ -69,7 +69,7 @@ export const signIn = () => madauth().then(({ Madauth }) => Madauth.showSignInDi
 export const signOut = () => madauth().then(({ Madauth }) => Madauth.signOut());
 export const manageApiKeys = () => madauth().then(({ Madauth }) => Madauth.showManageApiKeysDialog());
 
-/** The API is under `/api` of the dashboard's own host (ARCHITECTURE.md, decision 117). */
+/** The API is under `/api` of the dashboard's own host (ARCHITECTURE.md, decision 120). */
 const API_PATH = '/api';
 
 /**

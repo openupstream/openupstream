@@ -205,7 +205,7 @@ multi-node cluster: HTTP-01 must reach port 80 from the internet.
 
 madAuth is at `https://PLATFORM_DOMAIN/auth`, the API at
 `https://PLATFORM_DOMAIN/api` (it was at `api.PLATFORM_DOMAIN` before
-decision 117: on a cluster installed then, run `ingress.sh` and
+decision 120: on a cluster installed then, run `ingress.sh` and
 `platform.sh` again, and sign in again with `oup login --api
 https://PLATFORM_DOMAIN/api`, since `oup` keeps the address it signed in
 at); the examples use the Hetzner dev cluster's

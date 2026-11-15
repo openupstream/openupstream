@@ -27,7 +27,7 @@ cd "$(dirname "$0")"
 source ./lib.sh
 DNS_DOMAIN=${DNS_DOMAIN:?set DNS_DOMAIN, the domain the names belong to}
 read -r -a NAMES <<<"${DNS_NAMES:-@}"
-# Clusters installed before the API moved under /api (decision 117) also
+# Clusters installed before the API moved under /api (decision 120) also
 # have an `api` record; --delete takes it along.
 if [[ ${1:-} == --delete && -z ${DNS_NAMES:-} ]]; then
   NAMES+=(api)

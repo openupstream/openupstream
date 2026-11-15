@@ -20,7 +20,7 @@ Pages for Databases, Buckets, Domains, Services, Jobs and Secrets follow.
 - madAuth is expected on the dashboard's own origin under `/auth/*` and
   `/.well-known/*` (decision 67). It keeps the session in an HttpOnly
   cookie, so no script holds a credential.
-- The API is under `/api` of the dashboard's own host (decision 117), so
+- The API is under `/api` of the dashboard's own host (decision 120), so
   the browser sends the session cookie along (`session: 'cookie'` in the
   SDK) and no other host ever receives it. The API accepts the cookie
   only with the browser's `Sec-Fetch-Site: same-origin`, which browsers

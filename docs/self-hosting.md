@@ -73,7 +73,7 @@ Other names that are ours today and need yours:
 | --- | --- |
 | The backup bucket | `infra/dev-cluster/database-config.json` (section 4) |
 | madAuth's public URL | `MADAUTH_ISSUER` in `infra/dev-cluster/platform.sh` (on the dev cluster `http://localhost:8787`) |
-| Our hostname (`openupstream.com`, the API under `/api`) | decisions 67 and 117; `PLATFORM_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
+| Our hostname (`openupstream.com`, the API under `/api`) | decisions 67 and 120; `PLATFORM_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
 | The customer domain (`openupstream.app`), under which Buckets are reached | decision 68; `CUSTOMER_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
 
 ## 3. Development clusters
@@ -479,5 +479,7 @@ sent at all.
 - **Storage on the compute servers**: TopoLVM needs the LVM volume group
   `openupstream` on each compute server, made from its NVMe with
   `infra/topolvm/vgcreate.sh <device>` before TopoLVM is installed
-  (`infra/topolvm/values.yaml`). How the NVMe disks are combined (RAID 1
-  or not) is decided when the servers are ordered.
+  (`infra/topolvm/values.yaml`). The two NVMe disks are mirrored
+  (software RAID 1) in two parts, a small one for the operating system and
+  the rest left empty for the volume group (ARCHITECTURE.md, decision
+  118); the device is that second `/dev/md…`.

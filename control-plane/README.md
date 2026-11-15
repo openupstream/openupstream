@@ -76,7 +76,7 @@ Account answers 404, like one that does not exist. An Account with a Hold
 gets 402 when it creates a Resource, with `{error, holds}`.
 
 The dashboard's browser sends no header but madAuth's session cookie
-(`madauth_session`, decisions 116 and 117). The API reads it only on a
+(`madauth_session`, decisions 116 and 120). The API reads it only on a
 request the browser marks `Sec-Fetch-Site: same-origin`, as a session
 token only; on any other request the cookie counts for nothing (401). The
 API sets no CORS headers. On a cluster it is reached under `/api` of the

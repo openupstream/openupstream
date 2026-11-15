@@ -105,7 +105,7 @@ export interface ApiDeps {
     /** Where `oup login` signs in (decision 87); without it, `GET /v1/login` answers 404. */
     readonly cliLogin?: { readonly issuer: string; readonly clientId: string };
     /**
-     * The dashboard (decision 117): its browser sends no header but madAuth's
+     * The dashboard (decision 120): its browser sends no header but madAuth's
      * session cookie, which this checks. Without it the API reads no cookie.
      */
     readonly cookieSessions?: Authenticate;
@@ -405,7 +405,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
 
     app.use('/v1/*', async (c, next) => {
         const token = /^Bearer (\S+)$/.exec(c.req.header('authorization') ?? '')?.[1];
-        // The dashboard is served from the API's own host (decision 117), so
+        // The dashboard is served from the API's own host (decision 120), so
         // the session cookie counts only on a request the browser marks as
         // coming from a page of this origin. A page cannot set that header:
         // another site's page that makes the browser send the cookie along

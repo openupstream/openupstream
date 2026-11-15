@@ -43,7 +43,7 @@ import type {
     ServicePatch,
 } from './model.js';
 
-/** The API is under `/api` of the platform's host (ARCHITECTURE.md, decision 117). */
+/** The API is under `/api` of the platform's host (ARCHITECTURE.md, decision 120). */
 export const DEFAULT_API_URL = 'https://openupstream.com/api';
 
 export interface ClientOptions {

@@ -3,7 +3,7 @@ import type { NextConfig } from 'next';
 /**
  * The dashboard is built as static files (ARCHITECTURE.md, decision 116):
  * every page renders in the browser, which calls the API itself, under
- * `/api` of its own host (decision 117). In development `next dev` passes
+ * `/api` of its own host (decision 120). In development `next dev` passes
  * madAuth's paths and the API's on to their servers, as the ingress does in
  * a cluster, so the session cookie is the page's own and reaches both.
  */
