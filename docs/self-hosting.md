@@ -110,7 +110,10 @@ development only: losing it loses everything but the Databases' backups.
 Nothing needs to be reachable from the internet.
 
 1. Give the machine a fixed address in your router (a DHCP reservation):
-   its DNS records point at that address.
+   its DNS records point at that address. In a Tailscale network, use its
+   Tailscale address instead (`NODE_ADDRESS`, in the
+   [infra/dev-cluster](../infra/dev-cluster/README.md) README), which stays
+   the same anyway; the cluster is then reachable from the tailnet only.
 2. Make sure you can log in over SSH as root, or as a user with
    passwordless sudo, and that ports 80, 443 and 6443 are free on it.
 3. Pick two domains, one for the platform's hostnames and one for the
@@ -118,7 +121,9 @@ Nothing needs to be reachable from the internet.
    one: `home.dev.example.com` in the zone `dev.example.com` needs no new
    zone and no delegation. The scripts create the records in the zone.
 4. If your router has DNS rebinding protection, which drops public
-   answers that contain a private address, add both domains as exceptions.
+   answers that contain a private address, add both domains as exceptions
+   (with Tailscale, on the resolver your tailnet devices use; MagicDNS
+   forwards public names to it).
    On a Fritz!Box: **Home Network → Network → Network Settings → DNS
    Rebind Protection**, one domain per line.
 5. Run `k3s-single-node.sh` and then `install-single-node.sh` with both

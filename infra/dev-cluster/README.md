@@ -46,7 +46,20 @@ the node, applies the RuntimeClass `gvisor` and writes the kubeconfig to
 already has k3s and only fetches the kubeconfig, since both installers
 restart k3s (`REINSTALL=1` to install again, e.g. for a new
 `K3S_VERSION`). The kubeconfig names the host that ssh resolves the target
-to (`HOST` to override). A machine that already runs k3s can be used as it is
+to (`HOST` to override).
+
+For a machine in a Tailscale network, reached only from there, give k3s the
+machine's Tailscale address as its ExternalIP, so DNS points at that
+instead of the home network's address:
+
+```bash
+NODE_ADDRESS=$(ssh root@minisforum tailscale ip -4) ./k3s-single-node.sh root@minisforum
+```
+
+The names then resolve everywhere but lead to the node only from devices in
+the tailnet. Customer containers cannot reach the tailnet: the egress
+policies leave out `100.64.0.0/10` and `fc00::/7` and allow the node's own
+addresses on 80 and 443 only (decision 105). A machine that already runs k3s can be used as it is
 if gVisor was installed before k3s first started (`infra/gvisor`) and the
 node carries the labels `topology.kubernetes.io/zone=hetzner-fsn1` and
 `openupstream.io/gvisor=true`.

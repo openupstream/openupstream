@@ -21,6 +21,12 @@
 # The kubeconfig uses the host name ssh resolves the target to (its
 # HostName, for an alias in ~/.ssh/config); HOST overrides it.
 #
+# NODE_ADDRESS, if set, becomes the node's ExternalIP, the address dns.sh
+# puts into DNS instead of the one k3s picks (the default route's, usually
+# the home network's). For a machine reached over Tailscale only:
+#
+#   NODE_ADDRESS=$(ssh root@minisforum tailscale ip -4) ./k3s-single-node.sh root@minisforum
+#
 # Needs: an x86_64 Linux machine (gVisor is pinned for x86_64) with ports
 # 80, 443 and 6443 free, SSH as root or as a user with passwordless sudo,
 # and kubectl here.
@@ -30,7 +36,7 @@ cd "$(dirname "$0")"
 source ./lib.sh
 TARGET=${1:?usage: ./k3s-single-node.sh <user@host>}
 HOST=${HOST:-$(ssh -G "$TARGET" | awk '$1 == "hostname" {print $2}')}
-STATE=.state
+STATE=${STATE:-.state}
 K3S_VERSION=${K3S_VERSION:-v1.36.5+k3s1}
 SSH=(ssh -o ConnectTimeout=10 "$TARGET")
 SUDO="sudo -n"
@@ -52,6 +58,7 @@ else
   --node-label topology.kubernetes.io/zone=$SINGLE_NODE_SITE \
   --node-label openupstream.io/gvisor=true \
   --tls-san $HOST \
+  ${NODE_ADDRESS:+--node-external-ip $NODE_ADDRESS} \
   --secrets-encryption \
   --disable traefik --disable servicelb"
 fi

@@ -34,6 +34,8 @@ case $args in
     site=\${args#*zone=}; site=\${site%% *}
     [[ " \${SITES_STUB:-} " == *" $site "* ]] && echo "node/$site" ;;
   *"get runtimeclass"*) echo runtimeclass.node.k8s.io/gvisor ;;
+  *"wait --for=condition=Ready node"*) echo "node/mini condition met" ;;
+  *"runtimeclass.yaml"*) echo "applied $args" >>"$STUB_LOG" ;;
   *) echo "unexpected: kubectl $args" >&2; exit 9 ;;
 esac
 `,
@@ -57,6 +59,23 @@ case "$method $url" in
 esac
 `,
 );
+// ssh: \`-G\` resolves the target to SSH_HOSTNAME_STUB (or its host part);
+// K3S_INSTALLED_STUB=1 makes \`test -x /usr/local/bin/k3s\` succeed; the
+// kubeconfig is k3s's own. Every remote command goes to $STUB_LOG.
+writeFileSync(
+    join(stubs, 'ssh'),
+    `#!/usr/bin/env bash
+if [[ $1 == -G ]]; then target=$2; echo "hostname \${SSH_HOSTNAME_STUB:-\${target#*@}}"; exit 0; fi
+args="$*"
+echo "ssh $args" >>"$STUB_LOG"
+case $args in
+  *"test -x /usr/local/bin/k3s"*) [[ \${K3S_INSTALLED_STUB:-0} == 1 ]] ;;
+  *"bash -s"*) cat >/dev/null ;;
+  *"k3s.yaml"*) printf 'clusters:\n- cluster:\n    server: https://127.0.0.1:6443\n  name: default\n' ;;
+esac
+`,
+);
+chmodSync(join(stubs, 'ssh'), 0o755);
 chmodSync(join(stubs, 'kubectl'), 0o755);
 chmodSync(join(stubs, 'curl'), 0o755);
 const keyFile = join(stubs, 'bunny-api-key');
@@ -216,4 +235,44 @@ test('dns.sh fails for a domain in no bunny.net zone', () => {
     const { status, stderr } = run('./dns.sh', { DNS_DOMAIN: 'a.b.example.org', LAYOUT_STUB: 'multi-node' });
     assert.notEqual(status, 0);
     assert.match(stderr, /no bunny.net zone for a.b.example.org/);
+});
+
+const k3s = (env) => {
+    const state = mkdtempSync(join(tmpdir(), 'dev-cluster-state-'));
+    const result = run('./k3s-single-node.sh root@mini', { STATE: state, ...env });
+    return { ...result, kubeconfig: readFileSync(join(state, 'kubeconfig'), 'utf8') };
+};
+
+test('k3s-single-node.sh installs gVisor before k3s, labelled as hetzner-fsn1, with the kubeconfig on the resolved host', () => {
+    const { status, stderr, log, kubeconfig } = k3s({ SSH_HOSTNAME_STUB: 'mini.tailnet.ts.net' });
+    assert.equal(status, 0, stderr);
+    const lines = log.split('\n');
+    const gvisor = lines.findIndex((line) => line.endsWith('bash -s'));
+    const install = lines.findIndex((line) => line.includes('get.k3s.io'));
+    assert.ok(gvisor >= 0 && install > gvisor, log);
+    assert.match(lines[install], /--node-label topology.kubernetes.io\/zone=hetzner-fsn1/);
+    assert.match(lines[install], /--node-label openupstream.io\/gvisor=true/);
+    assert.match(lines[install], /--tls-san mini.tailnet.ts.net/);
+    assert.doesNotMatch(lines[install], /--node-external-ip/);
+    // As root, nothing goes through sudo.
+    assert.doesNotMatch(log, /sudo/);
+    assert.match(kubeconfig, /server: https:\/\/mini.tailnet.ts.net:6443/);
+    assert.match(kubeconfig, /name: oup-single-node/);
+    assert.match(log, /applied apply -f ..\/gvisor\/runtimeclass.yaml/);
+});
+
+test('k3s-single-node.sh gives NODE_ADDRESS to k3s as the ExternalIP, the address DNS points at', () => {
+    const { status, log } = k3s({ NODE_ADDRESS: '100.101.102.103' });
+    assert.equal(status, 0);
+    assert.match(log, /get\.k3s\.io.*--node-external-ip 100\.101\.102\.103/s);
+});
+
+test('k3s-single-node.sh installs nothing on a machine that has k3s, unless REINSTALL=1', () => {
+    const again = k3s({ K3S_INSTALLED_STUB: '1' });
+    assert.equal(again.status, 0);
+    assert.doesNotMatch(again.log, /bash -s|get\.k3s\.io/);
+    assert.match(again.kubeconfig, /server: https:\/\/mini:6443/);
+    const reinstall = k3s({ K3S_INSTALLED_STUB: '1', REINSTALL: '1' });
+    assert.match(reinstall.log, /bash -s/);
+    assert.match(reinstall.log, /get\.k3s\.io/);
 });

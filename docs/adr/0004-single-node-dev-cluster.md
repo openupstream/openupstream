@@ -59,7 +59,9 @@ of that.
    `dns.sh` reads the compute nodes' addresses from Kubernetes
    (ExternalIP, else InternalIP; IPv4) instead of from `hcloud`. In a
    home network that is a private address: the names resolve everywhere
-   but lead somewhere only inside that network. `PLATFORM_DOMAIN` and
+   but lead somewhere only inside that network. `k3s-single-node.sh`
+   takes `NODE_ADDRESS` as the node's ExternalIP, e.g. its Tailscale
+   address, so the cluster is reached from the tailnet only. `PLATFORM_DOMAIN` and
    `CUSTOMER_DOMAIN` are required in single-node (no default, so it never
    takes over the shared dev zones) and may be names inside a bunny.net
    zone, e.g. `home.dev.example.com` in `dev.example.com`. Certificates
