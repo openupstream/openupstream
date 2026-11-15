@@ -1286,6 +1286,28 @@ Decisions table once it is settled.
     leave `/auth/*` and `/.well-known/*` to madAuth), or an nginx container
     with the files. Until it is served, `oup login` has no approval page
     at madAuth's `loginUrl`.
+23. **What an idle Service reserves and what it pays.** Requests equal
+    limits for memory and CPU (decision 93), so an idle Service holds its
+    configured memory and CPU on the node. Memory is billed as configured,
+    but CPU is billed as measured (decision 115): a Service set to 2 CPUs
+    that stays idle blocks two cores and pays for almost none. To settle
+    before the unit prices are set. Options, none evaluated yet:
+    - A CPU request below the limit, so cores are overcommitted. Costs:
+      no guaranteed CPU when many Services are busy at once.
+    - A memory request below the limit. Costs: memory cannot be throttled,
+      so a full node means evictions and OOM kills, on nodes that also
+      run Databases; metering reads memory from the pods' requests
+      (decision 114) and would have to read the limit.
+    - Billing reserved instead of measured CPU, as Fargate, Cloud Run and
+      Fly.io do. Contradicts decision 115.
+    - A price per memory GB-h that carries the reserved CPU, with a cap on
+      CPU per GB of memory.
+    - Scale-to-zero for Services with a port: an activator in the request
+      path of both compute Sites that holds the first request and scales
+      0 to 1 (candidates: Sablier, KEDA's HTTP add-on, Knative Serving),
+      an idle timeout per Service, and a measured cold start under gVisor.
+      Frees memory as well as CPU; workers without a port stay at one
+      replica. Databases stay always on (Non-goals).
 
 ## Build order
 
