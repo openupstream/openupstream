@@ -1519,7 +1519,18 @@ for invoices, Amazon Web Services for SES). Before the first invoice the
 billing run must also exist: the monthly rating, invoices through lexoffice
 and collection through Mollie, in the billing service (#74, #77). Its
 input, metering and the internal usage route, is in this repository
-(decision 114).
+(decisions 114 and 115). Tested on the dev cluster (2026-11-15) with a
+Database, a Service of two replicas, a Bucket site and a Cron job every
+minute: one hour's events matched what ran (the Database's 256 MB and 1 GB
+for the hour, the Service's two 256 MB replicas, the Bucket's 5 MB, 60 Job
+runs of about 0.75 CPU seconds as 45.4 CPU seconds and 0.011 GB-hours), and
+40 downloads of a 5 MB file as 0.19 GB of the Bucket's egress. Switching to
+an IngressRoute per Resource dropped none of 468 requests. The run found
+that Traefik names its metrics after the IngressRoute and a hash of the
+rule, not the Kubernetes Service (fixed: decision 114's IngressRoute per
+Resource), that cAdvisor never sees a short Job run's CPU (fixed: the CPU
+agent, decision 115), and that the agent took a pod's new, still empty
+cgroup for its end (fixed).
 
 Until then sign-up on the hosted service is closed and `openupstream.com`
 serves the waitlist (#86). Passing the gate means: `SIGNUP=open`, the
