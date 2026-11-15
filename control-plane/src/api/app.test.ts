@@ -769,8 +769,8 @@ describe('Routing', () => {
             hostname: domain.hostname,
             kind: 'default',
             routes: [
-                { id: routing?.routes[0]?.id, pathPrefix: '/docs', kind: 'bucket', bucketName: 'alice-docs', spaFallback: false },
-                { id: routing?.routes[1]?.id, pathPrefix: '/', kind: 'bucket', bucketName: 'alice-site', spaFallback: true },
+                { id: routing?.routes[0]?.id, pathPrefix: '/docs', kind: 'bucket', bucketId: docs.id, bucketName: 'alice-docs', spaFallback: false },
+                { id: routing?.routes[1]?.id, pathPrefix: '/', kind: 'bucket', bucketId: site.id, bucketName: 'alice-site', spaFallback: true },
             ],
         });
     });

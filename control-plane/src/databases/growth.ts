@@ -19,6 +19,7 @@
 import { clusterName, projectNamespace } from '@openupstream/sdk';
 import type pg from 'pg';
 import { type ControlPlaneKube, DISK_FULL_PHASE } from '../kube.js';
+import type { PrometheusQuery, PrometheusSample } from '../prometheus.js';
 import { type Result, err, ok } from '../result.js';
 import { GiB, roomForGrowth } from './capacity.js';
 import { updateDatabase } from './store.js';
@@ -75,10 +76,6 @@ export function planGrowth(rows: readonly GrowthRow[], usage: ReadonlyMap<string
 /** `db-<id>-<n>`, the PVC of instance n of a Database's Cluster. */
 const INSTANCE_PVC = /^db-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-\d+$/;
 
-export interface PrometheusSample {
-    readonly labels: Readonly<Record<string, string>>;
-    readonly value: number;
-}
 
 /**
  * Per Database: the fullest volume's used share and the smallest volume's
@@ -104,27 +101,6 @@ export function usageOf(used: readonly PrometheusSample[], capacity: readonly Pr
         }),
     );
 }
-
-/** An instant query against Prometheus's HTTP API. */
-export type PrometheusQuery = (query: string) => Promise<Result<PrometheusSample[], string>>;
-
-export const prometheusClient =
-    (url: string, fetchImpl: typeof fetch = fetch): PrometheusQuery =>
-    async (query) => {
-        const response = await fetchImpl(`${url.replace(/\/$/, '')}/api/v1/query?${new URLSearchParams({ query })}`, {
-            signal: AbortSignal.timeout(10_000),
-        }).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
-        if (response instanceof Error) {
-            return err(response.message);
-        }
-        if (!response.ok) {
-            return err(`Prometheus answered ${response.status}`);
-        }
-        const body = (await response.json()) as {
-            data?: { result?: { metric?: Record<string, string>; value?: [number, string] }[] };
-        };
-        return ok((body.data?.result ?? []).map((sample) => ({ labels: sample.metric ?? {}, value: Number(sample.value?.[1]) })));
-    };
 
 const VOLUMES = 'namespace=~"project-.*", persistentvolumeclaim=~"db-.*"';
 export const USED_QUERY = `kubelet_volume_stats_used_bytes{${VOLUMES}} / kubelet_volume_stats_capacity_bytes{${VOLUMES}}`;

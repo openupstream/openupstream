@@ -38,7 +38,8 @@ TopoLVM: their sizes are not reserved, so one can fill the disk, the API
 accepts any size unchecked, growing a Database's storage never completes
 (local-path cannot expand a volume), and storage does not grow by itself
 (decision 111): `platform.sh` leaves the control plane without
-Prometheus there. The node carries
+Prometheus there, so it records no usage either (metering, decision 114).
+The node carries
 the label of the compute Site `hetzner-fsn1`; a Database or Service with
 the Home site `ovh-lim` runs there as well.
 

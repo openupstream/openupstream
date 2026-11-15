@@ -17,7 +17,7 @@ const routing: DomainRouting = {
     domainId: '22222222-2222-4222-8222-222222222222',
     hostname: 'shop-a1b2c3d4.openupstream.app',
     kind: 'default',
-    routes: [{ id: '44444444-4444-4444-8444-444444444444', pathPrefix: '/', kind: 'bucket', bucketName: 'shop-site', spaFallback: true }],
+    routes: [{ id: '44444444-4444-4444-8444-444444444444', pathPrefix: '/', kind: 'bucket', bucketId: '77777777-7777-4777-8777-777777777777', bucketName: 'shop-site', spaFallback: true }],
 };
 
 /** A cluster holding `existing` objects of ours; records applies and removes. */
@@ -88,5 +88,8 @@ test("a deleted custom domain's Certificate is pruned after its IngressRoute", a
     const current = planRoutes([routing, custom], settings).filter(ours).map(refOf);
     const { kube, removed } = fakeKube(current);
     await reconcileRoutes(kube, [routing], settings);
-    assert.deepEqual(removed, ['IngressRoute domain-88888888-8888-4888-8888-888888888888', 'Certificate domain-88888888-8888-4888-8888-888888888888']);
+    assert.deepEqual(removed, [
+        'IngressRoute domain-88888888-8888-4888-8888-888888888888-bucket-77777777-7777-4777-8777-777777777777',
+        'Certificate domain-88888888-8888-4888-8888-888888888888',
+    ]);
 });

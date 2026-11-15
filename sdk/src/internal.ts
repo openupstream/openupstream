@@ -4,7 +4,7 @@
  * public API: it is served on its own port, never routed by ingress, and
  * callers authenticate with their Kubernetes ServiceAccount token.
  */
-import type { Account, Database, DatabaseConnection, Domain, Id, Job, Member, Project, Route, Service, Site } from './model.js';
+import type { Account, Database, DatabaseConnection, Domain, Id, Job, Member, Project, ResourceKind, Route, Service, Site, UsageUnit } from './model.js';
 
 /**
  * Kubernetes names, by id (ARCHITECTURE.md, decision 42): the operators
@@ -91,13 +91,43 @@ export const INTERNAL_SERVICES_PATH = '/internal/v1/services';
 /** `GET` lists every Job with its Project, for the Jobs operator. */
 export const INTERNAL_JOBS_PATH = '/internal/v1/jobs';
 
-/** The Traefik IngressRoute that serves one Domain, in its Project's namespace. */
-export const ingressRouteName = (domainId: Id): string => `domain-${domainId}`;
+/** An Account's usage of one month: `${INTERNAL_ACCOUNTS_PATH}/{id}/usage?month=YYYY-MM`, for the billing service. */
+export const internalUsagePath = (accountId: Id, month: string): string => `${INTERNAL_ACCOUNTS_PATH}/${accountId}/usage?month=${month}`;
+
+/**
+ * An Account's usage summed per Project, Resource and unit over one
+ * calendar month (UTC), as the billing service rates it (decision 114).
+ * Quantities are in the unit's own terms: seconds, GB-hours, GB.
+ */
+export interface AccountUsage {
+    readonly accountId: Id;
+    /** `YYYY-MM`. */
+    readonly month: string;
+    /** Hours of the month in its days; the month is complete for billing once `meteredHours` reaches it. */
+    readonly hours: number;
+    /** Hours of the month the metering pass has recorded. */
+    readonly meteredHours: number;
+    readonly usage: readonly {
+        readonly projectId: Id;
+        readonly resource: { readonly kind: ResourceKind; readonly id: Id };
+        readonly unit: UsageUnit;
+        readonly quantity: number;
+    }[];
+}
+
+/**
+ * The Traefik IngressRoute that serves one Resource under one Domain, in its
+ * Project's namespace (decision 114): `domain-<id>-bucket-<id>` or
+ * `domain-<id>-svc-<id>`. Traefik names each rule's metrics after it, so
+ * metering reads the Resource from them.
+ */
+export const ingressRouteName = (domainId: Id, resource: { readonly kind: 'bucket' | 'service'; readonly id: Id }): string =>
+    `domain-${domainId}-${resource.kind === 'bucket' ? 'bucket' : 'svc'}-${resource.id}`;
 
 /** A Route as the Routes operator needs it: the Bucket by name, or the Service with its port. */
 export type RoutedPath = Pick<Route, 'id' | 'pathPrefix'> &
     (
-        | { readonly kind: 'bucket'; readonly bucketName: string; readonly spaFallback: boolean }
+        | { readonly kind: 'bucket'; readonly bucketId: Id; readonly bucketName: string; readonly spaFallback: boolean }
         | { readonly kind: 'service'; readonly serviceId: Id; readonly port: number }
     );
 

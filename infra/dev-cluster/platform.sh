@@ -23,7 +23,9 @@
 # 6. the Routes operator, turning the routing table into Traefik objects
 #    every 30 s;
 # 7. the Services operator, running every Service as a Deployment under
-#    gVisor every 30 s.
+#    gVisor every 30 s;
+# 8. the CPU agent on each compute node, every pod's CPU total for metering
+#    (decision 115).
 #
 # Images come from GHCR, pinned by digest: by default the ones built for the
 # current commit (.github/workflows/images.yml). Override with IMAGE_TAG.
@@ -180,7 +182,8 @@ fi
 # Storage auto-grow reads volume usage from the platform's Prometheus
 # (decision 111), once monitoring.sh has installed it; run this again after.
 # Not on a single node: its local-path volumes cannot grow, so a grown size
-# would never be reached (decision 112).
+# would never be reached (decision 112). Metering (decision 114) reads the
+# same Prometheus, so a single node records no usage either.
 PROMETHEUS_URL=""
 if [[ $LAYOUT == multi-node ]] && kubectl -n monitoring get service kube-prometheus-stack-prometheus >/dev/null 2>&1; then
   PROMETHEUS_URL=http://kube-prometheus-stack-prometheus.monitoring.svc:9090
@@ -236,3 +239,8 @@ kubectl apply -f "$ROOT/operators/deploy/jobs-rbac.yaml" >/dev/null
 sed "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" "$ROOT/operators/deploy/jobs-operator.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n openupstream-system rollout status deployment/jobs-operator --timeout=5m
+
+# The CPU agent on each compute node, for metering (decision 115).
+sed "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" "$ROOT/operators/deploy/cpu-agent.yaml" |
+  kubectl apply -f - >/dev/null
+kubectl -n openupstream-system rollout status daemonset/cpu-agent --timeout=5m

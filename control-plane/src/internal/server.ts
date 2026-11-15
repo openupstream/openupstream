@@ -8,6 +8,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import {
     type AccountRecord,
+    type AccountUsage,
     DNS_LABEL,
     type DatabaseRow,
     type DomainRouting,
@@ -39,6 +40,8 @@ export interface InternalApi {
     readonly listServiceRows: () => Promise<readonly ServiceRow[]>;
     readonly listJobRows: () => Promise<readonly JobRow[]>;
     readonly getAccount: (id: string) => Promise<AccountRecord | undefined>;
+    /** The Account's usage of a month (`YYYY-MM`); undefined for a malformed month. */
+    readonly accountUsage: (accountId: string, month: string) => Promise<AccountUsage | undefined>;
     /** False if there is no such Account. */
     readonly placeHold: (accountId: string, reason: string) => Promise<boolean>;
     /** False if there is no such Account. */
@@ -74,9 +77,10 @@ const bearerToken = (req: IncomingMessage): string | undefined =>
 
 const accountPath = new RegExp(`^${INTERNAL_ACCOUNTS_PATH}/([^/]+)$`);
 const holdPath = new RegExp(`^${INTERNAL_ACCOUNTS_PATH}/([^/]+)/holds/([^/]+)$`);
+const usagePath = new RegExp(`^${INTERNAL_ACCOUNTS_PATH}/([^/]+)/usage$`);
 
 /** The route for a path, or undefined; malformed ids and reasons match nothing. */
-function routeFor(api: InternalApi, path: string): Route | undefined {
+function routeFor(api: InternalApi, path: string, query: URLSearchParams): Route | undefined {
     if (path === INTERNAL_DATABASES_PATH) {
         return {
             methods: ['GET'],
@@ -117,6 +121,22 @@ function routeFor(api: InternalApi, path: string): Route | undefined {
             },
         };
     }
+    const usage = usagePath.exec(path);
+    if (usage?.[1] !== undefined && UUID.test(usage[1])) {
+        const id = usage[1];
+        return {
+            methods: ['GET'],
+            callers: api.billingCallers,
+            handle: async () => {
+                const month = query.get('month') ?? '';
+                if ((await api.getAccount(id)) === undefined) {
+                    return notFound;
+                }
+                const found = await api.accountUsage(id, month);
+                return found === undefined ? { status: 400, body: { error: 'month must be YYYY-MM' } } : { status: 200, body: found };
+            },
+        };
+    }
     const hold = holdPath.exec(path);
     if (hold?.[1] !== undefined && hold[2] !== undefined && UUID.test(hold[1]) && DNS_LABEL.test(hold[2])) {
         const [, id, reason] = hold;
@@ -133,7 +153,8 @@ function routeFor(api: InternalApi, path: string): Route | undefined {
 }
 
 async function handle(api: InternalApi, req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const route = routeFor(api, new URL(req.url ?? '/', 'http://internal').pathname);
+    const url = new URL(req.url ?? '/', 'http://internal');
+    const route = routeFor(api, url.pathname, url.searchParams);
     if (route === undefined) {
         return send(res, notFound);
     }

@@ -5,10 +5,13 @@
  * Per Project with Routes, in its namespace: the Namespace itself, an
  * ExternalName Service `garage-web` for Garage's website endpoint (Traefik
  * routes only to Services in the IngressRoute's own namespace), and the
- * Middlewares every Domain shares (compression, HSTS). Per Domain: one
- * IngressRoute. Per Route to a Bucket: a Middleware that tells Garage which
- * Bucket to serve (the Host header is the Bucket's name), and one that
- * strips the path prefix.
+ * Middlewares every Domain shares (compression, HSTS). Per Domain and
+ * Resource it serves: one IngressRoute, `domain-<id>-bucket-<id>` or
+ * `domain-<id>-svc-<id>`, so Traefik's per-rule metrics name the Resource
+ * for metering (decision 114); rules of several IngressRoutes for one
+ * hostname compete by priority alone, as within one. Per Route to a Bucket:
+ * a Middleware that tells Garage which Bucket to serve (the Host header is
+ * the Bucket's name), and one that strips the path prefix.
  *
  * A Route to a Service goes to its Kubernetes Service (decision 93), path
  * unchanged. Like the platform's own routes (infra/ingress), Traefik gives
@@ -181,21 +184,34 @@ const serviceRules = (routing: DomainRouting, route: Extract<RoutedPath, { kind:
     ];
 };
 
-const ingressRoute = (routing: DomainRouting): KubeObject => ({
-    apiVersion: TRAEFIK,
-    kind: 'IngressRoute',
-    metadata: {
-        name: ingressRouteName(routing.domainId),
-        namespace: projectNamespace(routing.projectId),
-        labels: labels(routing.projectId),
-    },
-    spec: {
-        entryPoints: ['websecure'],
-        routes: routing.routes.flatMap((route): Rule[] => (route.kind === 'bucket' ? [bucketRule(routing, route)] : serviceRules(routing, route))),
-        // A default Domain: the default TLS store's certificate, the customer domain's wildcard.
-        tls: routing.kind === 'custom' ? { secretName: tlsSecretName(routing) } : {},
-    },
-});
+/** A Route's Resource: what names its IngressRoute. */
+const resourceOf = (route: Routed): { readonly kind: 'bucket' | 'service'; readonly id: string } =>
+    route.kind === 'bucket' ? { kind: 'bucket', id: route.bucketId } : { kind: 'service', id: route.serviceId };
+
+/** One IngressRoute per Resource the Domain serves, its Routes' rules in it, in the order of the Routes. */
+const ingressRoutes = (routing: DomainRouting): KubeObject[] => {
+    const byResource = new Map<string, { resource: ReturnType<typeof resourceOf>; routes: Routed[] }>();
+    for (const route of routing.routes) {
+        const resource = resourceOf(route);
+        const key = `${resource.kind} ${resource.id}`;
+        byResource.set(key, { resource, routes: [...(byResource.get(key)?.routes ?? []), route] });
+    }
+    return [...byResource.values()].map(({ resource, routes }) => ({
+        apiVersion: TRAEFIK,
+        kind: 'IngressRoute',
+        metadata: {
+            name: ingressRouteName(routing.domainId, resource),
+            namespace: projectNamespace(routing.projectId),
+            labels: labels(routing.projectId),
+        },
+        spec: {
+            entryPoints: ['websecure'],
+            routes: routes.flatMap((route): Rule[] => (route.kind === 'bucket' ? [bucketRule(routing, route)] : serviceRules(routing, route))),
+            // A default Domain: the default TLS store's certificate, the customer domain's wildcard.
+            tls: routing.kind === 'custom' ? { secretName: tlsSecretName(routing) } : {},
+        },
+    }));
+};
 
 /**
  * Applied in this order: a Project's objects first, then each Domain's
@@ -211,7 +227,7 @@ export function planRoutes(routings: readonly DomainRouting[], settings: RoutesS
         ...routings.flatMap((routing) => [
             ...routing.routes.flatMap((route) => routeObjects(routing, route)),
             ...(routing.kind === 'custom' ? [certificate(routing, settings)] : []),
-            ingressRoute(routing),
+            ...ingressRoutes(routing),
         ]),
     ];
 }

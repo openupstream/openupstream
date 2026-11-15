@@ -26,7 +26,9 @@ Traefik already implements is configured, not reimplemented.
   ServersTransport `fail-fast` and the Middleware `retry-other-pod`; per
   Route to a Bucket, a Middleware that sets the Host header to the Bucket's
   name and one that strips the prefix; per
-  Domain, an IngressRoute, on the default certificate for a default Domain,
+  Domain and Resource, an IngressRoute (`domain-<id>-bucket-<id>`,
+  `domain-<id>-svc-<id>`, so Traefik's metrics name the Resource for
+  metering, decision 114), on the default certificate for a default Domain,
   on a Certificate of its own from `CLUSTER_ISSUER` (HTTP-01) for a custom
   domain. `reconcileRoutes`
   applies them and deletes the objects labelled
@@ -60,6 +62,12 @@ Traefik already implements is configured, not reimplemented.
   runs go with them, by Kubernetes' garbage collection.
 - `src/owned.ts`: the apply-then-prune pass the Routes, Services and Jobs
   operators share.
+- `src/cpu-agent/`: the CPU agent (ARCHITECTURE.md, decision 115), the
+  image's other entry point (`node operators/dist/cpu-agent/main.js`, a
+  DaemonSet in `deploy/cpu-agent.yaml`): every pod's CPU total from its
+  cgroup on the node, read every second and when its last process exits,
+  served on :9101/metrics as `openupstream_pod_cpu_usage_seconds_total` and
+  kept 15 minutes after the pod ended. `totals.ts` is the pure bookkeeping.
 - `src/main.ts`: the image's entry point; `OPERATOR` (`databases`, the
   default, `routes`, `services` or `jobs`) picks which operator the process runs,
   each in its own Deployment with its own ServiceAccount.

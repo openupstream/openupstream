@@ -33,8 +33,8 @@ Staging and production are separate Projects.
 _Avoid_: tenant, environment, resource group, namespace
 
 **Resource**:
-Anything billable that a Project contains: a Database, a Bucket or a
-Service.
+Anything billable that a Project contains: a Database, a Bucket, a
+Service or a Job.
 
 ## Products
 

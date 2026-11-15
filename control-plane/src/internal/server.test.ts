@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import {
+    type AccountUsage,
     type AccountRecord,
     type DatabaseRow,
     type DomainRouting,
@@ -29,7 +30,7 @@ const routings: DomainRouting[] = [
         domainId: '0b7c3f1e-2d4a-4c8b-9e6f-111111111111',
         hostname: 'shop-a1b2c3d4.openupstream.app',
         kind: 'default',
-        routes: [{ id: '0b7c3f1e-2d4a-4c8b-9e6f-222222222222', pathPrefix: '/', kind: 'bucket', bucketName: 'shop-site', spaFallback: true }],
+        routes: [{ id: '0b7c3f1e-2d4a-4c8b-9e6f-222222222222', pathPrefix: '/', kind: 'bucket', bucketId: '77777777-7777-4777-8777-777777777777', bucketName: 'shop-site', spaFallback: true }],
     },
 ];
 const rows: DatabaseRow[] = [{ project: PLATFORM.project, database: PLATFORM.database }];
@@ -118,6 +119,16 @@ before(async () => {
             return rows;
         },
         getAccount: async (id) => (id === accountId ? record() : undefined),
+        accountUsage: async (id, month) =>
+            /^\d{4}-\d{2}$/.test(month)
+                ? {
+                      accountId: id,
+                      month,
+                      hours: 720,
+                      meteredHours: 700,
+                      usage: [{ projectId: PLATFORM.project.id, resource: { kind: 'database', id: PLATFORM.database.id }, unit: 'storage_gb_hours', quantity: 3500 }],
+                  }
+                : undefined,
         placeHold: async (id, reason) => id === accountId && (holds.add(reason), true),
         liftHold: async (id, reason) => id === accountId && (holds.delete(reason), true),
     });
@@ -175,6 +186,17 @@ test('the billing service reads an Account with its Holds and Members', async ()
     assert.deepEqual(await response.json(), record());
     assert.equal((await get(billing, `${INTERNAL_ACCOUNTS_PATH}/${unknownId}`)).status, 404);
     assert.equal((await get(billing, `${INTERNAL_ACCOUNTS_PATH}/not-a-uuid`)).status, 404);
+});
+
+test("the billing service reads an Account's usage of a month; nobody else does", async () => {
+    const response = await get(billing, `${INTERNAL_ACCOUNTS_PATH}/${accountId}/usage?month=2026-11`);
+    assert.equal(response.status, 200);
+    const usage = (await response.json()) as AccountUsage;
+    assert.deepEqual([usage.month, usage.hours, usage.meteredHours, usage.usage.length], ['2026-11', 720, 700, 1]);
+    assert.equal((await get(billing, `${INTERNAL_ACCOUNTS_PATH}/${accountId}/usage?month=November`)).status, 400);
+    assert.equal((await get(billing, `${INTERNAL_ACCOUNTS_PATH}/${accountId}/usage`)).status, 400);
+    assert.equal((await get(billing, `${INTERNAL_ACCOUNTS_PATH}/${unknownId}/usage?month=2026-11`)).status, 404);
+    assert.equal((await get(operator, `${INTERNAL_ACCOUNTS_PATH}/${accountId}/usage?month=2026-11`)).status, 403);
 });
 
 test('the billing service places and lifts Holds; both are idempotent', async () => {
