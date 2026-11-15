@@ -110,6 +110,14 @@ const podLogs = new Map<string, string[]>();
 /** What the fake Kubernetes reports per Cluster name; a string is an error. */
 const clusters = new Map<string, ClusterStatus | string>();
 
+/** TopoLVM's free bytes per node in the fake Kubernetes (undefined: no TopoLVM), the nodes' Sites, and each Cluster's volume nodes. */
+let storageCapacity: Map<string, number> | undefined;
+const nodeSites = new Map([
+    ['node-fsn', 'hetzner-fsn1'],
+    ['node-lim', 'ovh-lim'],
+]);
+const volumeNodes = new Map<string, string[]>();
+
 /** The recovery windows of the fake Kubernetes' ObjectStores, by name; a string is an error. */
 const recoveryWindows = new Map<string, RecoveryWindow | string>();
 
@@ -124,6 +132,8 @@ const kube: ControlPlaneKube = {
         const status = clusters.get(name);
         return typeof status === 'string' ? err(status) : ok(status);
     },
+    storageCapacity: async () => ok(storageCapacity),
+    volumeNodes: async (_namespace, name) => ok(volumeNodes.get(name) ?? []),
     readRecoveryWindow: async (_namespace, name) => {
         const window = recoveryWindows.get(name);
         return typeof window === 'string' ? err(window) : ok(window);
@@ -150,7 +160,7 @@ const kube: ControlPlaneKube = {
     },
     deleteJob: async (_namespace, name) => ok(runs.delete(name) ? 'deleted' : 'not-found'),
     listPods: async (namespace, selector) => (kubeDown ? err('connection refused') : ok(pods.get(`${namespace} ${selector}`) ?? [])),
-    nodeSite: async () => ok('hetzner-fsn1'),
+    nodeSite: async (node) => ok(nodeSites.get(node) ?? 'hetzner-fsn1'),
     podLog: async (_namespace, pod, container, options) => {
         const lines = podLogs.get(`${pod}/${container}`) ?? [];
         const tail = options.tailLines === undefined ? lines : lines.slice(-options.tailLines);
@@ -480,6 +490,23 @@ describe('Databases', () => {
         assert.deepEqual([details.storageGb, details.memoryMb, details.state], [10, 1024, 'resizing']);
         const row = (await listDatabaseRows(db.pool)).find((r) => r.database.id === created.id);
         assert.deepEqual([row?.database.storageGb, row?.database.memoryMb], [10, 1024], 'the operator renders the new sizes');
+
+        const GiB = 1024 ** 3;
+        storageCapacity = new Map([
+            ['node-fsn', 30 * GiB],
+            ['node-lim', 14.5 * GiB],
+        ]);
+        volumeNodes.set(`db-${created.id}`, ['node-fsn', 'node-lim']);
+        const tooBig = await patch({ storageGb: 25 });
+        assert.equal(tooBig.status, 507, 'ovh-lim has room for 14 GB more, not 15');
+        assert.match(((await tooBig.json()) as { error: string }).error, /at most 14 GB more/);
+        assert.equal(
+            (await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name: 'huge', memoryMb: 256, storageGb: 15 })).status,
+            507,
+            'a new one needs room in both Sites',
+        );
+        storageCapacity = undefined;
+        volumeNodes.delete(`db-${created.id}`);
 
         clusters.set(`db-${created.id}`, { instances: 2, readyInstances: 2, ready: true, memoryMb: 1024, storageGb: 10 });
         const state = async () =>

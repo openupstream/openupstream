@@ -10,6 +10,7 @@ import { createInterface } from 'node:readline';
 import { ApiException, type KubeConfig, KubernetesObjectApi, Log, PatchStrategy } from '@kubernetes/client-node';
 import { SPEC_VERSION_ANNOTATION, type DatabaseState, type JobState, type ServiceState } from '@openupstream/sdk';
 import { type Result, err, ok } from './result.js';
+import { bytesOf } from './databases/capacity.js';
 
 export interface ObjectRef {
     readonly apiVersion: string;
@@ -26,6 +27,8 @@ export interface ClusterStatus {
     /** The sizes its spec asks for (`resources.limits.memory`, `storage.size`); undefined when unreadable. */
     readonly memoryMb?: number | undefined;
     readonly storageGb?: number | undefined;
+    /** Volumes CloudNativePG is still growing (`status.resizingPVC`). */
+    readonly resizingVolumes?: number;
 }
 
 /**
@@ -133,6 +136,13 @@ export interface ControlPlaneKube {
     deleteJob(namespace: string, name: string): Promise<Result<'deleted' | 'not-found', string>>;
     /** The pods in the namespace that carry the labels in `selector`. */
     listPods(namespace: string, selector: string): Promise<Result<PodInfo[], string>>;
+    /**
+     * Free bytes per node from TopoLVM's CSIStorageCapacity objects;
+     * undefined when there are none (storage other than TopoLVM).
+     */
+    storageCapacity(): Promise<Result<Map<string, number> | undefined, string>>;
+    /** The nodes holding the volumes of the Cluster `name` (its PVCs' selected node). */
+    volumeNodes(namespace: string, name: string): Promise<Result<string[], string>>;
     /** The Site (zone label) of a node; undefined when it has none or is gone. */
     nodeSite(nodeName: string): Promise<Result<string | undefined, string>>;
     /**
@@ -151,8 +161,8 @@ export interface ControlPlaneKube {
 
 /**
  * No Cluster yet, or no instance up: provisioning; a spec with other sizes
- * than the Database's (the operator has not applied a resize yet):
- * resizing; all instances up: ready; some: degraded. While CloudNativePG
+ * than the Database's (the operator has not applied a resize yet), or a
+ * volume still growing: resizing; all instances up: ready; some: degraded. While CloudNativePG
  * restarts the instances for a new memory size, its Ready condition is
  * false, so that reads as degraded.
  */
@@ -161,7 +171,7 @@ export const stateOf = (status: ClusterStatus | undefined, wanted?: { readonly m
         return 'provisioning';
     }
     const differs = (applied: number | undefined, asked: number | undefined) => applied !== undefined && asked !== undefined && applied !== asked;
-    if (differs(status.memoryMb, wanted?.memoryMb) || differs(status.storageGb, wanted?.storageGb)) {
+    if (differs(status.memoryMb, wanted?.memoryMb) || differs(status.storageGb, wanted?.storageGb) || (status.resizingVolumes ?? 0) > 0) {
         return 'resizing';
     }
     return status.ready && status.readyInstances >= status.instances ? 'ready' : 'degraded';
@@ -172,6 +182,11 @@ export const quantityIn = (quantity: string | undefined, unit: 'Mi' | 'Gi'): num
     const match = quantity === undefined ? null : new RegExp(`^(\\d+)${unit}$`).exec(quantity);
     return match === null ? undefined : Number(match[1]);
 };
+
+/** TopoLVM's topology key: one CSIStorageCapacity per node. */
+const TOPOLVM_NODE_LABEL = 'topology.topolvm.io/node';
+/** Set by the scheduler on a PVC bound to a local volume: the node it lives on. */
+const SELECTED_NODE_ANNOTATION = 'volume.kubernetes.io/selected-node';
 
 /** The client sets no timeout; an API server in a dark Site must not hang a request. */
 export const KUBE_CALL_TIMEOUT_MS = 10_000;
@@ -200,7 +215,7 @@ interface ClusterObject {
     kind: string;
     metadata: { name: string; namespace: string };
     spec?: { instances?: number; resources?: { limits?: { memory?: string } }; storage?: { size?: string } };
-    status?: { readyInstances?: number; conditions?: { type: string; status: string }[] };
+    status?: { readyInstances?: number; conditions?: { type: string; status: string }[]; resizingPVC?: string[] };
 }
 
 interface ObjectStoreObject {
@@ -291,6 +306,7 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
                 ready: (cluster.status?.conditions ?? []).some((c) => c.type === 'Ready' && c.status === 'True'),
                 memoryMb: quantityIn(cluster.spec?.resources?.limits?.memory, 'Mi'),
                 storageGb: quantityIn(cluster.spec?.storage?.size, 'Gi'),
+                resizingVolumes: cluster.status?.resizingPVC?.length ?? 0,
             });
         },
         readRecoveryWindow: async (namespace, name) => {
@@ -365,6 +381,45 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
         listPods: async (namespace, selector) => {
             const result = await within(api.list<PodObject>('v1', 'Pod', namespace, undefined, undefined, undefined, undefined, selector), timeoutMs);
             return result.ok ? ok(result.value.items.map(podInfoOf)) : err(result.error.message);
+        },
+        storageCapacity: async () => {
+            const result = await within(
+                api.list<{
+                    apiVersion: string;
+                    kind: string;
+                    metadata: { name: string };
+                    nodeTopology?: { matchLabels?: Record<string, string> };
+                    capacity?: string;
+                }>('storage.k8s.io/v1', 'CSIStorageCapacity'),
+                timeoutMs,
+            );
+            if (!result.ok) {
+                return err(result.error.message);
+            }
+            const entries = result.value.items.flatMap((item) => {
+                const node = item.nodeTopology?.matchLabels?.[TOPOLVM_NODE_LABEL];
+                const bytes = item.capacity === undefined ? undefined : bytesOf(item.capacity);
+                return node === undefined || bytes === undefined ? [] : [[node, bytes] as const];
+            });
+            return ok(entries.length === 0 ? undefined : new Map(entries));
+        },
+        volumeNodes: async (namespace, name) => {
+            const result = await within(
+                api.list<{ apiVersion: string; kind: string; metadata: { name: string; annotations?: Record<string, string> } }>(
+                    'v1',
+                    'PersistentVolumeClaim',
+                    namespace,
+                    undefined,
+                    undefined,
+                    undefined,
+                    undefined,
+                    `cnpg.io/cluster=${name}`,
+                ),
+                timeoutMs,
+            );
+            return result.ok
+                ? ok(result.value.items.flatMap((pvc) => pvc.metadata.annotations?.[SELECTED_NODE_ANNOTATION] ?? []))
+                : err(result.error.message);
         },
         nodeSite: async (nodeName) => {
             const result = await within(

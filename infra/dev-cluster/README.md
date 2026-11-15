@@ -76,11 +76,14 @@ reaching a Bucket does not trust (`unable to get local issuer
 certificate`); to run one, as the `spa-api` demo app does, use
 `CLUSTER_ISSUER=letsencrypt ./garage.sh`, which may run again on a
 running cluster. Let's Encrypt issues the same names at most five times a
-week. On 2026-11-10 every DNS-01 challenge failed in both zones with
-NXDOMAIN for the TXT record, although bunny.net's nameservers and 1.1.1.1
-served it for a minute before the check; `garage.sh` and `platform.sh`
-then stop at their certificate wait, after everything but the operators
-that `platform.sh` installs last. Traefik serves its default certificate
+week. On 2026-11-10 every DNS-01 challenge failed in both zones for an
+afternoon with NXDOMAIN for the TXT record, although both bunny.net
+nameservers (IPv4 and IPv6, any letter case) and the public resolvers
+served it; on 2026-11-15 the same setup issued at once, so the cause was
+outside this repository (Let's Encrypt was rolling out more validation
+perspectives then). If it happens again, `garage.sh` and `platform.sh`
+stop at their certificate wait, after everything but the operators that
+`platform.sh` installs last; Traefik serves its default certificate
 meanwhile, so the API works with `-k`. Then:
 
 ```bash

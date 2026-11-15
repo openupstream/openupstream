@@ -10,6 +10,7 @@ test('a Database is resizing until its Cluster asks for the sizes of its row', (
     assert.equal(stateOf(healthy, wanted), 'ready');
     assert.equal(stateOf(healthy, { ...wanted, storageGb: 10 }), 'resizing');
     assert.equal(stateOf(healthy, { ...wanted, memoryMb: 1024 }), 'resizing');
+    assert.equal(stateOf({ ...healthy, resizingVolumes: 2 }, wanted), 'resizing', 'the spec has the size, a volume is still growing');
     assert.equal(stateOf({ ...healthy, ready: false, readyInstances: 1 }, wanted), 'degraded', 'instances restarting for the new size');
     assert.equal(stateOf({ ...healthy, readyInstances: 0 }, { ...wanted, storageGb: 10 }), 'provisioning');
 });

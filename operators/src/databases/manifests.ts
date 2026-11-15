@@ -62,6 +62,24 @@ export const POOLER_DEAD_SERVER_DETECTION = {
     server_connect_timeout: '5',
 } as const;
 
+/**
+ * One failed login to Postgres (the old primary going down in a restart)
+ * makes PgBouncer refuse every client for server_login_retry, 15 s by
+ * default. At 1 s a memory resize paused writes for 12 s instead of 16 s
+ * (dev cluster, 2026-11-15).
+ */
+export const POOLER_LOGIN_RETRY = { server_login_retry: '1' } as const;
+
+/**
+ * How a rolling restart (a new memory size, a new image) treats the
+ * primary (decision 110): restarted in place, after the standby, so it
+ * stays in its Home site; its smart shutdown waits at most 30 s for
+ * PgBouncer's connections, which never close by themselves, instead of
+ * CloudNativePG's 180 s. Writes keep flowing during that wait; a resize
+ * took 1.5 instead of 4 minutes, with one pause of 12 s.
+ */
+export const PRIMARY_RESTART = { primaryUpdateMethod: 'restart', smartShutdownTimeout: 30 } as const;
+
 /** Platform settings that are the same for every Database. */
 export interface DatabaseConfig {
     /** Our Postgres image (`images/postgres`), pinned by digest. */
@@ -180,6 +198,7 @@ const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig
     spec: {
         instances: DATABASE_INSTANCES,
         imageName: config.postgresImage,
+        ...PRIMARY_RESTART,
         // Pods, Services and PVCs carry the labels too, so usage can be
         // attributed to the Database.
         inheritedMetadata: { labels: inheritedLabels(meta) },
@@ -244,6 +263,7 @@ const poolerFor = (meta: ObjectMeta, cluster: string): PoolerManifest => ({
                 // transaction mode.
                 max_prepared_statements: '200',
                 ...POOLER_DEAD_SERVER_DETECTION,
+                ...POOLER_LOGIN_RETRY,
             },
         },
         template: {

@@ -170,6 +170,13 @@ test('PgBouncer drops connections to a primary in a dark Site within seconds', (
     assert.equal(parameters.server_connect_timeout, '5');
 });
 
+test('a rolling restart keeps the primary in place and pauses writes briefly', () => {
+    const { cluster, pooler } = manifestsFor();
+    assert.equal(cluster.spec.primaryUpdateMethod, 'restart');
+    assert.equal(cluster.spec.smartShutdownTimeout, 30);
+    assert.equal(pooler.spec.pgbouncer.parameters?.server_login_retry, '1');
+});
+
 test("the Pooler's name clashes with none of the Cluster's", () => {
     const { cluster, pooler } = manifestsFor();
     const clusterServices = ['rw', 'ro', 'r'].map((suffix) => `${cluster.metadata.name}-${suffix}`);
