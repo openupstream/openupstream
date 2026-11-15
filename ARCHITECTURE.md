@@ -598,9 +598,10 @@ digest (#55).
   one fails; two or more have a hard topology spread over the compute
   Sites that leaves out a dark Site's tainted node (as in decision 46).
   Rollouts start the new pod before stopping the old one. Requests and
-  limits are both the configured memory and CPU, so what is billed is
-  reserved and no Service takes another's CPU. A pod may write 2 GiB to
-  its container's filesystem and logs (`ephemeral-storage`, decision 121),
+  limits are both the configured memory and CPU, so the memory billed is
+  reserved and no Service takes another's CPU; CPU is billed as measured,
+  not as reserved (Open question 23). A pod may write 2 GiB to its
+  container's filesystem and logs (`ephemeral-storage`, decision 121),
   the same for every Service and Job and not billed: the kubelet evicts a
   pod above it, so a Service's pod is replaced by a new, empty one and a
   Job's run ends. Nothing a container writes there outlives its pod
@@ -1322,6 +1323,91 @@ Decisions table once it is settled.
     leave `/auth/*`, `/.well-known/*` and `/api/*` alone), or an nginx container
     with the files. Until it is served, `oup login` has no approval page
     at madAuth's `loginUrl`.
+23. **What an idle Service reserves and what it pays.** Requests equal
+    limits for memory and CPU (decision 93), so an idle Service holds its
+    configured memory and CPU on the node. Memory is billed as configured,
+    but CPU is billed as measured (decision 115): a Service set to 2 CPUs
+    that stays idle blocks two cores and pays for almost none. To settle
+    before the unit prices are set. Options, none evaluated yet:
+    - A CPU request below the limit, so cores are overcommitted. Costs:
+      no guaranteed CPU when many Services are busy at once.
+    - A CPU request of half the limit, with the load spread evenly over
+      both compute Sites: each node is full by limits and half full by
+      requests, so every Service has its configured CPU while both Sites
+      are up, and when one is down all pods fit on the other and share its
+      CPU in proportion to their requests, at least half each. Today a
+      failed Site's pods would stay pending if both nodes were full by
+      requests. Needs the Home sites of new Projects alternated, since
+      single-replica Services run in their Databases' Home site
+      (Falkenstein by default). Costs: memory still has to fit on one
+      node, so this doubles CPU capacity only; an idle Service still
+      holds half its CPU; the promise becomes "half the CPU during a Site
+      outage", which is when many pods start at once; a request below
+      its limit also moves a Service's pods from Kubernetes' Guaranteed
+      to its Burstable QoS class, so they rank before Databases when a
+      node runs out of memory and are the pods swap would apply to (next
+      but one option). Tested on the dev cluster (2026-11-15, k3s 1.36,
+      4-vCPU nodes, plain Deployments without the platform): three busy
+      gVisor pods per compute Site with a request of 500m and a limit of
+      1 CPU; after `ovh-lim` was powered off its three pods ran on
+      `hetzner-fsn1` within 80 s of the command, each pod's throughput there fell
+      to about two thirds (six pods on four cores) and a fixed piece of
+      start-up work took 9.4 s instead of 5.5 s. With requests equal to
+      limits the three pods stayed pending (`Insufficient cpu`). Not
+      tested: Databases and real Services on the same node.
+    - A memory request below the limit. Costs: without swap a full node
+      means evictions and OOM kills, on nodes that also run Databases;
+      metering reads memory from the pods' requests (decision 114) and
+      would have to read the limit.
+    - The same with swap on the nodes' disks (NVMe on the OVHcloud
+      server, decision 119; the Hetzner server is not chosen yet), so the
+      kernel moves
+      pages an idle Service has not touched to disk and a full node gets
+      slow instead of killing pods. The first request after a pause pages
+      them back in, without an activator in the request path. Databases
+      keep requests equal to limits and are not swapped. Costs: the
+      promise becomes "slower after idling"; swap holds customer data and
+      Secrets, so it must be encrypted; when a Site is down many Services
+      want their memory back on a node that is already full, and it may
+      thrash, so the memory of the Services expected to be active must
+      still fit on one node. Tested on the dev cluster (2026-11-15, k3s
+      1.36, one 8 GB node with an 8 GB swap file on the VM's disk, the
+      kubelet with `failSwapOn: false` and `swapBehavior: LimitedSwap`
+      in `kubelet.conf.d`, pods with a request of 256 MiB and a limit of
+      1 GiB that hold 600 MB):
+      - The host swaps a gVisor sandbox's memory: `memory.reclaim` on the
+        pod's cgroup moved all 600 MB to swap in 1.4 s, and reading it
+        all again took 7.4 s, 50 ms once it was back in memory. Under
+        runc the same took 3.0 s for the 284 MB that were swapped.
+      - Kubernetes' swap limit does not hold under gVisor. A runc
+        container got `memory.swap.max` in proportion to its memory
+        request (284 MB here, so swap as large as memory allows a pod
+        about its request), but a gVisor pod's memory is counted in the
+        sandbox's cgroup, where the limit is `max`: it swaps without a
+        limit of its own. A limit would have to be ours, on the pod's
+        cgroup.
+      - A node with more in use than it has memory stayed up: 14 such
+        gVisor pods (8.4 GB on 7.7 GB, 2.9 GB of it in swap) all ran,
+        with no OOM kill, no eviction and no `MemoryPressure`. When all
+        read their memory at once, those in memory took 50–230 ms and
+        those in swap up to 14 s (most 10–14 s).
+      Not tested: the servers' NVMe (the page-in rate of about 80 MB/s
+      is that of a cloud VM's disk), encrypted swap, Databases on the
+      same node, a real Service's latency instead of a full read, and
+      whether the kernel swaps idle pods by itself early enough or the
+      platform has to call `memory.reclaim`.
+    - Billing reserved instead of measured CPU while a pod runs, as
+      Fargate and Fly.io do (Cloud Run only with instance-based billing;
+      by default it bills CPU while a request is handled). Contradicts
+      decision 115.
+    - A price per memory GB-h that carries the reserved CPU, with a cap on
+      CPU per GB of memory.
+    - Scale-to-zero for Services with a port: an activator in the request
+      path of both compute Sites that holds the first request and scales
+      0 to 1 (candidates: Sablier, KEDA's HTTP add-on, Knative Serving),
+      an idle timeout per Service, and a measured cold start under gVisor.
+      Frees memory as well as CPU; workers without a port stay at one
+      replica. Databases stay always on (Non-goals).
 
 ## Build order
 
