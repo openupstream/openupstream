@@ -42,7 +42,6 @@ test('Garage inside the cluster, the customer domain and the platform domain', (
     });
     assert.equal(config.value.customerDomain, 'openupstream.app');
     assert.equal(config.value.platformDomain, 'openupstream.com');
-    assert.deepEqual(config.value.dashboardOrigins, ['https://openupstream.com']);
     assert.equal(config.value.auth.cliClientId, undefined);
     const withCli = configFrom({ ...env, CLI_CLIENT_ID: 'mc_cli' });
     assert.equal(withCli.ok && withCli.value.auth.cliClientId, 'mc_cli');
@@ -147,13 +146,4 @@ test('the key-encryption key with its id; a malformed key is reported', () => {
     assert.equal(config.value.kek.key.length, 32);
     const bad = configFrom({ ...env, SECRETS_KEK: 'too short' });
     assert.deepEqual(bad.ok ? [] : bad.error, ['SECRETS_KEK: the key-encryption key must be 32 bytes in standard base64']);
-});
-
-test('the dashboard origins: the platform domain by default, a list of origins otherwise', () => {
-    const config = configFrom({ ...env, DASHBOARD_ORIGINS: 'https://openupstream.com, http://localhost:3000' });
-    assert.ok(config.ok);
-    assert.deepEqual(config.value.dashboardOrigins, ['https://openupstream.com', 'http://localhost:3000']);
-    const bad = configFrom({ ...env, DASHBOARD_ORIGINS: 'https://openupstream.com/dashboard' });
-    assert.ok(!bad.ok);
-    assert.deepEqual(bad.error, ['DASHBOARD_ORIGINS must be origins like https://openupstream.com, not https://openupstream.com/dashboard']);
 });

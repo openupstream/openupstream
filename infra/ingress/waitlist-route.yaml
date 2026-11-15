@@ -1,13 +1,13 @@
 # The waitlist page at PLATFORM_DOMAIN (ARCHITECTURE.md, decision 86), while
 # sign-up on the hosted service is closed: every path of the host that
-# madAuth does not serve goes to the control plane's waitlist port. Applied
+# neither madAuth nor the API serves goes to the control plane's waitlist port. Applied
 # by infra/dev-cluster/platform.sh with SIGNUP=closed only, and removed
 # again with SIGNUP=open; the dashboard takes these paths once it exists.
 # It uses the Certificate, hsts and retry Middlewares of
 # platform-routes.yaml.
 #
-# The low priorities keep madAuth's routes (/auth/*, /.well-known/*), whose
-# rules are longer, in front.
+# The low priorities keep madAuth's routes (/auth/*, /.well-known/*) and
+# the API's (/api/*), whose rules are longer, in front.
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:

@@ -11,7 +11,7 @@
 # DNS_DOMAIN is the domain the names belong to: a bunny.net zone or a name
 # inside one (e.g. home.dev.openupstream.com in the zone
 # dev.openupstream.com). DNS_NAMES are relative to it, `@` for DNS_DOMAIN
-# itself (default `@ api`: madAuth and the API, for ingress.sh; garage.sh
+# itself (default `@`: madAuth and the API, for ingress.sh; garage.sh
 # passes `* *.s3` for the customer domain).
 #
 # In multi-node each record gets an HTTP health check (port 80 every 30 s
@@ -26,7 +26,12 @@ set -euo pipefail
 cd "$(dirname "$0")"
 source ./lib.sh
 DNS_DOMAIN=${DNS_DOMAIN:?set DNS_DOMAIN, the domain the names belong to}
-read -r -a NAMES <<<"${DNS_NAMES:-@ api}"
+read -r -a NAMES <<<"${DNS_NAMES:-@}"
+# Clusters installed before the API moved under /api (decision 120) also
+# have an `api` record; --delete takes it along.
+if [[ ${1:-} == --delete && -z ${DNS_NAMES:-} ]]; then
+  NAMES+=(api)
+fi
 KEY=$(tr -d ' \n\r' <"${BUNNY_API_KEY_FILE:-$HOME/.config/openupstream/bunny-api-key}")
 api() { curl -fsS -H "AccessKey: $KEY" -H 'content-type: application/json' "$@"; }
 

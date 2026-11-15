@@ -1,14 +1,15 @@
-# Our own public hostnames (ARCHITECTURE.md, decision 67), in the platform
-# Project's namespace. PLATFORM_DOMAIN is `openupstream.com` in production
-# and `dev.openupstream.com` on a dev cluster; CLUSTER_ISSUER is
+# Our own public hostname (ARCHITECTURE.md, decisions 67 and 120), in the
+# platform Project's namespace. PLATFORM_DOMAIN is `openupstream.com` in
+# production and `dev.openupstream.com` on a dev cluster; CLUSTER_ISSUER is
 # `letsencrypt` or `letsencrypt-staging`. infra/dev-cluster/platform.sh fills
 # both in.
 #
-# - PLATFORM_DOMAIN: madAuth under /auth/* and /.well-known/*, so it is on
-#   the same site as the dashboard, which will serve the rest; until then,
-#   while sign-up is closed, the waitlist does (waitlist-route.yaml).
-# - api.PLATFORM_DOMAIN: the public API. The internal API (port 8081) is
-#   never routed.
+# - /auth/* and /.well-known/*: madAuth, on the same origin as the
+#   dashboard.
+# - /api/*: the public API, which sees the path without `/api`. The
+#   internal API (port 8081) is never routed.
+# - the rest: the dashboard, once it is served; until then, while sign-up
+#   is closed, the waitlist (waitlist-route.yaml).
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -17,7 +18,7 @@ metadata:
 spec:
   secretName: platform-tls
   issuerRef: {kind: ClusterIssuer, name: CLUSTER_ISSUER}
-  dnsNames: [PLATFORM_DOMAIN, api.PLATFORM_DOMAIN]
+  dnsNames: [PLATFORM_DOMAIN]
   privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
 ---
 # madAuth expects a per-IP limit in front of it; sign-in and sign-up are
@@ -43,6 +44,17 @@ spec:
     average: 50
     period: 1s
     burst: 100
+---
+# The control plane's routes start at /v1: the API is under /api only for
+# the outside.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: api-strip-prefix
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  stripPrefix:
+    prefixes: [/api]
 ---
 # When a Site goes dark, its pods stay in the Services' endpoints until
 # Kubernetes marks the node NotReady (20 s and more). Connecting to one of
@@ -106,12 +118,12 @@ metadata:
 spec:
   entryPoints: [websecure]
   routes:
-    - match: Host(`api.PLATFORM_DOMAIN`) && (Method(`GET`) || Method(`HEAD`))
+    - match: Host(`PLATFORM_DOMAIN`) && PathPrefix(`/api/`) && (Method(`GET`) || Method(`HEAD`))
       kind: Rule
-      middlewares: [{name: hsts}, {name: api-rate-limit}, {name: retry-other-pod}]
+      middlewares: [{name: hsts}, {name: api-rate-limit}, {name: api-strip-prefix}, {name: retry-other-pod}]
       services: [{name: control-plane, port: 8080, serversTransport: fail-fast}]
-    - match: Host(`api.PLATFORM_DOMAIN`)
+    - match: Host(`PLATFORM_DOMAIN`) && PathPrefix(`/api/`)
       kind: Rule
-      middlewares: [{name: hsts}, {name: api-rate-limit}]
+      middlewares: [{name: hsts}, {name: api-rate-limit}, {name: api-strip-prefix}]
       services: [{name: control-plane, port: 8080, serversTransport: fail-fast}]
   tls: {secretName: platform-tls}

@@ -9,8 +9,7 @@
 #
 # Needs the Secret madauth (MADAUTH_SIGNING_KEY, the same on every replica,
 # and WEBHOOK_SECRET) and the ConfigMap madauth-config (MADAUTH_ISSUER,
-# ALLOWED_ORIGINS, COOKIE_DOMAIN (the platform domain, so the session cookie
-# reaches the API too, decision 116), WEBHOOK_EVENTS, optionally INITIAL_ADMIN_EMAIL, and for
+# ALLOWED_ORIGINS, WEBHOOK_EVENTS, optionally INITIAL_ADMIN_EMAIL, and for
 # the sidecar MAIL, MAIL_FROM, SES_REGION, SIGNUP, SIGNUP_ALLOW,
 # SIGNUP_MESSAGE), and with MAIL=ses the Secret madauth-ses (the
 # send-only key, AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY). The control plane's image is

@@ -15,7 +15,7 @@
 #    Garage with the admin token garage.sh left it, and encrypts Secrets
 #    with a key-encryption key generated once (secrets-kek);
 # 4. the public hostnames (after ingress.sh): madAuth at
-#    https://$PLATFORM_DOMAIN/auth, the API at https://api.$PLATFORM_DOMAIN,
+#    https://$PLATFORM_DOMAIN/auth, the API at https://$PLATFORM_DOMAIN/api,
 #    with a certificate from CLUSTER_ISSUER; with SIGNUP=closed also the
 #    waitlist page at https://$PLATFORM_DOMAIN;
 # 5. the Databases operator, reconciling every 30 s with rows from the
@@ -114,7 +114,6 @@ fi
 kubectl -n "$PLATFORM_NS" create configmap madauth-config --dry-run=client -o yaml \
   --from-literal=MADAUTH_ISSUER="$MADAUTH_ISSUER" \
   --from-literal=ALLOWED_ORIGINS="$MADAUTH_ISSUER" \
-  --from-literal=COOKIE_DOMAIN="$PLATFORM_DOMAIN" \
   --from-literal=WEBHOOK_EVENTS=email.send_verification,email.send_password_reset,email.send_already_registered,email.send_password_reset_no_password,user.signing_up \
   --from-literal=MAIL="$MAIL" \
   --from-literal=MAIL_FROM="$MAIL_FROM" \
