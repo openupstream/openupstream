@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { err, ok } from '../result.js';
 import { fakeStorage } from '../testing/storage.js';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
-import { CPU_QUERY, EGRESS_QUERY, HOUR_MS, MEMORY_QUERY, eventsForHour, hoursToMeter, meteringPass, shareOfHour } from './meter.js';
+import { COVERAGE_QUERY, CPU_QUERY, HOUR_MS, eventsForHour, hoursToMeter, meteringPass, shareOfHour } from './meter.js';
 import { accountUsage, monthBounds } from './store.js';
 
 const GiB = 1024 ** 3;
@@ -136,10 +136,12 @@ describe('meteringPass', () => {
     });
     after(async () => tdb.close());
 
-    const prometheus = (down = false) => async (query: string, time?: Date) => {
+    const prometheus = (down = false, noData = false) => async (query: string, time?: Date) => {
         if (down) return err('connect ECONNREFUSED');
         assert.equal(time?.getUTCMinutes(), 0, 'each hour queried at its end');
-        return ok(query === CPU_QUERY ? [{ labels: { namespace: `project-${projectId}`, pod: `db-${databaseId}-1` }, value: 36 }] : query === MEMORY_QUERY || query === EGRESS_QUERY ? [] : []);
+        if (noData) return ok([]);
+        if (query === COVERAGE_QUERY) return ok([{ labels: {}, value: 42 }]);
+        return ok(query === CPU_QUERY ? [{ labels: { namespace: `project-${projectId}`, pod: `db-${databaseId}-1` }, value: 36 }] : []);
     };
 
     test('meters each settled hour once, with every unit, and the billing service reads the month', async () => {
@@ -186,14 +188,34 @@ describe('meteringPass', () => {
         assert.equal((await tdb.pool.query(`select 1 from metered_hours where hour = '2026-11-15T10:00:00Z'`)).rowCount, 1);
     });
 
+    test('a Bucket Garage cannot size counts as empty and holds nothing back', async () => {
+        const logs: Record<string, unknown>[] = [];
+        await tdb.pool.query(`insert into buckets (project_id, name, garage_bucket_id, access_key_id, created_at) values ($1, 'out-of-step', 'gone', 'GKx', '2026-11-01')`, [projectId]);
+        await meteringPass({ pool: tdb.pool, prometheus: prometheus(), storage, log: (e) => logs.push(e), now: () => new Date('2026-11-15T12:06:00Z') });
+        assert.equal((await tdb.pool.query(`select 1 from metered_hours where hour = '2026-11-15T11:00:00Z'`)).rowCount, 1);
+        assert.ok(logs.some((e) => e['msg'] === 'metering: Buckets Garage cannot size, counted as empty'));
+        await tdb.pool.query(`update buckets set deleted_at = '2026-11-15T11:30:00Z' where name = 'out-of-step'`);
+    });
+
+    test('an hour Prometheus has no samples for waits two hours, then is metered from the rows alone', async () => {
+        const logs: Record<string, unknown>[] = [];
+        await meteringPass({ pool: tdb.pool, prometheus: prometheus(false, true), storage, log: (e) => logs.push(e), now: () => new Date('2026-11-15T13:06:00Z') });
+        assert.equal((await tdb.pool.query(`select 1 from metered_hours where hour = '2026-11-15T12:00:00Z'`)).rowCount, 0);
+        await meteringPass({ pool: tdb.pool, prometheus: prometheus(false, true), storage, log: (e) => logs.push(e), now: () => new Date('2026-11-15T15:01:00Z') });
+        assert.equal((await tdb.pool.query(`select 1 from metered_hours where hour = '2026-11-15T12:00:00Z'`)).rowCount, 1);
+        assert.ok(logs.some((e) => e['msg'] === 'metering: no Prometheus data for the hour; only Databases and Buckets metered'));
+        const cpu = await tdb.pool.query(`select 1 from usage_events where unit = 'cpu_seconds' and interval_start = '2026-11-15T12:00:00Z'`);
+        assert.equal(cpu.rowCount, 0);
+    });
+
     test('a deleted Database is billed for the part of the hour it lived', async () => {
-        await tdb.pool.query(`update databases set deleted_at = '2026-11-15T11:15:00Z' where id = $1`, [databaseId]);
-        await meteringPass({ pool: tdb.pool, prometheus: prometheus(), storage, log: () => undefined, now: () => new Date('2026-11-15T13:06:00Z') });
+        await tdb.pool.query(`update databases set deleted_at = '2026-11-15T15:15:00Z' where id = $1`, [databaseId]);
+        await meteringPass({ pool: tdb.pool, prometheus: prometheus(), storage, log: () => undefined, now: () => new Date('2026-11-15T17:06:00Z') });
         const events = await tdb.pool.query<{ unit: string; quantity: string; interval_start: Date }>(
-            `select unit, quantity, interval_start from usage_events where resource_id = $1 and unit = 'storage_gb_hours' and interval_start >= '2026-11-15T11:00:00Z' order by interval_start`,
+            `select unit, quantity, interval_start from usage_events where resource_id = $1 and unit = 'storage_gb_hours' and interval_start >= '2026-11-15T15:00:00Z' order by interval_start`,
             [databaseId],
         );
-        assert.deepEqual(events.rows.map((r) => [r.interval_start.toISOString(), Number(r.quantity)]), [['2026-11-15T11:00:00.000Z', 1]]);
+        assert.deepEqual(events.rows.map((r) => [r.interval_start.toISOString(), Number(r.quantity)]), [['2026-11-15T15:00:00.000Z', 1]]);
         assert.equal(HOUR_MS, 3_600_000);
     });
 });

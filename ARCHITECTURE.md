@@ -764,8 +764,11 @@ digest (#55).
   unit. The hours it has recorded are listed (`metered_hours`), so it goes
   on where it stopped after a restart or an outage, back to 14 days
   (Prometheus keeps 15), and the billing service rates a month only once
-  all its hours are metered. An hour is recorded only when every figure
-  could be read. A trigger rejects updates, deletes and truncation.
+  all its hours are metered. An hour is recorded only when Prometheus and
+  Garage answered; one that Prometheus has no samples for waits two hours,
+  then is recorded from the rows alone (logged), so it cannot hold back the
+  hours after it. A Bucket Garage cannot size counts as empty and is
+  logged. A trigger rejects updates, deletes and truncation.
   Events have no foreign keys and carry the Account: the last hours of a
   deleted Resource or Project are still billed. There is at most one event
   per Resource, unit and interval start, so an emitter can retry without

@@ -23,7 +23,7 @@
  *
  * `eventsForHour` is pure; `meteringPass` reads, decides and writes.
  */
-import { RESOURCE_KINDS, type ResourceKind, type UsageUnit, UUID } from '@openupstream/sdk';
+import { type ResourceKind, type UsageUnit, UUID } from '@openupstream/sdk';
 import type pg from 'pg';
 import type { ObjectStorage } from '../garage.js';
 import type { PrometheusQuery, PrometheusSample } from '../prometheus.js';
@@ -134,7 +134,7 @@ export function eventsForHour(start: Date, figures: HourFigures): { readonly eve
     }
     const events = [...sums.values()].flatMap((sum): UsageEventInput[] => {
         const accountId = figures.accountOf.get(sum.projectId);
-        if (accountId === undefined || !(RESOURCE_KINDS as readonly string[]).includes(sum.kind)) {
+        if (accountId === undefined) {
             unattributed += 1;
             return [];
         }
@@ -144,10 +144,16 @@ export function eventsForHour(start: Date, figures: HourFigures): { readonly eve
 }
 
 const PROJECTS = 'namespace=~"project-.*"';
-/** Every pod's CPU seconds over the hour ending at the query time; the pod-level cgroup (container="") also covers gVisor's sandbox. */
-export const CPU_QUERY = `sum by (namespace, pod) (increase(container_cpu_usage_seconds_total{${PROJECTS}, container="", pod=~"(db|svc|job)-.*"}[1h]))`;
+/**
+ * Every pod's CPU seconds over the hour ending at the query time, from the
+ * pod-level cgroup (container="" and image="": not a container's, not the
+ * sandbox's), which also covers gVisor's sandbox.
+ */
+export const CPU_QUERY = `sum by (namespace, pod) (increase(container_cpu_usage_seconds_total{${PROJECTS}, container="", image="", pod=~"(db|svc|job)-.*"}[1h]))`;
 /** Byte-minutes of memory requested by Service and Job pods while Running, minute by minute over the hour. */
 export const MEMORY_QUERY = `sum by (namespace, pod) (sum_over_time((sum by (namespace, pod) (kube_pod_container_resource_requests{${PROJECTS}, resource="memory", pod=~"(svc|job)-.*"}) * on (namespace, pod) (max by (namespace, pod) (kube_pod_status_phase{${PROJECTS}, phase="Running"}) == 1))[1h:1m]))`;
+/** Whether Prometheus scraped anything at the hour's end: without that, empty answers mean no data, not no usage. */
+export const COVERAGE_QUERY = 'count(up == 1)';
 /** Response bytes per backend Service over the hour. */
 export const EGRESS_QUERY = `sum by (service) (increase(traefik_service_responses_bytes_total{service=~"project-.*@kubernetescrd"}[1h]))`;
 
@@ -164,6 +170,12 @@ export const SETTLE_MS = 5 * 60_000;
 /** Prometheus keeps 15 days; an hour older than this cannot be metered any more. */
 export const CATCH_UP_MS = 14 * 24 * HOUR_MS;
 const HOURS_PER_PASS = 24;
+/**
+ * How long an hour Prometheus has no samples for waits (it may be catching
+ * up after a restart) before it is recorded with the rows' figures only,
+ * so it cannot hold back every later hour.
+ */
+export const NO_DATA_WAIT_MS = 2 * HOUR_MS;
 
 /** The hours to meter now, oldest first: after the last metered one (or the last full hour), up to HOURS_PER_PASS. */
 export function hoursToMeter(lastMetered: Date | undefined, now: Date): Date[] {
@@ -180,8 +192,18 @@ export function hoursToMeter(lastMetered: Date | undefined, now: Date): Date[] {
 export async function meteringPass(deps: MeteringDeps): Promise<void> {
     const now = deps.now?.() ?? new Date();
     const { rows } = await deps.pool.query<{ hour: Date | null }>('select max(hour) as hour from metered_hours');
-    for (const hour of hoursToMeter(rows[0]?.hour ?? undefined, now)) {
-        const metered = await meterHour(deps, hour);
+    const hours = hoursToMeter(rows[0]?.hour ?? undefined, now);
+    const first = hours[0];
+    if (first === undefined) {
+        return;
+    }
+    const sizes = await bucketSizes(deps, first);
+    if (!sizes.ok) {
+        deps.log({ msg: 'metering: hour not metered yet', hour: first.toISOString(), error: sizes.error });
+        return;
+    }
+    for (const hour of hours) {
+        const metered = await meterHour(deps, hour, now, sizes.value);
         if (!metered.ok) {
             deps.log({ msg: 'metering: hour not metered yet', hour: hour.toISOString(), error: metered.error });
             return;
@@ -190,12 +212,48 @@ export async function meteringPass(deps: MeteringDeps): Promise<void> {
     }
 }
 
-async function meterHour(deps: MeteringDeps, start: Date): Promise<Result<{ events: number; unattributed: number }, string>> {
+/**
+ * The bytes of every Bucket that lived since `since`, by Garage bucket id,
+ * read once per pass and in parallel: Garage has no history, so every hour
+ * gets the size of now. A Bucket Garage cannot answer for (a deleted one
+ * whose objects are gone, or one out of step) counts as empty and is logged;
+ * only Garage answering for none at all holds the hour back.
+ */
+async function bucketSizes(deps: MeteringDeps, since: Date): Promise<Result<Map<string, number>, string>> {
+    const { rows } = await deps.pool.query<{ garage_bucket_id: string; deleted_at: Date | null }>(
+        'select garage_bucket_id, deleted_at from buckets where deleted_at is null or deleted_at > $1',
+        [since],
+    );
+    const answers = await Promise.all(rows.map(async (row) => ({ row, bytes: await deps.storage.bucketBytes(row.garage_bucket_id) })));
+    const live = answers.filter(({ row }) => row.deleted_at === null);
+    if (live.length > 0 && live.every(({ bytes }) => !bytes.ok)) {
+        const first = live[0]?.bytes;
+        return err(`Garage: ${first !== undefined && !first.ok ? first.error : 'no answer'}`);
+    }
+    const unreadable = live.filter(({ bytes }) => !bytes.ok).map(({ row }) => row.garage_bucket_id);
+    if (unreadable.length > 0) {
+        deps.log({ msg: 'metering: Buckets Garage cannot size, counted as empty', garageBuckets: unreadable });
+    }
+    return ok(new Map(answers.flatMap(({ row, bytes }): [string, number][] => (bytes.ok ? [[row.garage_bucket_id, bytes.value]] : []))));
+}
+
+async function meterHour(
+    deps: MeteringDeps,
+    start: Date,
+    now: Date,
+    sizes: ReadonlyMap<string, number>,
+): Promise<Result<{ events: number; unattributed: number }, string>> {
     const end = new Date(start.getTime() + HOUR_MS);
-    const [cpu, memory, egress] = await Promise.all([CPU_QUERY, MEMORY_QUERY, EGRESS_QUERY].map((query) => deps.prometheus(query, end)));
-    const failed = [cpu, memory, egress].find((result) => result !== undefined && !result.ok);
+    const [cpu, memory, egress, coverage] = await Promise.all([CPU_QUERY, MEMORY_QUERY, EGRESS_QUERY, COVERAGE_QUERY].map((query) => deps.prometheus(query, end)));
+    const failed = [cpu, memory, egress, coverage].find((result) => result !== undefined && !result.ok);
     if (failed !== undefined && !failed.ok) {
         return err(`Prometheus: ${failed.error}`);
+    }
+    if (coverage?.ok && coverage.value.length === 0) {
+        if (now.getTime() - end.getTime() < NO_DATA_WAIT_MS) {
+            return err('Prometheus has no samples at the end of the hour yet');
+        }
+        deps.log({ msg: 'metering: no Prometheus data for the hour; only Databases and Buckets metered', hour: start.toISOString() });
     }
     const databases = await deps.pool.query<{ id: string; project_id: string; memory_mb: number; storage_gb: number; created_at: Date; deleted_at: Date | null }>(
         `select id, project_id, memory_mb, storage_gb, created_at, deleted_at from databases
@@ -207,15 +265,13 @@ async function meterHour(deps: MeteringDeps, start: Date): Promise<Result<{ even
          where created_at < $2 and (deleted_at is null or deleted_at > $1)`,
         [start, end],
     );
-    const buckets: MeteredBucket[] = [];
-    for (const row of bucketRows.rows) {
-        const bytes = await deps.storage.bucketBytes(row.garage_bucket_id);
-        // A deleted Bucket's objects may be gone from Garage already: nothing left to count.
-        if (!bytes.ok && row.deleted_at === null) {
-            return err(`Garage: ${bytes.error}`);
-        }
-        buckets.push({ id: row.id, projectId: row.project_id, bytes: bytes.ok ? bytes.value : 0, createdAt: row.created_at, deletedAt: row.deleted_at ?? undefined });
-    }
+    const buckets: MeteredBucket[] = bucketRows.rows.map((row) => ({
+        id: row.id,
+        projectId: row.project_id,
+        bytes: sizes.get(row.garage_bucket_id) ?? 0,
+        createdAt: row.created_at,
+        deletedAt: row.deleted_at ?? undefined,
+    }));
     const projects = await deps.pool.query<{ id: string; account_id: string }>('select id, account_id from projects');
     const { events, unattributed } = eventsForHour(start, {
         cpu: cpu?.ok ? cpu.value : [],
