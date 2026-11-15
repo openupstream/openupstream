@@ -1,6 +1,6 @@
 {
   "name": "@openupstream/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "oup, the openupstream command line tool",
   "license": "AGPL-3.0-only",
   "repository": {
@@ -36,6 +36,6 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1161.0",
-    "@openupstream/sdk": "^0.2.0"
+    "@openupstream/sdk": "^0.3.0"
   }
 }

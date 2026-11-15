@@ -157,7 +157,7 @@ async function main(): Promise<void> {
         lookupTxt: txtLookup(),
         newAccountHolds: config.value.newAccountHolds,
         ...(auth.cliClientId === undefined ? {} : { cliLogin: { issuer: auth.issuer, clientId: auth.cliClientId } }),
-        dashboard: { origins: config.value.dashboardOrigins, sessions },
+        cookieSessions: sessions,
         authenticate: madauthAuthenticator(
             sessions,
             apiKeyVerifier(auth.madauthUrl),

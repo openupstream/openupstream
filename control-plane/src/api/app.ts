@@ -51,7 +51,6 @@ import {
 import { randomUUID } from 'node:crypto';
 import { type Context, Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
-import { cors } from 'hono/cors';
 import { stream } from 'hono/streaming';
 import type pg from 'pg';
 import { z } from 'zod';
@@ -106,12 +105,10 @@ export interface ApiDeps {
     /** Where `oup login` signs in (decision 87); without it, `GET /v1/login` answers 404. */
     readonly cliLogin?: { readonly issuer: string; readonly clientId: string };
     /**
-     * The dashboard (decision 116): browsers on these origins may call the
-     * API, and their madAuth session cookie counts as the credential, checked
-     * by `sessions`. Without it the API answers no other origin and reads no
-     * cookie.
+     * The dashboard (decision 117): its browser sends no header but madAuth's
+     * session cookie, which this checks. Without it the API reads no cookie.
      */
-    readonly dashboard?: { readonly origins: readonly string[]; readonly sessions: Authenticate };
+    readonly cookieSessions?: Authenticate;
     /** The Holds every new Account starts with (ARCHITECTURE.md, decision 78). */
     readonly newAccountHolds?: readonly string[];
     /** How often a followed log stream lists the pods again, and how long it lasts at most (default LOG_LIMITS). */
@@ -125,7 +122,7 @@ const logQuery = z.strictObject({
     follow: z.enum(['true', 'false']).optional(),
 });
 
-/** madAuth's session cookie: the session token, HttpOnly, for the Domain madAuth's `COOKIE_DOMAIN` names. */
+/** madAuth's session cookie: the session token, HttpOnly, for the platform's host alone. */
 export const SESSION_COOKIE = 'madauth_session';
 
 /** Set by the Kubernetes Job controller on a run's pods: the run's name. */
@@ -401,22 +398,6 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         connection: databaseConnection(database),
     });
 
-    // The dashboard's browser calls from another origin (decision 116). Only
-    // its origins get an answer a script may read, and may send the cookie.
-    const dashboardOrigins = new Set(deps.dashboard?.origins ?? []);
-    if (deps.dashboard !== undefined) {
-        app.use(
-            '/v1/*',
-            cors({
-                origin: (origin) => (dashboardOrigins.has(origin) ? origin : null),
-                credentials: true,
-                allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-                allowHeaders: ['content-type', 'authorization'],
-                maxAge: 600,
-            }),
-        );
-    }
-
     app.get('/v1/health', (c) => c.json({ ok: true }));
 
     // Before the authentication below: the CLI asks this before it has a token.
@@ -424,12 +405,14 @@ export function createApi(deps: ApiDeps): Hono<Env> {
 
     app.use('/v1/*', async (c, next) => {
         const token = /^Bearer (\S+)$/.exec(c.req.header('authorization') ?? '')?.[1];
-        // The session cookie counts only with the dashboard's Origin header,
-        // which a page cannot forge: another site's page that makes the
-        // browser send the cookie along (CSRF) is answered like no credential.
+        // The dashboard is served from the API's own host (decision 117), so
+        // the session cookie counts only on a request the browser marks as
+        // coming from a page of this origin. A page cannot set that header:
+        // another site's page that makes the browser send the cookie along
+        // (CSRF) is answered like no credential.
         const cookie =
-            token === undefined && deps.dashboard !== undefined && dashboardOrigins.has(c.req.header('origin') ?? '')
-                ? { value: getCookie(c, SESSION_COOKIE), verify: deps.dashboard.sessions }
+            token === undefined && deps.cookieSessions !== undefined && c.req.header('sec-fetch-site') === 'same-origin'
+                ? { value: getCookie(c, SESSION_COOKIE), verify: deps.cookieSessions }
                 : undefined;
         const identity =
             token !== undefined ? await authenticate(token) : cookie?.value !== undefined ? await cookie.verify(cookie.value) : undefined;

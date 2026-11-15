@@ -129,7 +129,7 @@ credentials Secret in `openupstream-system`.
 
 `ingress.sh` installs cert-manager's DNS-01 webhook for bunny.net, the
 Let's Encrypt issuers and Traefik on the compute nodes, and points
-`PLATFORM_DOMAIN` and `api.PLATFORM_DOMAIN` at them as bunny.net records
+`PLATFORM_DOMAIN` at them as a bunny.net record
 (`dns.sh`), health-checked when there are two to choose from.
 
 `garage.sh` runs Garage with one node per Site, or one node with one copy
@@ -204,7 +204,7 @@ staging. Delete the two records afterwards:
 multi-node cluster: HTTP-01 must reach port 80 from the internet.
 
 madAuth is at `https://PLATFORM_DOMAIN/auth`, the API at
-`https://api.PLATFORM_DOMAIN`; the examples use the Hetzner dev cluster's
+`https://PLATFORM_DOMAIN/api`; the examples use the Hetzner dev cluster's
 `dev.openupstream.com` (drop `-k` with a production certificate). Sign up with e-mail and password
 through madAuth's HTTP API (`Origin` must be the allowed origin), and
 confirm with the code from the e-mail; the session cookie
@@ -218,7 +218,7 @@ curl -k -X POST -H 'Origin: https://dev.openupstream.com' -H 'content-type: appl
 curl -k -c jar -X POST -H 'Origin: https://dev.openupstream.com' -H 'content-type: application/json' https://dev.openupstream.com/auth/email/verify -d '{"email":"you@example.com","code":"<code>"}'
 ```
 
-Then `POST https://api.dev.openupstream.com/v1/accounts` with that token
+Then `POST https://dev.openupstream.com/api/v1/accounts` with that token
 creates your Account; API keys come from `POST /auth/api-keys/create` with
 the same cookie (scopes `openupstream:read` or `openupstream:write`).
 

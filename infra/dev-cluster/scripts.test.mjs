@@ -198,7 +198,6 @@ test('dns.sh puts names inside a zone and points them at the single node\'s IPv4
     assert.equal(platform.status, 0, platform.stderr);
     assert.deepEqual(puts(platform.log), [
         { Type: 0, Name: 'home', Value: '192.168.1.50', Ttl: 60, MonitorType: 0 },
-        { Type: 0, Name: 'api.home', Value: '192.168.1.50', Ttl: 60, MonitorType: 0 },
     ]);
     // The stale `home` record goes; someone else's `other` stays.
     assert.match(platform.log, /^DELETE 1$/m);
@@ -221,9 +220,7 @@ test('dns.sh points a zone apex at every compute node\'s ExternalIP, health-chec
         puts(log).map(({ Name, Value, MonitorType }) => [Name, Value, MonitorType]),
         [
             ['', '203.0.113.0', 2],
-            ['api', '203.0.113.0', 2],
             ['', '203.0.113.1', 2],
-            ['api', '203.0.113.1', 2],
         ],
     );
 });

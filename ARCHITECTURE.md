@@ -211,12 +211,11 @@ Postgres in Docker. The API types are in `sdk/src/model.ts`.
 
 The dashboard (`dashboard/`) is a Next.js app on the same API, built as
 static files (#116): every page renders in the browser, which calls the API
-itself through `@openupstream/sdk`. It signs Members in and up with
+itself through `@openupstream/sdk`, under `/api` of its own host (#117). It signs Members in and up with
 madAuth's dialog (`@madauth/web`, e-mail and password), shows the approval
 dialog of `oup login` when opened with `?madauth_device=<code>`, creates an
 Account on the first visit (#62) and lists, creates and deletes Projects;
-the pages for Resources follow. It finds the API at `api.` in front of its
-own hostname, so one build serves every installation.
+the pages for Resources follow. One build serves every installation.
 
 Sign-in for Members and API keys for `oup` and the SDK come from
 [madAuth](https://madauth.com), self-hosted on the cluster as its published
@@ -228,14 +227,15 @@ key scopes and receives its webhooks (e-mails to send, events) on
 127.0.0.1. It sends madAuth's e-mails through Amazon SES in an EU region
 (#66) with a key that may only send as `no-reply@openupstream.com`; with
 `MAIL=log` it writes them to its log instead. madAuth is served at
-`https://openupstream.com/auth/*` and the API at `https://api.openupstream.com`
-(`infra/ingress/platform-routes.yaml`, #67), with a per-IP rate limit in
-front of each. madAuth needs its Database for every sign-in: while that
+`https://openupstream.com/auth/*` and the API at
+`https://openupstream.com/api/*` (`infra/ingress/platform-routes.yaml`,
+#67, #117), with a per-IP rate limit in front of each; Traefik strips
+`/api`, so the control plane's routes start at `/v1`. madAuth needs its Database for every sign-in: while that
 Database fails over, sign-in is unavailable (53 s measured on the dev
 cluster).
 
 The API accepts three kinds of madAuth credentials as `Authorization:
-Bearer` (#64, #87), and the session also as madAuth's cookie (#116):
+Bearer` (#64, #87), and the session also as madAuth's cookie (#116, #117):
 
 - a session token: a JWT (ES256, `typ: madauth-session+jwt`, issuer
   checked, no audience) verified against madAuth's JWKS, fetched from madAuth
@@ -265,16 +265,14 @@ Bearer` (#64, #87), and the session also as madAuth's cookie (#116):
   `loginUrl` comes with the dashboard's first page.
 
 The dashboard's JavaScript never holds a credential: madAuth keeps the
-session token in an HttpOnly cookie (`madauth_session`, for the Domain
-`COOKIE_DOMAIN` names, the platform domain), which the browser sends to
-`api.<platform domain>` as well. The API reads the cookie only on a request
-whose `Origin` header is one of the dashboard's origins
-(`DASHBOARD_ORIGINS`, by default `https://<platform domain>`), takes it for
-a session token only, never an API key, and answers only those origins
-with CORS headers that allow credentials. A page of another site can make
-the browser send the cookie but cannot set that header, so it is answered
-401 like a request without a credential (CSRF); a Project's site cannot
-either, since customer hostnames are on another registrable domain (#31).
+session token in an HttpOnly cookie (`madauth_session`) for the platform's
+host alone, which the browser sends to the API because the API is under
+`/api` of that host (#117). No subdomain receives it. The API takes the
+cookie for a session token only, never an API key, and only on a request
+the browser marks `Sec-Fetch-Site: same-origin`. A page of another site,
+or of a subdomain, can make the browser send the cookie but not that
+header, so it is answered 401 like a request without a credential (CSRF).
+The API sets no CORS headers: no other origin's script reads its answers.
 
 The subject is a madAuth user, which can be a Member of several Accounts.
 A signed-in user creates an Account with `POST /v1/accounts` and becomes its
@@ -663,7 +661,7 @@ digest (#55).
 - `openupstream.com` is only for our own services (#67): the dashboard and
   madAuth at `openupstream.com` (madAuth under `/auth/*` and
   `/.well-known/*`, on the same site as the dashboard, as it requires), the
-  API at `api.openupstream.com`. Until the hosted service opens for
+  API under `/api` of the same host (#117). Until the hosted service opens for
   sign-up, the waitlist page takes the dashboard's place (#86).
 - Both zones are hosted on bunny.net DNS (see Ingress and failover).
 - A custom domain is routed and gets a certificate only after the Account
@@ -1093,7 +1091,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 64 | madAuth session tokens (ES256, `typ: madauth-session+jwt`, no audience) verified against its JWKS; API keys checked with madAuth (`/auth/api-keys/verify`), cached for a minute; scopes `openupstream:read` (GET) and `openupstream:write` (everything) | per-resource scopes; one full-access scope | madAuth has no audience and no OAuth flows; its API keys are opaque; two scopes allow read-only keys now and finer scopes later without breaking existing keys |
 | 65 | Anyone may sign up; an Account needs a payment method (card or SEPA, and PayPal since #75; a Mollie mandate since #74, first decided as Stripe) before it creates its first Resource; enforced with a Hold since #78 | an allow-list or invitations; free limits per Account until billing exists | no hand-picking of customers, and no unpaid resources: memory is reserved from the first Database on. Self-hosted installations will need other rules (Open question 16). "Anyone may sign up" is suspended on the hosted service until it can invoice (#86) |
 | 66 | madAuth's e-mails (sign-up, password reset) are sent through Amazon SES in an EU region, by the madAuth sidecar | an EU provider (Scaleway TEM, Brevo) | the maintainer already has it set up; the addresses stay in the EU region; AWS becomes a subprocessor. This is a US company, which decision 34 avoided for ingress: there Cloudflare would see every customer's traffic, here SES sees only a Member's address and the sign-in e-mails we send, never a Project's data; an EU provider remains a drop-in replacement in the sidecar |
-| 67 | Our own hostnames: dashboard and madAuth at `openupstream.com` (madAuth under `/auth/*` and `/.well-known/*`), the API at `api.openupstream.com` | dashboard at `app.openupstream.com`; everything on one host | madAuth must be on the same site as the dashboard; the API on its own host keeps its routes and limits apart, and the session cookie (Domain `openupstream.com`) reaches both |
+| 67 | Our own hostnames: dashboard and madAuth at `openupstream.com` (madAuth under `/auth/*` and `/.well-known/*`), the API at `api.openupstream.com` (under `/api` of the same host since #117) | dashboard at `app.openupstream.com`; everything on one host | madAuth must be on the same site as the dashboard; the API on its own host keeps its routes and limits apart, and the session cookie (Domain `openupstream.com`) reaches both |
 | 68 | The customer domain is `openupstream.app`: Projects' default hostnames and `<bucket>.s3.openupstream.app`, on the Public Suffix List | `openupstream.dev`; deciding later | short and clearly ours; `.app` is HTTPS-only (HSTS preloaded), like everything we serve |
 | 69 | cert-manager solves DNS-01 on bunny.net with a community webhook (`aardbol/cert-manager-webhook-bunny`, chart 1.4.2, image v1.4.1 by digest, reviewed 2026-10-18; it may read one Secret); HTTP-01 for custom domains | an own webhook; delegating `_acme-challenge` to acme-dns | wildcards (Buckets) need DNS-01; the webhook exists, so no code of ours; the bunny.net API key it needs is a Secret in cert-manager's namespace only |
 | 70 | DNS, certificates and e-mail are tested on the dev cluster through a dev subdomain delegated to bunny.net, Let's Encrypt staging and SES test mails | testing with a local CA and `/etc/hosts` first | the same path as production from the first session; staging keeps Let's Encrypt's rate limits out of the way |
@@ -1142,7 +1140,8 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 113 | On nodes with AppArmor, containers run under our copy of containerd's profile `cri-containerd.apparmor.d` (`infra/apparmor`), containerd 2.3's own plus signal and ptrace rules for the stacked label `cri-containerd.apparmor.d//&unconfined`; installed into `/etc/apparmor.d` and loaded before k3s by `k3s-single-node.sh`, on every run. Delete it once k3s ships containerd's fix (containerd #14487) | `kernel.apparmor_restrict_unprivileged_unconfined=0`; the Databases' pods `Unconfined`; staying on Ubuntu 24.04 | Ubuntu 26.04 stacks every container's profile on `unconfined`, and containerd's rules name only the unstacked label, so a container's processes cannot signal each other: on the Minisforum (2026-11-15) every Postgres failed with `could not signal for checkpoint: Permission denied` and stayed in recovery. The copy fixes exactly that rule, as upstream does, and keeps the containers confined; the sysctl would switch off Ubuntu's restriction on unprivileged user namespaces for every program on the machine, and `Unconfined` drops AppArmor from the Databases. Costs: our copy lags behind changes to containerd's profile until it is deleted, and it must be in place before k3s first starts. The Hetzner dev cluster runs Ubuntu 24.04 and does not need it yet; production nodes on 26.04 will |
 | 114 | Metering: a control-plane pass turns every completed hour into one usage event per Resource and unit. CPU seconds of all Resources come from the CPU agent through Prometheus (decision 115), memory of Services from running pods' requests and of Jobs from each run's request × run time (kube-state-metrics); egress from Traefik's per-rule response bytes, with an IngressRoute per Domain and Resource so each rule's metric names its Resource; Databases' memory and storage from their rows; Buckets' storage from Garage. Jobs are Resources of their own. Metered hours are listed; the billing service reads monthly sums per Project, Resource and unit | the Kubernetes metrics API (a sampled rate, not a counter); daily events; raw events to the billing service; one IngressRoute per Domain and the rules' hashes recomputed by metering (reproduces Traefik's internal naming; a Route deleted before its hour is metered is lost) | the counters are already scraped and exact over an hour; hourly events bill a Resource for the part of an hour it lived. Costs: billing depends on Prometheus (an outage longer than 14 days loses revenue, never overcharges); a Bucket's bytes are those at metering time, not the hour's average; a Project purged before its last hours are metered is not billed for them |
 | 115 | CPU seconds come from our own CPU agent, a DaemonSet on the compute nodes that reads each pod's total from its cgroup every second and when its last process exits (`cgroup.events`), and serves it to Prometheus, kept 15 minutes after the pod ended; metering bills a pod's total at the hour's end less at the previous hour's end | cAdvisor's counter (misses up to 30 s at each end of a pod's life and all of a run shorter than a scrape); Jobs' CPU as reservation × run time (Fargate, Cloud Run, Fly.io bill containers that way); measured CPU with short runs free | the kernel counts every pod's CPU exactly, but the count goes with the cgroup half a second after the pod ends; reading it then makes measured CPU exact for every Resource, short Job runs included, with one meaning for all. Costs: a component of our own on every compute node (read-only cgroup mount, listing its node's pods), and it races the cgroup's removal: if it loses, at most about a second of CPU is missing |
-| 116 | The dashboard is static files that call the API from the browser, authenticated by madAuth's session cookie: the API reads `madauth_session` (madAuth's `COOKIE_DOMAIN` = the platform domain) on requests whose `Origin` is one of `DASHBOARD_ORIGINS` (default `https://<platform domain>`), as a session token only, and answers those origins with CORS headers that allow credentials; the SDK takes `session: 'cookie'` in place of a token | the dashboard's server reading the cookie and calling the API with it as Bearer (a backend-for-frontend); an OIDC access token held by the page's JavaScript, like `oup`'s | madAuth's session cookie is HttpOnly, so a page cannot send it as Bearer, and decision 67 already put the API where the cookie reaches it. No Node server to run for the dashboard: it can be served like any static site, and log streams (#103) go straight to the API. No token a script could read (XSS), and a session carries the e-mail address that creating an Account needs, which an access token does not. Costs: the API has a CORS and CSRF surface of its own, held by the `Origin` check, which every browser sets and no page can forge; a browser extension or a script injected into the dashboard itself can still call the API as the Member |
+| 116 | The dashboard is static files that call the API from the browser, authenticated by madAuth's session cookie, which the API takes as a session token only; the SDK takes `session: 'cookie'` in place of a token. How the cookie reaches the API, and how a request forged by another site is told apart, is decision 117 (first decided as a cookie for the whole platform domain, sent to `api.<platform domain>` with CORS and an `Origin` check) | the dashboard's server reading the cookie and calling the API with it as Bearer (a backend-for-frontend); an OIDC access token held by the page's JavaScript, like `oup`'s | madAuth's session cookie is HttpOnly, so a page cannot send it as Bearer. No Node server to run for the dashboard: it can be served like any static site, and log streams (#103) go straight to the API. No token a script could read (XSS), and a session carries the e-mail address that creating an Account needs, which an access token does not. Cost: a script injected into the dashboard itself, or a browser extension, can still call the API as the Member |
+| 117 | The API is under `/api` of the platform's host, `https://openupstream.com/api/v1/…`, for the dashboard, `oup` and the SDK alike; `api.openupstream.com` is gone, which supersedes that part of decision 67. Traefik routes `/api/*` to the control plane and strips the prefix, so its routes still start at `/v1`. madAuth's session cookie stays host-only (no `COOKIE_DOMAIN`), and the API reads it only on requests with `Sec-Fetch-Site: same-origin`; the API sets no CORS headers | the cookie for the whole platform domain with CORS and an `Origin` check (decision 116 as first built); the API at both `api.` and `/api`; madAuth also served on `api.` with a hand-over of the session by a one-time code after every sign-in and renewal; a short-lived access token from madAuth for the page; the control plane mounted under `/api` itself | browsers know only a host-only cookie or one for a domain and all its subdomains: the latter sent production's session token to every host under `openupstream.com`, dev clusters at `dev.openupstream.com` included, which could replay it. Host-only, no subdomain ever sees it; same origin needs no CORS and no preflights; one address for every client, one DNS record and one certificate name fewer per installation. A page cannot set `Sec-Fetch-Site`, and every current browser sends it (Safari since 16.4); one that does not gets 401. Stripping at the ingress leaves the control plane the same locally, in tests and on its internal port. Costs: the paths `/api`, `/auth` and `/.well-known` are taken on the dashboard's host, and the API shares that host's ingress, apart only by path and its own rate limit; `Location` headers name `/v1/…` without the prefix; SDK 0.2 and `oup` 0.1 default to the old host and need `baseUrl` or `OUP_API_URL` |
 
 ## Open questions
 
@@ -1275,7 +1274,7 @@ Decisions table once it is settled.
     its paths at the platform domain (decision 86). Options: a Bucket of
     the platform Project behind a Domain at the platform domain, deployed
     with `oup site deploy` (our own product; the routing table then has to
-    leave `/auth/*` and `/.well-known/*` to madAuth), or an nginx container
+    leave `/auth/*`, `/.well-known/*` and `/api/*` alone), or an nginx container
     with the files. Until it is served, `oup login` has no approval page
     at madAuth's `loginUrl`.
 
@@ -1369,7 +1368,9 @@ Decisions table once it is settled.
    control plane: sign-up with the code from the e-mail, the session
    cookie accepted by the API from the dashboard's origin, an Account,
    Projects created and deleted) but nothing serves on a cluster yet
-   (Open question 22); the production DNS zones.
+   (Open question 22), and reaches the API under `/api` of its own
+   host (decision 117; run locally the same way 2026-11-15, the ingress
+   route not yet on a dev cluster); the production DNS zones.
 3. Containers, Service mode. Done on the dev cluster (2026-10-31): the
    NetworkPolicy `project-isolation` in every Project namespace (#89),
    gVisor on the compute nodes and the RuntimeClass `gvisor` (#90),
