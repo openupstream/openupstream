@@ -92,6 +92,7 @@ install_k3s() { # site, ip, extra args...
     --flannel-backend=wireguard-native \
     --node-label topology.kubernetes.io/zone=$site \
     --tls-san $node_ip \
+    --node-external-ip $node_ip \
     --secrets-encryption \
     --kube-apiserver-arg default-not-ready-toleration-seconds=30 \
     --kube-apiserver-arg default-unreachable-toleration-seconds=30 \

@@ -73,7 +73,7 @@ MONITOR=2
 [[ $LAYOUT == single-node ]] && MONITOR=0
 
 # Each compute node's Site and IPv4 address, ExternalIP before InternalIP.
-nodes=$(kubectl get nodes -l "topology.kubernetes.io/zone in (hetzner-fsn1,ovh-lim)" -o json | jq -r '.items[] |
+nodes=$(kubectl get nodes -l "topology.kubernetes.io/zone in ($(IFS=,; echo "${COMPUTE_SITES[*]}"))" -o json | jq -r '.items[] |
   [.metadata.labels["topology.kubernetes.io/zone"],
    ([.status.addresses[] | select(.type == "ExternalIP" and (.address | test("^[0-9.]+$"))) | .address] +
     [.status.addresses[] | select(.type == "InternalIP" and (.address | test("^[0-9.]+$"))) | .address])[0] // empty] |

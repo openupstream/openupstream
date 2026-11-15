@@ -37,7 +37,8 @@ export KUBECONFIG=$PWD/.state/kubeconfig
 `up.sh` creates the VMs, a firewall (SSH and the Kubernetes API only from
 your IP, HTTP and HTTPS from everywhere, everything between the nodes),
 gVisor on the two compute nodes (`infra/gvisor`), and k3s with embedded
-etcd and flannel `wireguard-native`, then the RuntimeClass `gvisor`.
+etcd and flannel `wireguard-native`, each node's public address as its
+ExternalIP (which `dns.sh` puts into DNS), then the RuntimeClass `gvisor`.
 
 The kubeconfig points at the `hetzner-fsn1` node. Before switching that Site
 off, point it at another node's IP (all three serve the API).

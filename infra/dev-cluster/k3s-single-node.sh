@@ -12,8 +12,14 @@
 #   ./k3s-single-node.sh root@192.168.1.50
 #
 # Then install the platform with install-single-node.sh. Running it again
-# keeps the node and its data; k3s's own uninstall script
+# on a machine that already has k3s installs nothing and only fetches the
+# kubeconfig again: both installers restart a running k3s, which on a single
+# node stops everything. REINSTALL=1 installs both again anyway, e.g. for a
+# new K3S_VERSION. k3s's own uninstall script
 # (/usr/local/bin/k3s-uninstall.sh on the machine) removes everything.
+#
+# The kubeconfig uses the host name ssh resolves the target to (its
+# HostName, for an alias in ~/.ssh/config); HOST overrides it.
 #
 # Needs: an x86_64 Linux machine (gVisor is pinned for x86_64) with ports
 # 80, 443 and 6443 free, SSH as root or as a user with passwordless sudo,
@@ -23,7 +29,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 source ./lib.sh
 TARGET=${1:?usage: ./k3s-single-node.sh <user@host>}
-HOST=${TARGET#*@}
+HOST=${HOST:-$(ssh -G "$TARGET" | awk '$1 == "hostname" {print $2}')}
 STATE=.state
 K3S_VERSION=${K3S_VERSION:-v1.36.5+k3s1}
 SSH=(ssh -o ConnectTimeout=10 "$TARGET")
@@ -33,18 +39,22 @@ SUDO="sudo -n"
 mkdir -p "$STATE"
 chmod 700 "$STATE"
 
-echo "installing gVisor on $HOST"
-"${SSH[@]}" $SUDO bash -s <../gvisor/install.sh
+if [[ ${REINSTALL:-} != 1 ]] && "${SSH[@]}" test -x /usr/local/bin/k3s; then
+  echo "k3s is already installed on $HOST; installing nothing (REINSTALL=1 to install again)"
+else
+  echo "installing gVisor on $HOST"
+  "${SSH[@]}" $SUDO bash -s <../gvisor/install.sh
 
-# No wireguard (no traffic between nodes) and no shortened eviction times
-# (no other node to move pods to); the rest as in up.sh.
-echo "installing k3s on $HOST"
-"${SSH[@]}" "curl -sfL https://get.k3s.io | $SUDO env INSTALL_K3S_VERSION='$K3S_VERSION' sh -s - server \
+  # No wireguard (no traffic between nodes) and no shortened eviction times
+  # (no other node to move pods to); the rest as in up.sh.
+  echo "installing k3s on $HOST"
+  "${SSH[@]}" "curl -sfL https://get.k3s.io | $SUDO env INSTALL_K3S_VERSION='$K3S_VERSION' sh -s - server \
   --node-label topology.kubernetes.io/zone=$SINGLE_NODE_SITE \
   --node-label openupstream.io/gvisor=true \
   --tls-san $HOST \
   --secrets-encryption \
   --disable traefik --disable servicelb"
+fi
 
 "${SSH[@]}" $SUDO cat /etc/rancher/k3s/k3s.yaml |
   sed "s/127.0.0.1/$HOST/; s/: default$/: oup-single-node/" >"$STATE/kubeconfig"

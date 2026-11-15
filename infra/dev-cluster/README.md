@@ -18,6 +18,9 @@ of `hetzner-fsn1`, `ovh-lim` and `netcup-nbg`, a single-node one exactly
 one node), and a recorded layout never changes. Storage is k3s's local-path
 provisioner, not TopoLVM.
 
+`scripts.test.mjs` tests the scripts' own logic with stubbed `kubectl` and
+`curl` (`npm run test:infra`, part of `npm test`).
+
 Both need `kubectl`, `helm`, `jq`, Node, the AWS CLI profiles
 `openupstream-backup` (backups) and `openupstream-ses` (madAuth's e-mails,
 or `MAIL=log`), the bunny.net API key in
@@ -39,7 +42,11 @@ the Home site `ovh-lim` runs there as well.
 It installs gVisor and then k3s on that machine over SSH (as root, or as a
 user with passwordless sudo; ports 80, 443 and 6443 must be free), labels
 the node, applies the RuntimeClass `gvisor` and writes the kubeconfig to
-`.state/kubeconfig`. A machine that already runs k3s can be used as it is
+`.state/kubeconfig`. Run again, it installs nothing on a machine that
+already has k3s and only fetches the kubeconfig, since both installers
+restart k3s (`REINSTALL=1` to install again, e.g. for a new
+`K3S_VERSION`). The kubeconfig names the host that ssh resolves the target
+to (`HOST` to override). A machine that already runs k3s can be used as it is
 if gVisor was installed before k3s first started (`infra/gvisor`) and the
 node carries the labels `topology.kubernetes.io/zone=hetzner-fsn1` and
 `openupstream.io/gvisor=true`.

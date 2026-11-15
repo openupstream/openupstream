@@ -143,8 +143,15 @@ config_rollout() { # deployment, configmap
 }
 
 # Both manifests run two replicas, one per compute Site; SITE_REPLICAS
-# replaces that.
-replicas() { sed "s#^  replicas: 2\$#  replicas: $SITE_REPLICAS#"; }
+# replaces that. Fails if a manifest no longer has that line, rather than
+# silently running the multi-node count.
+replicas() {
+  local manifest
+  manifest=$(sed "s#^  replicas: 2\$#  replicas: $SITE_REPLICAS#")
+  grep -q "^  replicas: $SITE_REPLICAS\$" <<<"$manifest" ||
+    { echo "no '  replicas: 2' in the manifest to set to $SITE_REPLICAS" >&2; return 1; }
+  printf '%s\n' "$manifest"
+}
 
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/infra/madauth/madauth.yaml" | replicas |
   kubectl apply -f - >/dev/null

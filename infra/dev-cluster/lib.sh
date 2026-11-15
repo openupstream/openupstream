@@ -14,13 +14,19 @@ LAYOUT_NAMESPACE=openupstream-system
 LAYOUT_CONFIGMAP=cluster-layout
 # The Sites' nodes carry these names as topology.kubernetes.io/zone.
 SITES=(hetzner-fsn1 ovh-lim netcup-nbg)
+COMPUTE_SITES=(hetzner-fsn1 ovh-lim)
 # The single node is labeled as this compute Site.
 SINGLE_NODE_SITE=hetzner-fsn1
 
-# Prints the recorded layout; fails if none is recorded.
+# Prints the recorded layout; fails if none is recorded or the cluster
+# cannot be read. Checked explicitly: called as $(cluster_layout), where
+# set -e does not apply.
 cluster_layout() {
   local layout
-  layout=$(kubectl -n "$LAYOUT_NAMESPACE" get configmap "$LAYOUT_CONFIGMAP" --ignore-not-found -o jsonpath='{.data.layout}')
+  if ! layout=$(kubectl -n "$LAYOUT_NAMESPACE" get configmap "$LAYOUT_CONFIGMAP" --ignore-not-found -o jsonpath='{.data.layout}'); then
+    echo "cannot read $LAYOUT_NAMESPACE/$LAYOUT_CONFIGMAP; is KUBECONFIG right?" >&2
+    return 1
+  fi
   case $layout in
     single-node | multi-node) echo "$layout" ;;
     *)
