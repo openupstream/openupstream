@@ -1313,7 +1313,7 @@ Decisions table once it is settled.
       4-vCPU nodes, plain Deployments without the platform): three busy
       gVisor pods per compute Site with a request of 500m and a limit of
       1 CPU; after `ovh-lim` was powered off its three pods ran on
-      `hetzner-fsn1` about 75 s later, each pod's throughput there fell
+      `hetzner-fsn1` within 80 s of the command, each pod's throughput there fell
       to about two thirds (six pods on four cores) and a fixed piece of
       start-up work took 9.4 s instead of 5.5 s. With requests equal to
       limits the three pods stayed pending (`Insufficient cpu`). Not
@@ -1353,7 +1353,7 @@ Decisions table once it is settled.
         gVisor pods (8.4 GB on 7.7 GB, 2.9 GB of it in swap) all ran,
         with no OOM kill, no eviction and no `MemoryPressure`. When all
         read their memory at once, those in memory took 50–230 ms and
-        those in swap 10–14 s.
+        those in swap up to 14 s (most 10–14 s).
       Not tested: the servers' NVMe (the page-in rate of about 80 MB/s
       is that of a cloud VM's disk), encrypted swap, Databases on the
       same node, a real Service's latency instead of a full read, and
