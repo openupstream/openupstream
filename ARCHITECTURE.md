@@ -1310,8 +1310,15 @@ Decisions table once it is settled.
       its limit also moves a Service's pods from Kubernetes' Guaranteed
       to its Burstable QoS class, so they rank before Databases when a
       node runs out of memory and are the pods swap would apply to (next
-      but one option). To test on the dev
-      cluster: start times and the failover at half the CPU.
+      but one option). Tested on the dev cluster (2026-11-15, k3s 1.36,
+      4-vCPU nodes, plain Deployments without the platform): three busy
+      gVisor pods per compute Site with a request of 500m and a limit of
+      1 CPU; after `ovh-lim` was powered off its three pods ran on
+      `hetzner-fsn1` about 75 s later, each pod's throughput there fell
+      to about two thirds (six pods on four cores) and a fixed piece of
+      start-up work took 9.4 s instead of 5.5 s. With requests equal to
+      limits the three pods stayed pending (`Insufficient cpu`). Not
+      tested: Databases and real Services on the same node.
     - A memory request below the limit. Costs: without swap a full node
       means evictions and OOM kills, on nodes that also run Databases;
       metering reads memory from the pods' requests (decision 114) and
@@ -1327,11 +1334,32 @@ Decisions table once it is settled.
       Secrets, so it must be encrypted; when a Site is down many Services
       want their memory back on a node that is already full, and it may
       thrash, so the memory of the Services expected to be active must
-      still fit on one node. To check and test on the dev cluster: swap
-      for pods in the k3s version in use and that only pods with a
-      request below the limit get it, whether the host swaps a gVisor
-      sandbox's memory and how fast it returns, and a Site failover with
-      swap in use.
+      still fit on one node. Tested on the dev cluster (2026-11-15, k3s
+      1.36, one 8 GB node with an 8 GB swap file on the VM's disk, the
+      kubelet with `failSwapOn: false` and `swapBehavior: LimitedSwap`
+      in `kubelet.conf.d`, pods with a request of 256 MiB and a limit of
+      1 GiB that hold 600 MB):
+      - The host swaps a gVisor sandbox's memory: `memory.reclaim` on the
+        pod's cgroup moved all 600 MB to swap in 1.4 s, and reading it
+        all again took 7.4 s, 50 ms once it was back in memory. Under
+        runc the same took 3.0 s for the 284 MB that were swapped.
+      - Kubernetes' swap limit does not hold under gVisor. A runc
+        container got `memory.swap.max` in proportion to its memory
+        request (284 MB here, so swap as large as memory allows a pod
+        about its request), but a gVisor pod's memory is counted in the
+        sandbox's cgroup, where the limit is `max`: it swaps without a
+        limit of its own. A limit would have to be ours, on the pod's
+        cgroup.
+      - A node with more in use than it has memory stayed up: 14 such
+        gVisor pods (8.4 GB on 7.7 GB, 2.9 GB of it in swap) all ran,
+        with no OOM kill, no eviction and no `MemoryPressure`. When all
+        read their memory at once, those in memory took 50–230 ms and
+        those in swap 10–14 s.
+      Not tested: the servers' NVMe (the page-in rate of about 80 MB/s
+      is that of a cloud VM's disk), encrypted swap, Databases on the
+      same node, a real Service's latency instead of a full read, and
+      whether the kernel swaps idle pods by itself early enough or the
+      platform has to call `memory.reclaim`.
     - Billing reserved instead of measured CPU while a pod runs, as
       Fargate and Fly.io do (Cloud Run only with instance-based billing;
       by default it bills CPU while a request is handled). Contradicts
