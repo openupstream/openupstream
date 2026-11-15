@@ -12,8 +12,16 @@ What it does now:
   `?madauth_device=<code>` (decision 87)
 - an Account on the first visit (decision 62)
 - Projects: list, create, delete
+- a Project's page (`/project?id=<id>`), asked again every 10 seconds
+  while it is in front:
+  - Databases: list with state, create (name, memory, storage, Site),
+    connection details, resize, delete
+  - what every Resource uses now, from the API's `/usage` (decision 124):
+    CPU, memory and storage against what it was given, and its instances
+    with their Site, state and restarts. Services, Jobs and Buckets are
+    shown this way and still created with `oup` or the API.
 
-Pages for Databases, Buckets, Domains, Services, Jobs and Secrets follow.
+Forms for Buckets, Domains, Services, Jobs and Secrets follow.
 
 ## How it reaches madAuth and the API
 

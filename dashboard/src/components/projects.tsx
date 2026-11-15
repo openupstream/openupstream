@@ -1,22 +1,11 @@
 'use client';
 
-import type { Account, ApiError, ApiResult, OpenUpstreamClient, Project } from '@openupstream/sdk';
+import type { Account, ApiResult, OpenUpstreamClient, Project } from '@openupstream/sdk';
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { projectNameProblem, projectsByAccount } from '../lib/projects';
-import { api, sessionEnded } from '../lib/session';
+import { api, refused } from '../lib/session';
 
 type Loaded = { readonly accounts: readonly Account[]; readonly projects: readonly Project[] };
-
-const say = (error: ApiError): string =>
-    error.status === 0 ? `The API could not be reached: ${error.message}` : error.status === 401 ? 'Your session has ended. Sign in again.' : error.message;
-
-/** What to show for a refusal; a 401 also has madAuth look at the session, which signs the page out when it is gone. */
-const refused = (error: ApiError): string => {
-    if (error.status === 401) {
-        void sessionEnded();
-    }
-    return say(error);
-};
 
 const load = async (client: OpenUpstreamClient): Promise<ApiResult<Loaded>> => {
     const [accounts, projects] = await Promise.all([client.listAccounts(), client.listProjects()]);
@@ -77,7 +66,9 @@ export function Projects() {
                                 {projects.map((project) => (
                                     <li key={project.id}>
                                         <span>
-                                            <strong>{project.name}</strong>
+                                            <a href={`/project?id=${project.id}`}>
+                                                <strong>{project.name}</strong>
+                                            </a>
                                             <small>created {new Date(project.createdAt).toLocaleDateString()}</small>
                                         </span>
                                         <button
