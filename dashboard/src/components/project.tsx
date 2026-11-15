@@ -313,6 +313,7 @@ function DatabaseForm(props: {
                 memoryMb="512"
                 storageGb="10"
                 submit="Create Database"
+                resetOn={`${name} ${homeSite}`}
                 onSubmit={async (sizes) => {
                     const trimmed = name.trim();
                     const found = trimmed === '' ? 'Enter a name.' : databaseNameProblem(trimmed, props.existing);
@@ -349,6 +350,8 @@ function SizesForm(props: {
     readonly storageGb: string;
     readonly submit: string;
     readonly note?: string;
+    /** The further fields' values: a change of them takes the message away, as a change of the sizes does. */
+    readonly resetOn?: string;
     readonly children?: React.ReactNode;
     readonly onSubmit: (sizes: { memoryMb: number; storageGb: number }) => Promise<string | undefined>;
 }) {
@@ -356,6 +359,8 @@ function SizesForm(props: {
     const [storageGb, setStorageGb] = useState(props.storageGb);
     const [problem, setProblem] = useState<string | undefined>(undefined);
     const [busy, setBusy] = useState(false);
+    // What was wrong is about what was typed then, not about what is typed now.
+    useEffect(() => setProblem(undefined), [memoryMb, storageGb, props.resetOn]);
     const submit = async (event: FormEvent) => {
         event.preventDefault();
         const sizes = databaseSizes(memoryMb, storageGb);
