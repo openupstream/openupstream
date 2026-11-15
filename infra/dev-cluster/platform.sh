@@ -27,7 +27,9 @@
 # 8. the CPU agent on each compute node, every pod's CPU total for metering
 #    (decision 115);
 # 9. the bandwidth agent on each compute node, which keeps the customers'
-#    pods from filling the node's uplink (decision 122).
+#    pods from filling the node's uplink (decision 122). UPLINK_MBIT is the
+#    nodes' uplink speed in Mbit/s, for nodes whose interface reports none
+#    (VMs) or more than the line carries; unset, the interface's own.
 #
 # Images come from GHCR, pinned by digest: by default the ones built for the
 # current commit (.github/workflows/images.yml). Override with IMAGE_TAG.
@@ -249,6 +251,8 @@ kubectl -n openupstream-system rollout status daemonset/cpu-agent --timeout=5m
 
 # The bandwidth agent on each compute node, which keeps the customers' pods
 # from filling the node's uplink (decision 122).
-sed "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" "$ROOT/operators/deploy/bandwidth-agent.yaml" |
+sed -e "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" \
+  -e "s#{name: UPLINK_MBIT, value: \"\"}#{name: UPLINK_MBIT, value: \"${UPLINK_MBIT:-}\"}#" \
+  "$ROOT/operators/deploy/bandwidth-agent.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n openupstream-system rollout status daemonset/bandwidth-agent --timeout=5m

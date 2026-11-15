@@ -37,8 +37,10 @@ export const TARGET = 0.8;
 const AT_LIMIT = 0.9;
 /** Room a pod below its limit is given to grow into before the next reading. */
 const HEADROOM = 1.25;
-/** A limit moves only by this share of itself or more, so `tc` is not called for noise. */
-const DEADBAND = 0.05;
+/** A limit goes up only by this share of itself or more, so `tc` is not called for noise. */
+const DEADBAND_UP = 0.05;
+/** Going down it follows more closely: what is not applied stays on the uplink above TARGET. */
+const DEADBAND_DOWN = 0.01;
 /** How long a pod may send at full speed after a pause, at its limit's rate. */
 const BURST_SECONDS = 0.1;
 /** At least a segment as the kernel hands it over before splitting (GSO). */
@@ -62,6 +64,12 @@ const parseList = (json: string): Record<string, unknown>[] => {
     return Array.isArray(parsed) ? parsed.filter(isRecord) : [];
 };
 
+/** `ip -j route show default`: the interface of the first default route. */
+export function defaultRouteDev(ipRouteJson: string): string | undefined {
+    const dev = parseList(ipRouteJson)[0]?.['dev'];
+    return typeof dev === 'string' && DEV.test(dev) ? dev : undefined;
+}
+
 /**
  * `ip -j -d link show`: which devices are a pod's interface on the node
  * (`veth`, what the pod receives) and which a pod's `ifb` device (what it
@@ -80,24 +88,31 @@ export function directionsOf(ipLinkJson: string): ReadonlyMap<string, Direction>
     );
 }
 
+/** A token bucket at the root of a device, before it is known whose device it is. */
+export type Bucket = Omit<Shaper, 'direction'>;
+
 /**
- * `tc -s -j qdisc show`: the token buckets at the root of a pod's device.
- * Only customers' pods carry the annotations, so only theirs have one.
+ * `tc -s -j qdisc show`: the token buckets at the root of a device. Only
+ * customers' pods carry the annotations, so only their devices have one.
  */
-export function shapersOf(tcQdiscJson: string, directions: ReadonlyMap<string, Direction>): Shaper[] {
-    return parseList(tcQdiscJson).flatMap((qdisc): Shaper[] => {
+export function bucketsOf(tcQdiscJson: string): Bucket[] {
+    return parseList(tcQdiscJson).flatMap((qdisc): Bucket[] => {
         const { dev, options, bytes } = qdisc;
-        const direction = typeof dev === 'string' ? directions.get(dev) : undefined;
-        if (qdisc['kind'] !== 'tbf' || qdisc['root'] !== true || typeof dev !== 'string' || direction === undefined || !isRecord(options)) {
+        if (qdisc['kind'] !== 'tbf' || qdisc['root'] !== true || typeof dev !== 'string' || !DEV.test(dev) || !isRecord(options)) {
             return [];
         }
         const { rate, burst } = options;
         // tc reports the rate in bytes per second.
-        return typeof rate === 'number' && typeof burst === 'number' && typeof bytes === 'number'
-            ? [{ dev, direction, rateBits: rate * 8, burstBytes: burst, bytes }]
-            : [];
+        return typeof rate === 'number' && typeof burst === 'number' && typeof bytes === 'number' ? [{ dev, rateBits: rate * 8, burstBytes: burst, bytes }] : [];
     });
 }
+
+/** The buckets on a pod's device, with their direction; a bucket on any other device is not a pod's and is left alone. */
+export const shapersOf = (buckets: readonly Bucket[], directions: ReadonlyMap<string, Direction>): Shaper[] =>
+    buckets.flatMap((bucket): Shaper[] => {
+        const direction = directions.get(bucket.dev);
+        return direction === undefined ? [] : [{ ...bucket, direction }];
+    });
 
 /** Bits per second between two readings of a byte counter; a counter that started again counts as 0. */
 export const bitsPerSecond = (before: number, now: number, seconds: number): number => (seconds <= 0 ? 0 : (Math.max(0, now - before) * 8) / seconds);
@@ -139,6 +154,10 @@ export interface Reading {
  * replication, Traefik) is never limited, so the pods give way to it. A
  * pod at its limit is taken to want the maximum, which keeps a lowered
  * limit in place until the pods ask for less or the uplink has room.
+ *
+ * A bucket counts all of a pod's traffic, and where a packet goes is not
+ * known here: traffic that stays on the node (to a Pooler, from Traefik)
+ * is limited with the rest while the uplink is full.
  */
 export function limitFor({ pods, uplinkBits, capacityBits }: Reading): number {
     if (capacityBits === undefined) {
@@ -161,7 +180,7 @@ export const burstFor = (rateBits: number): number => Math.max(MIN_BURST_BYTES, 
 
 /**
  * Whether a pod's bucket is to be set again: a burst that is not ours (a
- * new pod's), or a limit that moved by more than noise. The kernel keeps
+ * new pod's), or a limit that moved by more than noise (1% down, 5% up). The kernel keeps
  * the burst as a time, so `tc` reports it a few bytes off.
  */
 export function needsChange(shaper: Shaper, limitBits: number): boolean {
@@ -172,7 +191,10 @@ export function needsChange(shaper: Shaper, limitBits: number): boolean {
     if (shaper.rateBits === limitBits) {
         return false;
     }
-    return limitBits === MAX_BITS || limitBits === MIN_BITS || Math.abs(limitBits - shaper.rateBits) >= shaper.rateBits * DEADBAND;
+    if (limitBits === MAX_BITS || limitBits === MIN_BITS) {
+        return true;
+    }
+    return limitBits < shaper.rateBits ? shaper.rateBits - limitBits >= shaper.rateBits * DEADBAND_DOWN : limitBits - shaper.rateBits >= shaper.rateBits * DEADBAND_UP;
 }
 
 /** `tc`'s arguments that set a pod's bucket to a limit, keeping the bucket and what is queued in it. */
@@ -192,3 +214,48 @@ export const tcArgs = (dev: string, limitBits: number): string[] => [
     'latency',
     LATENCY,
 ];
+
+/** The pods' buckets and the uplink's byte counters at one moment. */
+export interface Snapshot {
+    /** Seconds on a clock that never steps (not the time of day). */
+    readonly at: number;
+    readonly shapers: readonly Shaper[];
+    /** What the pods receive arrives on the uplink (`rx_bytes`); what they send leaves on it (`tx_bytes`). */
+    readonly uplinkBytes: Readonly<Record<Direction, number>>;
+}
+
+export const DIRECTIONS: readonly Direction[] = ['ingress', 'egress'];
+
+/** What one pass does: the limit per direction, and the buckets to set to it. */
+export interface Plan {
+    /** Undefined on the first reading, which decides nothing. */
+    readonly limits: Readonly<Record<Direction, number>> | undefined;
+    readonly changes: readonly { readonly dev: string; readonly limitBits: number }[];
+}
+
+/**
+ * From two readings: each direction's limit and the buckets that need
+ * setting. The first reading has no usage to go by, so every pod keeps its
+ * limit, one lowered before the agent restarted too, and only gets our
+ * burst. A pod first seen in `now` has no usage yet.
+ */
+export function plan(before: Snapshot | undefined, now: Snapshot, capacityBits: number | undefined): Plan {
+    if (before === undefined) {
+        return { limits: undefined, changes: now.shapers.filter((shaper) => needsChange(shaper, shaper.rateBits)).map((shaper) => ({ dev: shaper.dev, limitBits: shaper.rateBits })) };
+    }
+    const seconds = now.at - before.at;
+    const bytesBefore = new Map(before.shapers.map((shaper) => [shaper.dev, shaper.bytes]));
+    const limitOf = (direction: Direction): number =>
+        limitFor({
+            pods: now.shapers
+                .filter((shaper) => shaper.direction === direction)
+                .map((shaper) => ({ rateBits: shaper.rateBits, usageBits: bitsPerSecond(bytesBefore.get(shaper.dev) ?? shaper.bytes, shaper.bytes, seconds) })),
+            uplinkBits: bitsPerSecond(before.uplinkBytes[direction], now.uplinkBytes[direction], seconds),
+            capacityBits,
+        });
+    const limits = { ingress: limitOf('ingress'), egress: limitOf('egress') };
+    return {
+        limits,
+        changes: now.shapers.filter((shaper) => needsChange(shaper, limits[shaper.direction])).map((shaper) => ({ dev: shaper.dev, limitBits: limits[shaper.direction] })),
+    };
+}

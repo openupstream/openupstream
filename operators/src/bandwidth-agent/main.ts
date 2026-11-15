@@ -20,14 +20,14 @@
  * Environment:
  * - UPLINK_INTERFACE: default the interface of the default route
  * - UPLINK_MBIT: the uplink's speed; default what the interface reports
- *   (`/sys/class/net/<interface>/speed`). Without either nothing is
- *   lowered, only bursts are set.
+ *   (`/sys/class/net/<interface>/speed`, read on every pass). While
+ *   neither gives one nothing is lowered, only bursts are set.
  * - INTERVAL_MS: default 1000
  */
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { type Result, err, ok } from '../result.js';
-import { type Direction, MAX_BITS, type Shaper, bitsPerSecond, directionsOf, limitFor, needsChange, shapersOf, tcArgs } from './shares.js';
+import { type Direction, MAX_BITS, type Snapshot, bucketsOf, defaultRouteDev, directionsOf, plan, shapersOf, tcArgs } from './shares.js';
 
 const log = (entry: Record<string, unknown>): void => console.log(JSON.stringify({ time: new Date().toISOString(), ...entry }));
 
@@ -44,115 +44,111 @@ const numberIn = (path: string): Promise<number | undefined> =>
         () => undefined,
     );
 
-const intervalMs = Number(process.env['INTERVAL_MS'] ?? 1000);
+const set = (name: string): string | undefined => {
+    const value = process.env[name];
+    return value === undefined || value === '' ? undefined : value;
+};
+
+const intervalMs = Number(set('INTERVAL_MS') ?? 1000);
 if (!Number.isFinite(intervalMs) || intervalMs < 100) {
     log({ msg: 'INTERVAL_MS must be a number of milliseconds, at least 100' });
     process.exit(1);
 }
-
-/** The interface the node reaches the internet through. */
-async function uplinkInterface(): Promise<string | undefined> {
-    const configured = process.env['UPLINK_INTERFACE'];
-    if (configured !== undefined && configured !== '') {
-        return configured;
-    }
-    const routes = await run('ip', ['-j', 'route', 'show', 'default']);
-    const first: unknown = routes.ok && routes.value.trim() !== '' ? (JSON.parse(routes.value) as unknown[])[0] : undefined;
-    const dev = typeof first === 'object' && first !== null ? (first as { dev?: unknown }).dev : undefined;
-    return typeof dev === 'string' ? dev : undefined;
+const configuredMbit = set('UPLINK_MBIT') === undefined ? undefined : Number(set('UPLINK_MBIT'));
+if (configuredMbit !== undefined && !(Number.isFinite(configuredMbit) && configuredMbit > 0)) {
+    log({ msg: 'UPLINK_MBIT must be a number of Mbit/s above 0' });
+    process.exit(1);
 }
 
-/** The uplink's speed in bits per second, or undefined: a virtual interface reports none (-1). */
-async function uplinkCapacity(dev: string): Promise<number | undefined> {
-    const configured = process.env['UPLINK_MBIT'];
-    const mbit = configured !== undefined && configured !== '' ? Number(configured) : await numberIn(`/sys/class/net/${dev}/speed`);
-    return mbit !== undefined && Number.isFinite(mbit) && mbit > 0 ? mbit * 1_000_000 : undefined;
-}
-
-const uplink = await uplinkInterface();
+const defaultRoute = await run('ip', ['-j', 'route', 'show', 'default']);
+const uplink = set('UPLINK_INTERFACE') ?? (defaultRoute.ok ? defaultRouteDev(defaultRoute.value) : undefined);
 if (uplink === undefined) {
     log({ msg: 'no default route and no UPLINK_INTERFACE: cannot tell the uplink' });
     process.exit(1);
 }
-const capacityBits = await uplinkCapacity(uplink);
-log({
-    msg: capacityBits === undefined ? 'bandwidth agent started; uplink speed unknown, limits are never lowered (set UPLINK_MBIT)' : 'bandwidth agent started',
-    uplink,
-    uplinkMbit: capacityBits === undefined ? null : capacityBits / 1e6,
-    intervalMs,
-});
 
-const DIRECTIONS: readonly Direction[] = ['ingress', 'egress'];
-
-interface Snapshot {
-    readonly at: number;
-    readonly shapers: readonly Shaper[];
-    readonly uplinkBytes: Readonly<Record<Direction, number>>;
+/**
+ * The uplink's speed in bits per second, or undefined: a virtual interface
+ * reports none (-1), and one whose link is down cannot be read. Read on
+ * every pass, since a link comes up after the node and may renegotiate.
+ */
+async function uplinkCapacity(): Promise<number | undefined> {
+    const mbit = configuredMbit ?? (await numberIn(`/sys/class/net/${uplink}/speed`));
+    return mbit !== undefined && mbit > 0 ? mbit * 1_000_000 : undefined;
 }
+
+/** Each device's direction, looked up once: a device's kind never changes. */
+let directions: ReadonlyMap<string, Direction> = new Map();
 
 /** The pods' token buckets and the uplink's counters now; undefined when the node cannot be read. */
 async function snapshot(): Promise<Snapshot | undefined> {
-    const [links, qdiscs, rx, tx] = await Promise.all([
-        run('ip', ['-j', '-d', 'link', 'show']),
+    const [qdiscs, rx, tx] = await Promise.all([
         run('tc', ['-s', '-j', 'qdisc', 'show']),
         numberIn(`/sys/class/net/${uplink}/statistics/rx_bytes`),
         numberIn(`/sys/class/net/${uplink}/statistics/tx_bytes`),
     ]);
-    if (!links.ok || !qdiscs.ok || rx === undefined || tx === undefined) {
-        log({ msg: 'cannot read the node', error: !links.ok ? links.error : !qdiscs.ok ? qdiscs.error : `no counters for ${uplink}` });
+    if (!qdiscs.ok || rx === undefined || tx === undefined) {
+        log({ msg: 'cannot read the node', error: !qdiscs.ok ? qdiscs.error : `no counters for ${uplink}` });
         return undefined;
     }
-    // What the pods receive arrives on the uplink; what they send leaves on it.
-    return { at: Date.now(), shapers: shapersOf(qdiscs.value, directionsOf(links.value)), uplinkBytes: { ingress: rx, egress: tx } };
+    const buckets = bucketsOf(qdiscs.value);
+    if (buckets.some((bucket) => !directions.has(bucket.dev))) {
+        // A new pod's devices (or a bucket that is not a pod's, which stays unknown and is asked for again).
+        const links = await run('ip', ['-j', '-d', 'link', 'show']);
+        if (!links.ok) {
+            log({ msg: 'cannot read the node', error: links.error });
+            return undefined;
+        }
+        directions = directionsOf(links.value);
+    }
+    // performance.now() never steps, as the time of day does when it is corrected.
+    return { at: performance.now() / 1000, shapers: shapersOf(buckets, directions), uplinkBytes: { ingress: rx, egress: tx } };
 }
 
-/** Sets the pods' buckets that need it to a limit; a pod that ended meanwhile fails and is left. */
-async function apply(shapers: readonly Shaper[], limitBits: number): Promise<void> {
-    await Promise.all(
-        shapers
-            .filter((shaper) => needsChange(shaper, limitBits))
-            .map(async (shaper) => {
-                const changed = await run('tc', tcArgs(shaper.dev, limitBits));
-                if (!changed.ok) {
-                    log({ msg: 'cannot set a limit', dev: shaper.dev, error: changed.error });
-                }
-            }),
-    );
+/** Devices whose bucket could not be set, to log each once and not on every pass. */
+let failing: ReadonlySet<string> = new Set();
+
+/** Sets buckets to their limit, one after another; a pod that ended meanwhile fails and is left. */
+async function apply(changes: readonly { readonly dev: string; readonly limitBits: number }[], present: ReadonlySet<string>): Promise<void> {
+    const failed = new Set([...failing].filter((dev) => present.has(dev)));
+    for (const { dev, limitBits } of changes) {
+        const changed = await run('tc', tcArgs(dev, limitBits));
+        if (changed.ok) {
+            failed.delete(dev);
+        } else if (!failed.has(dev)) {
+            failed.add(dev);
+            log({ msg: 'cannot set a limit; not logged again for this device', dev, error: changed.error });
+        }
+    }
+    failing = failed;
 }
 
 let last: Snapshot | undefined;
 /** The limit last logged per direction, to log changes only. */
-const logged: Record<Direction, number> = { ingress: MAX_BITS, egress: MAX_BITS };
+let logged: Readonly<Record<Direction, number>> = { ingress: MAX_BITS, egress: MAX_BITS };
+let capacityLogged: number | undefined | null = null;
 
 async function pass(): Promise<void> {
-    const now = await snapshot();
-    const before = last;
-    last = now ?? last;
+    const [now, capacityBits] = await Promise.all([snapshot(), uplinkCapacity()]);
+    if (capacityBits !== capacityLogged) {
+        log(capacityBits === undefined ? { msg: 'uplink speed unknown: limits are not lowered (set UPLINK_MBIT)', uplink } : { msg: 'uplink speed', uplink, mbit: capacityBits / 1e6 });
+        capacityLogged = capacityBits;
+    }
     if (now === undefined) {
         return;
     }
-    if (before === undefined) {
-        // The first reading has no usage to go by: every pod keeps its limit, a limit lowered before a restart too, and gets our burst.
-        await Promise.all(now.shapers.map((shaper) => apply([shaper], shaper.rateBits)));
-        return;
-    }
-    const seconds = (now.at - before.at) / 1000;
-    const bytesBefore = new Map(before.shapers.map((shaper) => [shaper.dev, shaper.bytes]));
-    for (const direction of DIRECTIONS) {
-        const shapers = now.shapers.filter((shaper) => shaper.direction === direction);
-        const uplinkBits = bitsPerSecond(before.uplinkBytes[direction], now.uplinkBytes[direction], seconds);
-        // A pod first seen now has no usage yet.
-        const pods = shapers.map((shaper) => ({
-            rateBits: shaper.rateBits,
-            usageBits: bitsPerSecond(bytesBefore.get(shaper.dev) ?? shaper.bytes, shaper.bytes, seconds),
-        }));
-        const limitBits = limitFor({ pods, uplinkBits, capacityBits });
-        if (Math.abs(limitBits - logged[direction]) >= logged[direction] * 0.05 || (limitBits === MAX_BITS && logged[direction] !== MAX_BITS)) {
-            log({ msg: 'limit', direction, mbit: limitBits / 1e6, pods: pods.length, uplinkMbit: Math.round(uplinkBits / 1e6) });
-            logged[direction] = limitBits;
+    const { limits, changes } = plan(last, now, capacityBits);
+    last = now;
+    if (limits !== undefined) {
+        for (const direction of ['ingress', 'egress'] as const) {
+            const limit = limits[direction];
+            if (Math.abs(limit - logged[direction]) >= logged[direction] * 0.05 || (limit === MAX_BITS && logged[direction] !== MAX_BITS)) {
+                log({ msg: 'limit', direction, mbit: limit / 1e6, pods: now.shapers.filter((shaper) => shaper.direction === direction).length });
+                logged = { ...logged, [direction]: limit };
+            }
         }
-        await apply(shapers, limitBits);
     }
+    await apply(changes, new Set(now.shapers.map((shaper) => shaper.dev)));
 }
 
 let stopping = false;
@@ -160,6 +156,7 @@ process.once('SIGTERM', () => {
     stopping = true;
 });
 
+log({ msg: 'bandwidth agent started', uplink, intervalMs });
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 while (!stopping) {
     await pass();
@@ -167,5 +164,9 @@ while (!stopping) {
 }
 // Leave no pod below the maximum while nothing watches the uplink.
 const final = await snapshot();
-await apply(final?.shapers ?? [], MAX_BITS);
+const shapers = final?.shapers ?? [];
+await apply(
+    shapers.filter((shaper) => shaper.rateBits !== MAX_BITS).map((shaper) => ({ dev: shaper.dev, limitBits: MAX_BITS })),
+    new Set(shapers.map((shaper) => shaper.dev)),
+);
 log({ msg: 'bandwidth agent stopped; limits back at the maximum' });

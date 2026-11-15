@@ -37,10 +37,12 @@ spec:
         - name: bandwidth-agent
           image: ghcr.io/openupstream/operators:main
           command: [node, operators/dist/bandwidth-agent/main.js]
-          # The uplink's speed is what its interface reports. Set it where
-          # the interface reports none (a VM) or more than the line carries:
-          # env:
-          #   - {name: UPLINK_MBIT, value: "1000"}
+          env:
+            # The uplink's speed in Mbit/s. Empty: what the interface
+            # reports. Set it where that is nothing (a VM) or more than
+            # the line carries; without a speed no limit is lowered
+            # (UPLINK_MBIT of infra/dev-cluster/platform.sh).
+            - {name: UPLINK_MBIT, value: ""}
           resources:
             requests: {cpu: 20m, memory: 64Mi}
             limits: {memory: 128Mi}
