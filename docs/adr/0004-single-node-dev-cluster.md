@@ -40,7 +40,11 @@ of that.
    `install-single-node.sh` refuses any number of nodes but one.
 3. **One copy in single-node.** Garage and Loki run one node with
    replication factor 1. Each Database gets one instance and one
-   PgBouncer (`layout` in the DatabaseConfig). madAuth, the control
+   PgBouncer (`layout` in the DatabaseConfig), stored with k3s's
+   local-path provisioner instead of TopoLVM (decision 109): no disk to
+   prepare, but sizes are neither reserved nor checked (the API's room
+   check finds no TopoLVM capacity and accepts any size), and growing
+   storage never completes. madAuth, the control
    plane, CoreDNS, the CloudNativePG operator, Prometheus and
    Alertmanager run once instead of once per compute Site. The alert
    for a Database without a standby cannot fire.

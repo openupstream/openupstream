@@ -22,6 +22,7 @@ import type {
     CustomDomainInput,
     DatabaseDetails,
     DatabaseInput,
+    DatabasePatch,
     Domain,
     Id,
     JobDetails,
@@ -118,6 +119,11 @@ export class OpenUpstreamClient {
 
     getDatabase(projectId: Id, databaseId: Id): Promise<ApiResult<DatabaseDetails>> {
         return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}`);
+    }
+
+    /** Resizes the Database; the operator applies it within one pass (`resizing` until then). */
+    updateDatabase(projectId: Id, databaseId: Id, patch: DatabasePatch): Promise<ApiResult<DatabaseDetails>> {
+        return this.#call('PATCH', `/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}`, patch);
     }
 
     /** Deletes the Database at once; its backups are kept for the retention window. */

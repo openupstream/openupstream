@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs the platform on a single-node dev cluster (ARCHITECTURE.md,
-# decision 109): records the layout, then runs operators.sh, ingress.sh,
+# decision 112): records the layout, then runs operators.sh, ingress.sh,
 # garage.sh and platform.sh. monitoring.sh is a separate step (README).
 #
 # For development only: one copy of everything, no failover. Losing the

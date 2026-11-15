@@ -5,7 +5,7 @@
  *
  * - a CloudNativePG `Cluster` with two instances: the primary in the Home
  *   site, the standby in the other compute Site (one instance, no standby,
- *   on a single-node dev cluster: decision 109);
+ *   on a single-node dev cluster: decision 112);
  * - a PgBouncer `Pooler` of type `rw`, so it follows the primary;
  * - a Barman Cloud `ObjectStore` on Hetzner Object Storage NBG1, the WAL
  *   archive and base backup target;
@@ -48,7 +48,7 @@ export const DATABASE_INSTANCES = 2;
 export const POOLER_INSTANCES = 2;
 
 /**
- * How the cluster is laid out (ARCHITECTURE.md, decision 109): one node per
+ * How the cluster is laid out (ARCHITECTURE.md, decision 112): one node per
  * Site, or a single node standing in for all of them, for development only.
  */
 export type ClusterLayout = 'multi-node' | 'single-node';
@@ -72,6 +72,24 @@ export const POOLER_DEAD_SERVER_DETECTION = {
     tcp_user_timeout: '10000',
     server_connect_timeout: '5',
 } as const;
+
+/**
+ * One failed login to Postgres (the old primary going down in a restart)
+ * makes PgBouncer refuse every client for server_login_retry, 15 s by
+ * default. At 1 s a memory resize paused writes for 12 s instead of 16 s
+ * (dev cluster, 2026-11-15).
+ */
+export const POOLER_LOGIN_RETRY = { server_login_retry: '1' } as const;
+
+/**
+ * How a rolling restart (a new memory size, a new image) treats the
+ * primary (decision 110): restarted in place, after the standby, so it
+ * stays in its Home site; its smart shutdown waits at most 30 s for
+ * PgBouncer's connections, which never close by themselves, instead of
+ * CloudNativePG's 180 s. Writes keep flowing during that wait; a resize
+ * took 1.5 instead of 4 minutes, with one pause of 12 s.
+ */
+export const PRIMARY_RESTART = { primaryUpdateMethod: 'restart', smartShutdownTimeout: 30 } as const;
 
 /** Platform settings that are the same for every Database. */
 export interface DatabaseConfig {
@@ -193,6 +211,7 @@ const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig
     spec: {
         instances: instancesFor(config.layout).database,
         imageName: config.postgresImage,
+        ...PRIMARY_RESTART,
         // Pods, Services and PVCs carry the labels too, so usage can be
         // attributed to the Database.
         inheritedMetadata: { labels: inheritedLabels(meta) },
@@ -257,6 +276,7 @@ const poolerFor = (meta: ObjectMeta, cluster: string, config: DatabaseConfig): P
                 // transaction mode.
                 max_prepared_statements: '200',
                 ...POOLER_DEAD_SERVER_DETECTION,
+                ...POOLER_LOGIN_RETRY,
             },
         },
         template: {

@@ -1,7 +1,7 @@
 # Sourced by the install steps (operators.sh, ingress.sh, garage.sh,
 # platform.sh, monitoring.sh) and the two entry scripts. Not run on its own.
 #
-# The cluster's layout (ARCHITECTURE.md, decision 109) is recorded once by
+# The cluster's layout (ARCHITECTURE.md, decision 112) is recorded once by
 # install-single-node.sh or install-multi-node.sh in the ConfigMap
 # openupstream-system/cluster-layout, so a step run again on its own (e.g.
 # platform.sh for CLI_CLIENT_ID) installs the same way as the first time:
@@ -63,6 +63,15 @@ load_layout() {
     SITE_REPLICAS=2
     CLUSTER_ISSUER=${CLUSTER_ISSUER:-letsencrypt-staging}
   fi
+}
+
+# Prints the DatabaseConfig for LAYOUT (after load_layout):
+# database-config.json with the layout, which decides whether a Database
+# gets a standby, and on a single node k3s's local-path storage instead of
+# TopoLVM (decision 112).
+database_config() {
+  jq --arg layout "$LAYOUT" '. + {layout: $layout}
+    + (if $layout == "single-node" then {storageClass: "local-path"} else {} end)' database-config.json
 }
 
 # Sets PLATFORM_DOMAIN (decision 67) and CUSTOMER_DOMAIN (decision 68), after

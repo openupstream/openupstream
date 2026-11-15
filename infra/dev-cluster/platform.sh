@@ -2,7 +2,7 @@
 # Bootstraps the platform on the dev cluster, after operators.sh, ingress.sh
 # and garage.sh. On a single-node cluster madAuth and the control plane run
 # once instead of once per compute Site, and Databases get no standby
-# (decision 109):
+# (decision 112):
 #
 # 1. the platform Project's Databases (PLATFORM in sdk/src/internal.ts):
 #    the control plane's and madAuth's, with one reconcile pass from this
@@ -37,11 +37,10 @@ source ./lib.sh
 load_layout
 load_domains
 IMAGE_TAG=${IMAGE_TAG:-$(git rev-parse HEAD)}
-# The DatabaseConfig: database-config.json with the cluster's layout, which
-# decides whether a Database gets a standby.
+# The DatabaseConfig for the cluster's layout (database_config in lib.sh).
 CONFIG=$(mktemp)
 trap 'rm -f "$CONFIG"' EXIT
-jq --arg layout "$LAYOUT" '. + {layout: $layout}' database-config.json >"$CONFIG"
+database_config >"$CONFIG"
 PLATFORM_NS=project-00000000-0000-4000-8000-000000000002
 PLATFORM_DB=db-00000000-0000-4000-8000-000000000003
 AUTH_DB=db-00000000-0000-4000-8000-000000000004

@@ -79,7 +79,7 @@ Other names that are ours today and need yours:
 ## 3. Development clusters
 
 [infra/dev-cluster](../infra/dev-cluster/README.md) installs the platform
-onto a k3s cluster with one node per Site, or onto a single node (#109,
+onto a k3s cluster with one node per Site, or onto a single node (#112,
 [ADR-0004](adr/0004-single-node-dev-cluster.md)). Either needs sections 4
 to 6 (backups, DNS, e-mail, or `MAIL=log` instead of 6).
 
@@ -99,8 +99,10 @@ working session (#33, #52); see
    hcloud context create openupstream-dev
    ```
 
-Three `cpx32` VMs cost about €0.20 an hour together;
-`infra/dev-cluster-hetzner/down.sh` deletes everything `up.sh` created.
+Three `cpx32` VMs cost about €0.20 an hour together, the two 40 GB volumes
+of the compute VMs about €0.005; `infra/dev-cluster-hetzner/down.sh` deletes
+everything `up.sh` created. A volume left behind by an interrupted run
+shows in `hcloud volume list --selector openupstream=dev`.
 
 ### A single-node dev cluster
 
@@ -108,7 +110,9 @@ One x86_64 Linux machine (Debian or Ubuntu, 26.04 included, whose AppArmor
 needs `infra/apparmor`, which the script installs; about 8 to 12 GB of RAM
 for the platform alone) runs the whole platform with one copy of everything, for
 development only: losing it loses everything but the Databases' backups.
-Nothing needs to be reachable from the internet.
+Nothing needs to be reachable from the internet, and no disk needs
+preparing: Databases use k3s's local-path storage on the root filesystem,
+not TopoLVM.
 
 1. Give the machine a fixed address in your router (a DHCP reservation):
    its DNS records point at that address. In a Tailscale network, use its
@@ -467,3 +471,8 @@ sent at all.
   PayPal connected before January 2025 may need connecting again for
   recurring payments.
 - The production DNS zones and public hostnames.
+- **Storage on the compute servers**: TopoLVM needs the LVM volume group
+  `openupstream` on each compute server, made from its NVMe with
+  `infra/topolvm/vgcreate.sh <device>` before TopoLVM is installed
+  (`infra/topolvm/values.yaml`). How the NVMe disks are combined (RAID 1
+  or not) is decided when the servers are ordered.

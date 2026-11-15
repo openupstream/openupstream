@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Sets up one Linux machine as a single-node dev cluster over SSH
-# (ARCHITECTURE.md, decision 109), the counterpart of
+# (ARCHITECTURE.md, decision 112), the counterpart of
 # infra/dev-cluster-hetzner/up.sh for any machine you can reach:
 #
 # 1. on a machine with AppArmor, our profile for containers
 #    (infra/apparmor/cri-containerd.apparmor.d), on every run: without it
 #    Ubuntu 26.04 keeps a container's processes from signalling each other
-#    and Postgres never starts (decision 110);
+#    and Postgres never starts (decision 113);
 # 2. gVisor (infra/gvisor/install.sh), before k3s first starts;
 # 3. k3s as a single server with the same settings as on the Hetzner dev
 #    cluster, the node labelled as the compute Site hetzner-fsn1 and for

@@ -10,6 +10,7 @@ import {
     API_KEY_SCOPES,
     BUCKET_NAME,
     COMPUTE_SITES,
+    type Site,
     DATABASE_MIN_MEMORY_MB,
     DNS_LABEL,
     HOSTNAME,
@@ -54,8 +55,9 @@ import type pg from 'pg';
 import { z } from 'zod';
 import { createAccount, holdsOf, listAccounts } from '../accounts/store.js';
 import { type BucketRecord, createBucket, deleteBucket, getBucket, listBuckets } from '../buckets/store.js';
+import { roomForGrowth, roomForNew } from '../databases/capacity.js';
 import { checkRestore, restoreCheckMessage } from '../databases/restore.js';
-import { createDatabase, deleteDatabase, getDatabase, getRestoreSource, listDatabases } from '../databases/store.js';
+import { createDatabase, deleteDatabase, getDatabase, getRestoreSource, listDatabases, updateDatabase } from '../databases/store.js';
 import type { TxtLookup } from '../domains/dns.js';
 import { createCustomDomain, deleteDomain, getDomain, isReserved, listDomains, verifyDomain } from '../domains/store.js';
 import { GARAGE_REGION, type ObjectStorage } from '../garage.js';
@@ -66,7 +68,7 @@ import { openLogStream } from '../logs/stream.js';
 import { type ControlPlaneKube, jobStateOf, serviceStateOf, stateOf } from '../kube.js';
 import { type RegistryDeps, type ResolveError, parseImageReference, resolveDigest } from '../registry.js';
 import { createProject, deleteProject, getProject, listProjects } from '../projects/store.js';
-import { type Result, ok } from '../result.js';
+import { type Result, err, ok } from '../result.js';
 import { createRoute, deleteRoute, listRoutes } from '../routes/store.js';
 import type { KeyEncryptionKey } from '../secrets/envelope.js';
 import { syncProjectSecrets } from '../secrets/render.js';
@@ -149,6 +151,13 @@ const databaseInput = z.strictObject({
         })
         .optional(),
 });
+
+const databasePatch = z
+    .strictObject({
+        memoryMb: z.int().min(DATABASE_MIN_MEMORY_MB).optional(),
+        storageGb: z.int().min(1).optional(),
+    })
+    .refine((patch) => patch.memoryMb !== undefined || patch.storageGb !== undefined, 'memoryMb or storageGb');
 
 const bucketInput = z.strictObject({
     name: z.string().regex(BUCKET_NAME, 'a hostname label of 3 to 63 lowercase letters, digits and hyphens'),
@@ -288,8 +297,50 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             deps.log?.({ msg: 'cannot read Cluster', database: database.id, error: cluster.error });
             return 'unknown';
         }
-        return stateOf(cluster.value);
+        return stateOf(cluster.value, database);
     };
+    const isComputeSite = (site: string): site is Site => (COMPUTE_SITES as readonly string[]).includes(site);
+    /**
+     * Whether the compute Sites have room for `storageGb` more of this
+     * Database (decision 109): a new one needs it in each Site; a grow on the
+     * nodes that hold its volumes. A message for the 507 when not; undefined
+     * when there is room, the storage reports no capacity, or Kubernetes
+     * cannot be asked: then the size is accepted, as without the check, so a
+     * slow API server does not stop Databases from being created.
+     */
+    const noRoom = async (storageGb: number, existing?: Database): Promise<{ readonly value: string | undefined }> => {
+        const checked = await roomCheck(storageGb, existing);
+        if (!checked.ok) {
+            deps.log?.({ msg: 'cannot read the storage capacity; size accepted unchecked', database: existing?.id, error: checked.error });
+        }
+        return { value: checked.ok ? checked.value : undefined };
+    };
+    const roomCheck = async (storageGb: number, existing?: Database): Promise<Result<string | undefined, string>> => {
+        const capacity = await kube.storageCapacity();
+        if (!capacity.ok || capacity.value === undefined) {
+            return capacity.ok ? ok(undefined) : capacity;
+        }
+        const nodes = existing === undefined ? ok([]) : await kube.volumeNodes(projectNamespace(existing.projectId), clusterName(existing));
+        if (!nodes.ok) {
+            return nodes;
+        }
+        if (existing !== undefined && nodes.value.length > 0) {
+            const grow = roomForGrowth(capacity.value, nodes.value, storageGb - existing.storageGb);
+            return ok(grow.ok ? undefined : `no room to grow ${existing.name} by ${storageGb - existing.storageGb} GB now; at most ${grow.error.largestGb} GB more`);
+        }
+        const sites = await Promise.all([...capacity.value.keys()].map(async (node) => [node, await kube.nodeSite(node)] as const));
+        const failed = sites.find(([, site]) => !site.ok);
+        if (failed !== undefined && !failed[1].ok) {
+            return err(failed[1].error);
+        }
+        const siteOf = new Map<string, Site>(
+            sites.flatMap(([node, site]): [string, Site][] => (site.ok && site.value !== undefined && isComputeSite(site.value) ? [[node, site.value]] : [])),
+        );
+        const room = roomForNew(capacity.value, siteOf, storageGb);
+        return ok(room.ok ? undefined : `no room for ${storageGb} GB in both compute Sites now; at most ${room.error.largestGb} GB`);
+    };
+    const insufficientStorage = (c: Context<Env>, message: string) => c.json({ error: message }, 507);
+
     const details = async (database: Database): Promise<DatabaseDetails> => ({
         ...database,
         state: await stateFor(database),
@@ -400,12 +451,16 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             return c.json(invalid(input.error.issues), 400);
         }
         const { homeSite, restoreFrom, ...rest } = input.data;
+        // A held Account learns that first, not after the storage or backup checks.
+        const holds = await holdsOf(pool, project.accountId);
+        if (holds.length > 0) {
+            return held(c, holds);
+        }
+        const room = await noRoom(rest.storageGb);
+        if (room.value !== undefined) {
+            return insufficientStorage(c, room.value);
+        }
         if (restoreFrom !== undefined) {
-            // A held Account learns that first, not after the backup checks.
-            const holds = await holdsOf(pool, project.accountId);
-            if (holds.length > 0) {
-                return held(c, holds);
-            }
             const source = await getRestoreSource(pool, project.id, restoreFrom.databaseId);
             if (source === undefined) {
                 return c.json({ error: `no Database ${restoreFrom.databaseId} in this Project to restore from` }, 400);
@@ -452,6 +507,41 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     app.get('/v1/projects/:projectId/databases/:databaseId', async (c) => {
         const database = await databaseOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('databaseId'));
         return database === undefined ? c.json(notFound, 404) : c.json(await details(database));
+    });
+
+    app.patch('/v1/projects/:projectId/databases/:databaseId', async (c) => {
+        const database = await databaseOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('databaseId'));
+        if (database === undefined) {
+            return c.json(notFound, 404);
+        }
+        const patch = databasePatch.safeParse(await body(c));
+        if (!patch.success) {
+            return c.json(invalid(patch.error.issues), 400);
+        }
+        const { memoryMb, storageGb } = patch.data;
+        if (storageGb !== undefined && storageGb < database.storageGb) {
+            return c.json({ error: `storage only grows: ${database.name} has ${database.storageGb} GB, and a volume cannot shrink` }, 400);
+        }
+        // Growing costs more, so a held Account may only shrink memory (decision 78).
+        const grows = (memoryMb ?? 0) > database.memoryMb || (storageGb ?? 0) > database.storageGb;
+        if (grows) {
+            const project = await projectOf(c.get('accountIds'), database.projectId);
+            const holds = project === undefined ? [] : await holdsOf(pool, project.accountId);
+            if (holds.length > 0) {
+                return held(c, holds);
+            }
+        }
+        if (storageGb !== undefined && storageGb > database.storageGb) {
+            const room = await noRoom(storageGb, database);
+            if (room.value !== undefined) {
+                return insufficientStorage(c, room.value);
+            }
+        }
+        const updated = await updateDatabase(pool, database.projectId, database.id, {
+            ...(memoryMb === undefined ? {} : { memoryMb }),
+            ...(storageGb === undefined ? {} : { storageGb }),
+        });
+        return updated === undefined ? c.json(notFound, 404) : c.json(await details(updated));
     });
 
     app.delete('/v1/projects/:projectId/databases/:databaseId', async (c) => {

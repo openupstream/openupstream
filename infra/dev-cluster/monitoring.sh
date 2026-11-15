@@ -10,7 +10,7 @@
 #    the platform's namespaces' logs to it.
 #
 # On a single-node cluster Prometheus, Alertmanager and Loki run once, Loki
-# with one copy (decision 109).
+# with one copy (decision 112).
 #
 # ALERT_EMAIL is where alerts go (never committed). The healthchecks.io ping
 # URL is read from HEALTHCHECKS_URL_FILE, the SES key from the AWS profile

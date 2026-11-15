@@ -292,3 +292,14 @@ test('k3s-single-node.sh installs the AppArmor profile before k3s, on every run,
     assert.equal(none.status, 0);
     assert.doesNotMatch(none.log, /apparmor_parser/);
 });
+
+test('the DatabaseConfig carries the layout, and a single node stores Databases on local-path', () => {
+    const config = (layout) => {
+        const { status, stdout, stderr } = run('set -euo pipefail; source ./lib.sh; load_layout; database_config', { LAYOUT_STUB: layout });
+        assert.equal(status, 0, stderr);
+        return JSON.parse(stdout);
+    };
+    const original = JSON.parse(readFileSync(join(here, 'database-config.json'), 'utf8'));
+    assert.deepEqual(config('multi-node'), { ...original, layout: 'multi-node' });
+    assert.deepEqual(config('single-node'), { ...original, layout: 'single-node', storageClass: 'local-path' });
+});

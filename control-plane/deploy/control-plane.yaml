@@ -90,6 +90,14 @@ rules:
   - apiGroups: [""]
     resources: [nodes]
     verbs: [get]
+  # Room for a Database's volumes before its size is accepted (decision 109):
+  # TopoLVM's free space per node, and where a Database's volumes are.
+  - apiGroups: [storage.k8s.io]
+    resources: [csistoragecapacities]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [list]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

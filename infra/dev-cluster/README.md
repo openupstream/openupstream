@@ -1,7 +1,7 @@
 # dev-cluster
 
 Installs the platform onto a k3s cluster for development, in one of two
-layouts (ARCHITECTURE.md, "Dev clusters"; decision 109,
+layouts (ARCHITECTURE.md, "Dev clusters"; decision 112,
 [ADR-0004](../../docs/adr/0004-single-node-dev-cluster.md)):
 
 | Layout | Nodes | For | The cluster comes from |
@@ -15,8 +15,9 @@ below in order. Each step reads the layout from there, so one may be run
 again on its own and installs the same way; the two scripts refuse a
 cluster whose nodes do not match (a multi-node cluster needs a node in each
 of `hetzner-fsn1`, `ovh-lim` and `netcup-nbg`, a single-node one exactly
-one node), and a recorded layout never changes. Storage is k3s's local-path
-provisioner, not TopoLVM.
+one node), and a recorded layout never changes. The Databases' volumes come
+from TopoLVM with one node per Site (decision 109) and from k3s's
+local-path provisioner on a single node (decision 112).
 
 `scripts.test.mjs` tests the scripts' own logic with stubbed `kubectl` and
 `curl` (`npm run test:infra`, part of `npm test`).
@@ -31,7 +32,11 @@ them up.
 ## A single node
 
 For development only: losing the node loses every Database, Bucket and
-Service on it, and only the Databases' backups survive. The node carries
+Service on it, and only the Databases' backups survive. Databases are
+stored with k3s's local-path provisioner on the root filesystem, not
+TopoLVM: their sizes are not reserved, so one can fill the disk, the API
+accepts any size unchecked, and growing a Database's storage never
+completes (local-path cannot expand a volume). The node carries
 the label of the compute Site `hetzner-fsn1`; a Database or Service with
 the Home site `ovh-lim` runs there as well.
 
@@ -40,7 +45,7 @@ the Home site `ovh-lim` runs there as well.
 ```
 
 It installs our AppArmor profile for containers (`infra/apparmor`,
-needed on Ubuntu 26.04, decision 110), gVisor and then k3s on that machine
+needed on Ubuntu 26.04, decision 113), gVisor and then k3s on that machine
 over SSH (as root, or as a
 user with passwordless sudo; ports 80, 443 and 6443 must be free), labels
 the node, applies the RuntimeClass `gvisor` and writes the kubeconfig to
@@ -110,7 +115,11 @@ and `dev.openupstream.app`, `CLUSTER_ISSUER` to Let's Encrypt staging.
 
 `operators.sh` installs cert-manager, whose
 Certificates own their Secrets (so a custom domain's key goes with its
-Certificate), CloudNativePG and the Barman Cloud Plugin at the versions in
+Certificate), TopoLVM on the compute nodes with one node per Site
+(`infra/topolvm`, StorageClass `topolvm-provisioner`, which
+`database-config.json` names; a single node uses `local-path` instead),
+CloudNativePG
+and the Barman Cloud Plugin at the versions in
 `operators/crds`, spreads CoreDNS and the CloudNativePG operator over the
 compute Sites (once each on a single node), and creates the backup
 credentials Secret in `openupstream-system`.
@@ -134,11 +143,14 @@ reaching a Bucket does not trust (`unable to get local issuer
 certificate`); to run one, as the `spa-api` demo app does, use
 `CLUSTER_ISSUER=letsencrypt ./garage.sh`, which may run again on a
 running cluster. Let's Encrypt issues the same names at most five times a
-week. On 2026-11-10 every DNS-01 challenge failed in both zones with
-NXDOMAIN for the TXT record, although bunny.net's nameservers and 1.1.1.1
-served it for a minute before the check; `garage.sh` and `platform.sh`
-then stop at their certificate wait, after everything but the operators
-that `platform.sh` installs last. Traefik serves its default certificate
+week. On 2026-11-10 every DNS-01 challenge failed in both zones for an
+afternoon with NXDOMAIN for the TXT record, although both bunny.net
+nameservers (IPv4 and IPv6, any letter case) and the public resolvers
+served it; on 2026-11-15 the same setup issued at once, so the cause was
+outside this repository (Let's Encrypt was rolling out more validation
+perspectives then). If it happens again, `garage.sh` and `platform.sh`
+stop at their certificate wait, after everything but the operators that
+`platform.sh` installs last; Traefik serves its default certificate
 meanwhile, so the API works with `-k`.
 
 `platform.sh` creates the platform Project's Databases (the control plane's and
@@ -224,8 +236,8 @@ npx tsx scripts/reconcile-databases.ts rows.json config.json --dry-run
 ```
 
 where `rows.json` is `[{ "project": …, "database": … }]` and `config.json` a
-`DatabaseConfig` (storage class `local-path`; `layout` `single-node` for
-one instance per Database).
+`DatabaseConfig` (storage class `topolvm-provisioner`, or `local-path` on a
+single node; `layout` `single-node` for one instance per Database).
 
 The platform Project's Databases have the same ids on every dev cluster,
 so their WAL goes to the same path in the backup bucket each time and

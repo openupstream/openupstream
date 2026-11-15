@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Points hostnames at the compute nodes, as bunny.net A records
-# (ARCHITECTURE.md, decisions 32, 34 and 109). The addresses are the compute
+# (ARCHITECTURE.md, decisions 32, 34 and 112). The addresses are the compute
 # nodes' own, as Kubernetes reports them (ExternalIP, else InternalIP; IPv4),
 # so this works for any cluster: public addresses for the Hetzner dev
 # cluster, the node's address in the home network for a single node.

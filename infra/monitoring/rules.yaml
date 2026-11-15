@@ -20,7 +20,7 @@ spec:
         - alert: DatabaseMissingStandby
           # Every Database runs one instance per compute Site (decision 26).
           # monitoring.sh fills in DATABASE_INSTANCES: 2, or 1 on a
-          # single-node dev cluster, where this never fires (decision 109).
+          # single-node dev cluster, where this never fires (decision 112).
           expr: count by (namespace, cluster) (up{job="monitoring/cnpg-instances"} == 1) < DATABASE_INSTANCES
           for: 10m
           labels: {severity: warning}

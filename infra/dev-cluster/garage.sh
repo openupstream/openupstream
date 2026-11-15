@@ -6,7 +6,7 @@
 #    in the cluster only; the admin token also goes to the platform
 #    Project's namespace as garage-admin, for the control plane;
 # 2. Garage, one node per Site (infra/garage/crd.yaml, then garage.yaml),
-#    or one node with one copy on a single-node cluster (decision 109);
+#    or one node with one copy on a single-node cluster (decision 112);
 # 3. the layout: each node's zone is its Site, with GARAGE_CAPACITY each,
 #    applied once;
 # 4. the public S3 endpoint https://<bucket>.s3.$CUSTOMER_DOMAIN: the

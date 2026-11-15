@@ -1,7 +1,7 @@
 # containerd's AppArmor profile for every container on a k3s node, as
 # containerd 2.3 generates it (contrib/apparmor/template.go, rendered with
 # the daemon running unconfined), plus the two rules marked below
-# (ARCHITECTURE.md, decision 110).
+# (ARCHITECTURE.md, decision 113).
 #
 # Ubuntu 26.04 sets kernel.apparmor_restrict_unprivileged_unconfined=1, so
 # runc stacks this profile on `unconfined` and a container's processes are

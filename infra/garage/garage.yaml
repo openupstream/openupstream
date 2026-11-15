@@ -7,7 +7,7 @@
 # Filled in when applied: CUSTOMER_DOMAIN (`openupstream.app` in
 # production, `dev.openupstream.app` on a dev cluster), GARAGE_DATA_SIZE,
 # each node's data volume (e.g. `20Gi`), and GARAGE_NODES, the number of
-# nodes and copies (3; 1 on a single-node dev cluster, decision 109). Needs
+# nodes and copies (3; 1 on a single-node dev cluster, decision 112). Needs
 # the Secret garage with GARAGE_RPC_SECRET and GARAGE_ADMIN_TOKEN, which
 # Garage reads from its environment.
 apiVersion: v1
@@ -59,7 +59,7 @@ data:
 
     # One copy per Site; reads and writes need two of three (quorum), so
     # they keep working while any one Site is down. garage.sh sets it: 3, or
-    # 1 on a single-node dev cluster (decision 109).
+    # 1 on a single-node dev cluster (decision 112).
     replication_factor = GARAGE_NODES
     consistency_mode = "consistent"
     compression_level = 1

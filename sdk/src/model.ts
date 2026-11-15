@@ -104,13 +104,24 @@ export interface DatabaseInput {
 }
 
 /**
+ * Resizes a Database (decision 110). Storage only grows: a volume cannot
+ * shrink. A new memory size restarts the instances one after the other,
+ * the standby first, then a switchover (writes pause for seconds).
+ */
+export interface DatabasePatch {
+    memoryMb?: number;
+    storageGb?: number;
+}
+
+/**
  * - `provisioning`: being created, or not yet seen by the operator
+ * - `resizing`: its Cluster does not have the size the Database asks for yet
  * - `ready`: both instances healthy
  * - `degraded`: running, but not every instance is healthy (e.g. during a
  *   failover)
  * - `unknown`: the platform could not check just now
  */
-export type DatabaseState = 'provisioning' | 'ready' | 'degraded' | 'unknown';
+export type DatabaseState = 'provisioning' | 'resizing' | 'ready' | 'degraded' | 'unknown';
 
 /**
  * Where the Project's Services and Jobs reach the Database: through its

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs the platform on a cluster with one node per Site, the layout of
-# production (ARCHITECTURE.md, "Sites and failure handling"; decision 109):
+# production (ARCHITECTURE.md, "Sites and failure handling"; decision 112):
 # records the layout, then runs operators.sh, ingress.sh, garage.sh and
 # platform.sh. monitoring.sh is a separate step (README).
 #
