@@ -1502,8 +1502,12 @@ Decisions table once it is settled.
    cookie accepted by the API from the dashboard's origin, an Account,
    Projects created and deleted), served on a cluster by its own
    nginx image (decision 123; on the single-node dev cluster 2026-11-15:
-   the page at the platform domain with madAuth and the API beside it; the
-   waitlist on a host of its own not yet run on a cluster), and reaches the API under `/api` of its own
+   the page at the platform domain with madAuth and the API beside it; on
+   the Hetzner dev cluster the same day with `SIGNUP=closed`: a dashboard
+   replica in each compute Site, the waitlist at
+   `waitlist.dev.openupstream.com` with its own record and certificate, its
+   confirmation link on that host, a refused sign-up pointing there, and
+   `down.sh` removing the record), and reaches the API under `/api` of its own
    host (decision 120; on the Hetzner dev cluster 2026-11-15: the route
    with the prefix stripped on both compute nodes, the cookie accepted
    only with `Sec-Fetch-Site: same-origin`, `oup` with an API key); the
