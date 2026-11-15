@@ -62,13 +62,16 @@ describe('eventsForHour', () => {
         );
     });
 
-    test("egress per backend Service, a Bucket's storage from its bytes", () => {
+    test("egress per Resource from Traefik's rule services, a Bucket's storage from its bytes", () => {
+        const domain = '77777777-7777-4777-8777-777777777777';
         const { events, unattributed } = eventsForHour(hour, {
             ...empty,
             egress: [
-                { labels: { service: `${ns}-svc-${svc}-8080@kubernetescrd` }, value: 2 * GiB },
-                { labels: { service: `${ns}-bucket-${bucket}-3902@kubernetescrd` }, value: GiB / 2 },
-                { labels: { service: 'project-platform-madauth-8787@kubernetescrd' }, value: GiB },
+                // A Service's two rules (GET/HEAD and the rest), as Traefik names them: IngressRoute, then a hash of the rule.
+                { labels: { service: `${ns}-domain-${domain}-svc-${svc}-51a488b8449908bf5258@kubernetescrd` }, value: 1.5 * GiB },
+                { labels: { service: `${ns}-domain-${domain}-svc-${svc}-91f4d6391753b46679fc@kubernetescrd` }, value: GiB / 2 },
+                { labels: { service: `${ns}-domain-${domain}-bucket-${bucket}-1d1774b9e054a90bd90c@kubernetescrd` }, value: GiB / 2 },
+                { labels: { service: 'project-00000000-0000-4000-8000-000000000002-api-f3b293db17ee74e12407@kubernetescrd' }, value: GiB },
             ],
             buckets: [{ id: bucket, projectId: project, bytes: 3 * GiB, createdAt: new Date(0), deletedAt: undefined }],
         });

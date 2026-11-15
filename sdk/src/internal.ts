@@ -49,9 +49,6 @@ export const serviceObjectName = (service: Pick<Service, 'id'>): string => `svc-
 /** The Job's CronJob, in its Project's namespace; its runs are Kubernetes Jobs named after it. */
 export const jobObjectName = (job: Pick<Job, 'id'>): string => `job-${job.id}`;
 
-/** A Bucket's ExternalName Service to Garage's website endpoint, per Bucket so Traefik counts its egress apart (decision 112). */
-export const bucketObjectName = (bucket: { readonly id: Id }): string => `bucket-${bucket.id}`;
-
 /** On a Service's Deployment and its pods: the Service's id, by which the control plane finds the pods for its logs. */
 export const SERVICE_ID_LABEL = 'openupstream.io/service-id';
 
@@ -118,8 +115,14 @@ export interface AccountUsage {
     }[];
 }
 
-/** The Traefik IngressRoute that serves one Domain, in its Project's namespace. */
-export const ingressRouteName = (domainId: Id): string => `domain-${domainId}`;
+/**
+ * The Traefik IngressRoute that serves one Resource under one Domain, in its
+ * Project's namespace (decision 112): `domain-<id>-bucket-<id>` or
+ * `domain-<id>-svc-<id>`. Traefik names each rule's metrics after it, so
+ * metering reads the Resource from them.
+ */
+export const ingressRouteName = (domainId: Id, resource: { readonly kind: 'bucket' | 'service'; readonly id: Id }): string =>
+    `domain-${domainId}-${resource.kind === 'bucket' ? 'bucket' : 'svc'}-${resource.id}`;
 
 /** A Route as the Routes operator needs it: the Bucket by name, or the Service with its port. */
 export type RoutedPath = Pick<Route, 'id' | 'pathPrefix'> &

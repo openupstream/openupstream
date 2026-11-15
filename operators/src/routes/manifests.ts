@@ -2,14 +2,16 @@
  * The Traefik objects for the routing table (ARCHITECTURE.md, "Routing and
  * domains"; decision 84), as a pure function of the control plane's rows.
  *
- * Per Project with Routes, in its namespace: the Namespace itself and the
- * Middlewares every Domain shares (compression, HSTS). Per Domain: one
- * IngressRoute. Per Route to a Bucket: an ExternalName Service
- * `bucket-<id>` for Garage's website endpoint (Traefik routes only to
- * Services in the IngressRoute's own namespace; one per Bucket so Traefik
- * counts each Bucket's response bytes apart, decision 112), a Middleware
- * that tells Garage which Bucket to serve (the Host header is the
- * Bucket's name), and one that strips the path prefix.
+ * Per Project with Routes, in its namespace: the Namespace itself, an
+ * ExternalName Service `garage-web` for Garage's website endpoint (Traefik
+ * routes only to Services in the IngressRoute's own namespace), and the
+ * Middlewares every Domain shares (compression, HSTS). Per Domain and
+ * Resource it serves: one IngressRoute, `domain-<id>-bucket-<id>` or
+ * `domain-<id>-svc-<id>`, so Traefik's per-rule metrics name the Resource
+ * for metering (decision 112); rules of several IngressRoutes for one
+ * hostname compete by priority alone, as within one. Per Route to a Bucket:
+ * a Middleware that tells Garage which Bucket to serve (the Host header is
+ * the Bucket's name), and one that strips the path prefix.
  *
  * A Route to a Service goes to its Kubernetes Service (decision 93), path
  * unchanged. Like the platform's own routes (infra/ingress), Traefik gives
@@ -23,7 +25,7 @@
  * which cert-manager solves with HTTP-01: the ClusterIssuer picks that
  * solver for Certificates carrying COMPONENT_LABEL (decision 85).
  */
-import { type DomainRouting, type RoutedPath, bucketObjectName, ingressRouteName, serviceObjectName } from '@openupstream/sdk';
+import { type DomainRouting, type RoutedPath, ingressRouteName, serviceObjectName } from '@openupstream/sdk';
 import type { KubeObject } from '../kube.js';
 import { COMPONENT_LABEL, LABELS, MANAGED_BY, projectNamespace, projectObjectsFor } from '../kubernetes.js';
 
@@ -95,6 +97,12 @@ const serviceRoutingObjects = (projectId: string): KubeObject[] => [
 /** What a Project's namespace needs once it has a Route. */
 const projectObjects = (routing: DomainRouting): KubeObject[] => [
     ...projectObjectsFor({ id: routing.projectId, name: routing.projectName }),
+    {
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: { name: 'garage-web', namespace: projectNamespace(routing.projectId), labels: labels(routing.projectId) },
+        spec: { type: 'ExternalName', externalName: GARAGE_WEB.host, ports: [{ name: 'web', port: GARAGE_WEB.port }] },
+    },
     middleware(routing.projectId, 'compress', { compress: {} }),
     // Every customer hostname is HTTPS only, like the platform's (decision 68).
     middleware(routing.projectId, 'hsts', { headers: { stsSeconds: 31536000 } }),
@@ -109,12 +117,6 @@ export const matchOf = (hostname: string, pathPrefix: string): string =>
 const routeObjects = (routing: DomainRouting, route: Routed): KubeObject[] => (route.kind === 'bucket' ? bucketRouteObjects(routing, route) : []);
 
 const bucketRouteObjects = (routing: DomainRouting, route: BucketRoute): KubeObject[] => [
-    {
-        apiVersion: 'v1',
-        kind: 'Service',
-        metadata: { name: bucketObjectName({ id: route.bucketId }), namespace: projectNamespace(routing.projectId), labels: labels(routing.projectId) },
-        spec: { type: 'ExternalName', externalName: GARAGE_WEB.host, ports: [{ name: 'web', port: GARAGE_WEB.port }] },
-    },
     // Garage's website endpoint finds the Bucket by the Host header, its global alias.
     middleware(routing.projectId, hostMiddlewareName(route), { headers: { customRequestHeaders: { Host: route.bucketName } } }),
     ...(route.pathPrefix === '/'
@@ -164,7 +166,7 @@ const bucketRule = (routing: DomainRouting, route: BucketRoute): Rule => ({
         ...(route.pathPrefix === '/' ? [] : [{ name: stripMiddlewareName(route) }]),
         { name: hostMiddlewareName(route) },
     ],
-    services: [{ name: bucketObjectName({ id: route.bucketId }), port: GARAGE_WEB.port }],
+    services: [{ name: 'garage-web', port: GARAGE_WEB.port }],
 });
 
 const serviceRules = (routing: DomainRouting, route: Extract<RoutedPath, { kind: 'service' }>): Rule[] => {
@@ -182,21 +184,34 @@ const serviceRules = (routing: DomainRouting, route: Extract<RoutedPath, { kind:
     ];
 };
 
-const ingressRoute = (routing: DomainRouting): KubeObject => ({
-    apiVersion: TRAEFIK,
-    kind: 'IngressRoute',
-    metadata: {
-        name: ingressRouteName(routing.domainId),
-        namespace: projectNamespace(routing.projectId),
-        labels: labels(routing.projectId),
-    },
-    spec: {
-        entryPoints: ['websecure'],
-        routes: routing.routes.flatMap((route): Rule[] => (route.kind === 'bucket' ? [bucketRule(routing, route)] : serviceRules(routing, route))),
-        // A default Domain: the default TLS store's certificate, the customer domain's wildcard.
-        tls: routing.kind === 'custom' ? { secretName: tlsSecretName(routing) } : {},
-    },
-});
+/** A Route's Resource: what names its IngressRoute. */
+const resourceOf = (route: Routed): { readonly kind: 'bucket' | 'service'; readonly id: string } =>
+    route.kind === 'bucket' ? { kind: 'bucket', id: route.bucketId } : { kind: 'service', id: route.serviceId };
+
+/** One IngressRoute per Resource the Domain serves, its Routes' rules in it, in the order of the Routes. */
+const ingressRoutes = (routing: DomainRouting): KubeObject[] => {
+    const byResource = new Map<string, { resource: ReturnType<typeof resourceOf>; routes: Routed[] }>();
+    for (const route of routing.routes) {
+        const resource = resourceOf(route);
+        const key = `${resource.kind} ${resource.id}`;
+        byResource.set(key, { resource, routes: [...(byResource.get(key)?.routes ?? []), route] });
+    }
+    return [...byResource.values()].map(({ resource, routes }) => ({
+        apiVersion: TRAEFIK,
+        kind: 'IngressRoute',
+        metadata: {
+            name: ingressRouteName(routing.domainId, resource),
+            namespace: projectNamespace(routing.projectId),
+            labels: labels(routing.projectId),
+        },
+        spec: {
+            entryPoints: ['websecure'],
+            routes: routes.flatMap((route): Rule[] => (route.kind === 'bucket' ? [bucketRule(routing, route)] : serviceRules(routing, route))),
+            // A default Domain: the default TLS store's certificate, the customer domain's wildcard.
+            tls: routing.kind === 'custom' ? { secretName: tlsSecretName(routing) } : {},
+        },
+    }));
+};
 
 /**
  * Applied in this order: a Project's objects first, then each Domain's
@@ -204,7 +219,7 @@ const ingressRoute = (routing: DomainRouting): KubeObject => ({
  */
 export function planRoutes(routings: readonly DomainRouting[], settings: RoutesSettings): KubeObject[] {
     const projects = [...new Map(routings.map((routing) => [routing.projectId, routing])).values()];
-    return firstOfEach([
+    return [
         ...projects.flatMap((routing) => [
             ...projectObjects(routing),
             ...(servesServices(routings, routing.projectId) ? serviceRoutingObjects(routing.projectId) : []),
@@ -212,13 +227,7 @@ export function planRoutes(routings: readonly DomainRouting[], settings: RoutesS
         ...routings.flatMap((routing) => [
             ...routing.routes.flatMap((route) => routeObjects(routing, route)),
             ...(routing.kind === 'custom' ? [certificate(routing, settings)] : []),
-            ingressRoute(routing),
+            ...ingressRoutes(routing),
         ]),
-    ]);
+    ];
 }
-
-/** One Bucket served under several Routes or Domains renders its Service each time; applied once. */
-const firstOfEach = (objects: readonly KubeObject[]): KubeObject[] => {
-    const key = (o: KubeObject) => `${o.apiVersion} ${o.kind} ${o.metadata.namespace ?? ''} ${o.metadata.name}`;
-    return objects.filter((o, i) => objects.findIndex((other) => key(other) === key(o)) === i);
-};

@@ -13,8 +13,8 @@
  *   deleted Service's last hour is not lost.
  * - `storage_gb_hours`: a Database's volume size from its row, once; a
  *   Bucket's bytes as Garage counts them.
- * - `egress_gb`: the response bytes Traefik sent from the Resource's
- *   backend Service (`svc-<id>`, `bucket-<id>`).
+ * - `egress_gb`: the response bytes Traefik sent for the rules of the
+ *   Resource's IngressRoutes (`domain-<id>-svc-<id>`, `domain-<id>-bucket-<id>`).
  *
  * GB is 2^30 bytes throughout, as the sizes are. Each hour is metered once
  * all its figures could be read; until then it is tried again, and an
@@ -74,8 +74,12 @@ export interface HourFigures {
 const UUID_PATTERN = UUID.source.replace(/^\^|\$$/g, '');
 const POD = new RegExp(`^(db|svc|job)-(${UUID_PATTERN})(-|$)`);
 const NAMESPACE = new RegExp(`^project-(${UUID_PATTERN})$`);
-/** Traefik's name for a Kubernetes Service behind an IngressRoute: `<namespace>-<service>-<port>@kubernetescrd`. */
-const TRAEFIK_SERVICE = new RegExp(`^project-(${UUID_PATTERN})-(svc|bucket)-(${UUID_PATTERN})-\\d+@kubernetescrd$`);
+/**
+ * Traefik's name for one rule's service: `<namespace>-<IngressRoute>-<hash
+ * of the rule>@kubernetescrd`, the IngressRoute being `domain-<id>-bucket-<id>`
+ * or `domain-<id>-svc-<id>` (one per Domain and Resource, decision 112).
+ */
+const TRAEFIK_SERVICE = new RegExp(`^project-(${UUID_PATTERN})-domain-${UUID_PATTERN}-(svc|bucket)-(${UUID_PATTERN})-[0-9a-f]+@kubernetescrd$`);
 
 const KIND_OF_PREFIX: Readonly<Record<string, ResourceKind>> = { db: 'database', svc: 'service', job: 'job', bucket: 'bucket' };
 
@@ -154,7 +158,7 @@ export const CPU_QUERY = `sum by (namespace, pod) (increase(container_cpu_usage_
 export const MEMORY_QUERY = `sum by (namespace, pod) (sum_over_time((sum by (namespace, pod) (kube_pod_container_resource_requests{${PROJECTS}, resource="memory", pod=~"(svc|job)-.*"}) * on (namespace, pod) (max by (namespace, pod) (kube_pod_status_phase{${PROJECTS}, phase="Running"}) == 1))[1h:1m]))`;
 /** Whether Prometheus scraped anything at the hour's end: without that, empty answers mean no data, not no usage. */
 export const COVERAGE_QUERY = 'count(up == 1)';
-/** Response bytes per backend Service over the hour. */
+/** Response bytes per rule's service over the hour. */
 export const EGRESS_QUERY = `sum by (service) (increase(traefik_service_responses_bytes_total{service=~"project-.*@kubernetescrd"}[1h]))`;
 
 export interface MeteringDeps {
