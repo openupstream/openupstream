@@ -9,7 +9,7 @@
  */
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { Project } from '@openupstream/sdk';
+import type { Account, Project } from '@openupstream/sdk';
 import { parseJson } from './json.js';
 import { type Result, err, ok } from './result.js';
 
@@ -92,3 +92,42 @@ export async function projectFor(
     const project = projects.find((candidate) => candidate.id === link.projectId);
     return project === undefined ? err(`the Project ${link.project} linked in ${path} is not among yours any more`) : ok(project);
 }
+
+/**
+ * The Account `oup project create` creates in: `reference` (its id, or a
+ * name only one of the caller's Accounts has) if given, else the caller's
+ * only Account. Several Accounts and no `--account` is an error rather
+ * than a guess.
+ */
+export function accountFor(accounts: readonly Account[], reference: string | undefined): Result<Account, string> {
+    const names = accounts.map((account) => account.name).join(', ');
+    if (reference === undefined || reference === '') {
+        const [only, ...others] = accounts;
+        if (only === undefined) {
+            return err('you are not a Member of any Account yet');
+        }
+        return others.length === 0 ? ok(only) : err(`you have several Accounts (${names}); pass --account <name|id>`);
+    }
+    const byId = accounts.find((account) => account.id === reference);
+    if (byId !== undefined) {
+        return ok(byId);
+    }
+    const byName = accounts.filter((account) => account.name === reference);
+    if (byName.length === 1 && byName[0] !== undefined) {
+        return ok(byName[0]);
+    }
+    if (byName.length > 1) {
+        return err(`several of your Accounts are named ${reference}; use its id: ${byName.map((account) => account.id).join(', ')}`);
+    }
+    return err(`no Account ${reference} among yours${names === '' ? '' : ` (you have ${names})`}`);
+}
+
+/** One line per Project: name, its Account's name, id, and which one is linked here. */
+export const formatProjects = (projects: readonly Project[], accounts: readonly Account[], linkedId: string | undefined): string[] =>
+    [...projects]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((project) => {
+            const account = accounts.find((candidate) => candidate.id === project.accountId)?.name ?? project.accountId;
+            return `${project.name.padEnd(24)} ${account.padEnd(20)} ${project.id}${project.id === linkedId ? '  (linked here)' : ''}`;
+        });
+
