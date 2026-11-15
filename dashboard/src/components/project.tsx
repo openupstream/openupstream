@@ -13,7 +13,7 @@ import {
     type ResourceUsage,
     type Site,
 } from '@openupstream/sdk';
-import { type FormEvent, useCallback, useEffect, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { api, refused } from '../lib/session';
 import { databaseNameProblem, databaseSizes, databaseUrlVariable, formatBytes, formatCpu, formatMeasured, resizeOf, usedShare } from '../lib/usage';
 
@@ -43,8 +43,14 @@ export function ProjectPage({ id }: { readonly id: string }) {
     const [loaded, setLoaded] = useState<Loaded | undefined>(undefined);
     const [problem, setProblem] = useState<string | undefined>(undefined);
 
+    // Answers can arrive out of order (a poll in flight while a change reloads): only the newest request's counts.
+    const asked = useRef(0);
     const refresh = useCallback(async () => {
+        const request = ++asked.current;
         const result = await load(await api(), id);
+        if (request !== asked.current) {
+            return;
+        }
         setProblem(result.ok ? undefined : result.error.status === 404 ? 'This Project does not exist, or you are not a Member of its Account.' : refused(result.error));
         if (result.ok) {
             setLoaded(result.value);
