@@ -613,7 +613,7 @@ export type RouteInput =
           serviceId: Id;
       };
 
-export const RESOURCE_KINDS = ['database', 'bucket', 'service'] as const;
+export const RESOURCE_KINDS = ['database', 'bucket', 'service', 'job'] as const;
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 
 export const USAGE_UNITS = ['cpu_seconds', 'memory_gb_hours', 'storage_gb_hours', 'egress_gb'] as const;

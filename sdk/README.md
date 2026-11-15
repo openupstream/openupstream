@@ -18,7 +18,7 @@ if (project.ok) {
 
 In a browser on the dashboard's origin the client takes `{ session:
 'cookie' }` in place of a token: the browser then sends madAuth's session
-cookie with every call (ARCHITECTURE.md, decision 114).
+cookie with every call (ARCHITECTURE.md, decision 116).
 
 Every call returns `{ ok: true, value }` or `{ ok: false, error: { status, message } }`
 (status 0: the API was not reached); nothing throws. For a refused request

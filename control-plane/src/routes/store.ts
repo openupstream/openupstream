@@ -223,13 +223,14 @@ export async function listDomainRoutings(pool: pg.Pool): Promise<DomainRouting[]
         kind: 'default' | 'custom';
         route_id: string;
         path_prefix: string;
+        bucket_id: string | null;
         bucket_name: string | null;
         spa_fallback: boolean;
         service_id: string | null;
         port: number | null;
     }>(`
         select d.project_id, p.name as project_name, d.id as domain_id, d.hostname, d.kind, r.id as route_id, r.path_prefix,
-               b.name as bucket_name, r.spa_fallback, s.id as service_id, s.port
+               b.id as bucket_id, b.name as bucket_name, r.spa_fallback, s.id as service_id, s.port
         from routes r
         join domains d on d.id = r.domain_id
         join projects p on p.id = d.project_id and p.deleted_at is null
@@ -242,7 +243,7 @@ export async function listDomainRoutings(pool: pg.Pool): Promise<DomainRouting[]
         const route: RoutedPath =
             row.service_id !== null && row.port !== null
                 ? { id: row.route_id, pathPrefix: row.path_prefix, kind: 'service', serviceId: row.service_id, port: row.port }
-                : { id: row.route_id, pathPrefix: row.path_prefix, kind: 'bucket', bucketName: row.bucket_name ?? '', spaFallback: row.spa_fallback };
+                : { id: row.route_id, pathPrefix: row.path_prefix, kind: 'bucket', bucketId: row.bucket_id ?? '', bucketName: row.bucket_name ?? '', spaFallback: row.spa_fallback };
         const domain = byDomain.get(row.domain_id);
         byDomain.set(
             row.domain_id,

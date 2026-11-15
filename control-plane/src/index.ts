@@ -23,7 +23,10 @@ import { accessTokenVerifier, apiKeyVerifier, keysFrom, madauthAuthenticator, se
 import { getAccountRecord, liftHold, placeHold } from './accounts/store.js';
 import { s3BackupStore } from './backups.js';
 import { cleanupPass } from './cleanup.js';
-import { growthPass, prometheusClient } from './databases/growth.js';
+import { growthPass } from './databases/growth.js';
+import { prometheusClient } from './prometheus.js';
+import { meteringPass } from './usage/meter.js';
+import { accountUsage } from './usage/store.js';
 import { configFrom } from './config.js';
 import { listDatabaseRows } from './databases/rows.js';
 import { txtLookup } from './domains/dns.js';
@@ -50,6 +53,7 @@ const log = (entry: Record<string, unknown>): void =>
 const CLEANUP_LOCK = 7_310_001;
 const SECRETS_LOCK = 7_310_002;
 const GROWTH_LOCK = 7_310_003;
+const METERING_LOCK = 7_310_004;
 
 /**
  * Runs `pass` every interval until stopped. Both replicas run the loop; a
@@ -133,6 +137,7 @@ async function main(): Promise<void> {
         listServiceRows: () => listServiceRows(pool),
         listJobRows: () => listJobRows(pool),
         getAccount: (id) => getAccountRecord(pool, id),
+        accountUsage: (accountId, month) => accountUsage(pool, accountId, month),
         placeHold: (accountId, reason) => placeHold(pool, accountId, reason),
         liftHold: (accountId, reason) => liftHold(pool, accountId, reason),
         log,
@@ -190,7 +195,7 @@ async function main(): Promise<void> {
         allowedCallers: [...config.value.allowedCallers],
         billingCallers: [...config.value.billingCallers],
         newAccountHolds: config.value.newAccountHolds,
-        storageAutoGrow: config.value.prometheusUrl === undefined ? 'off (no PROMETHEUS_URL)' : config.value.prometheusUrl,
+        storageAutoGrowAndMetering: config.value.prometheusUrl === undefined ? 'off (no PROMETHEUS_URL)' : config.value.prometheusUrl,
         waitlist: waitlist === undefined ? 'off' : { url: waitlist.url, port: waitlist.port, mail: waitlist.mail.kind },
     });
 
@@ -210,7 +215,10 @@ async function main(): Promise<void> {
         runExclusively('secrets', pool, SECRETS_LOCK, () => secretsPass(secretsDeps), interval, stop.signal, log),
         ...(prometheusUrl === undefined
             ? []
-            : [runExclusively('growth', pool, GROWTH_LOCK, () => growthPass({ pool, kube, prometheus: prometheusClient(prometheusUrl), log }), interval, stop.signal, log)]),
+            : [
+                  runExclusively('growth', pool, GROWTH_LOCK, () => growthPass({ pool, kube, prometheus: prometheusClient(prometheusUrl), log }), interval, stop.signal, log),
+                  runExclusively('metering', pool, METERING_LOCK, () => meteringPass({ pool, prometheus: prometheusClient(prometheusUrl), storage, log }), interval, stop.signal, log),
+              ]),
     ]);
     await pool.end();
 }

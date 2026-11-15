@@ -106,7 +106,7 @@ export interface ApiDeps {
     /** Where `oup login` signs in (decision 87); without it, `GET /v1/login` answers 404. */
     readonly cliLogin?: { readonly issuer: string; readonly clientId: string };
     /**
-     * The dashboard (decision 114): browsers on these origins may call the
+     * The dashboard (decision 116): browsers on these origins may call the
      * API, and their madAuth session cookie counts as the credential, checked
      * by `sessions`. Without it the API answers no other origin and reads no
      * cookie.
@@ -401,7 +401,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         connection: databaseConnection(database),
     });
 
-    // The dashboard's browser calls from another origin (decision 114). Only
+    // The dashboard's browser calls from another origin (decision 116). Only
     // its origins get an answer a script may read, and may send the cookie.
     const dashboardOrigins = new Set(deps.dashboard?.origins ?? []);
     if (deps.dashboard !== undefined) {

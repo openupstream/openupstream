@@ -1,0 +1,85 @@
+# The CPU agent (ARCHITECTURE.md, "Metering and billing"; decision 115):
+# one pod per compute node that reads every pod's CPU total from its cgroup
+# and serves it on :9101/metrics, where Prometheus scrapes it
+# (infra/monitoring/scrape.yaml) for metering. Only the compute nodes run
+# customers' pods; the third Site's pods are the platform's.
+#
+# It reads /sys/fs/cgroup read-only as an unprivileged user (cpu.stat and
+# cgroup.events are world-readable) and lists the pods on its own node, for
+# their names. The image is the operators' image, pinned by digest when
+# applied (infra/dev-cluster/platform.sh).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cpu-agent
+  namespace: openupstream-system
+---
+# Cluster-wide: the pods on a node are in every namespace. It only reads them.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openupstream-cpu-agent
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openupstream-cpu-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: openupstream-cpu-agent
+subjects:
+  - kind: ServiceAccount
+    name: cpu-agent
+    namespace: openupstream-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cpu-agent
+  namespace: openupstream-system
+  labels: {app.kubernetes.io/name: cpu-agent}
+spec:
+  selector:
+    matchLabels: {app.kubernetes.io/name: cpu-agent}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: cpu-agent}
+    spec:
+      serviceAccountName: cpu-agent
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: cpu-agent
+          image: ghcr.io/openupstream/operators:main
+          command: [node, operators/dist/cpu-agent/main.js]
+          env:
+            - name: NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+            - {name: CGROUP_ROOT, value: /host/cgroup/kubepods.slice}
+          ports:
+            - {name: metrics, containerPort: 9101}
+          readinessProbe:
+            httpGet: {path: /healthz, port: metrics}
+          volumeMounts:
+            - {name: cgroup, mountPath: /host/cgroup, readOnly: true}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+      volumes:
+        - name: cgroup
+          hostPath: {path: /sys/fs/cgroup, type: Directory}

@@ -54,7 +54,7 @@ export interface Config {
     readonly customerDomain: string;
     /** Our own hostnames live under it (decision 67); like the customer domain, no Account may claim it. */
     readonly platformDomain: string;
-    /** The origins of the dashboard, whose browsers may call the API with the session cookie (decision 114). */
+    /** The origins of the dashboard, whose browsers may call the API with the session cookie (decision 116). */
     readonly dashboardOrigins: readonly string[];
     readonly cleanupIntervalMs: number;
     /** The platform's Prometheus, where storage auto-grow reads volume usage (decision 111); without it, nothing grows by itself. */

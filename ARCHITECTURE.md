@@ -210,7 +210,7 @@ append-only. Its tests run against a real
 Postgres in Docker. The API types are in `sdk/src/model.ts`.
 
 The dashboard (`dashboard/`) is a Next.js app on the same API, built as
-static files (#114): every page renders in the browser, which calls the API
+static files (#116): every page renders in the browser, which calls the API
 itself through `@openupstream/sdk`. It signs Members in and up with
 madAuth's dialog (`@madauth/web`, e-mail and password), shows the approval
 dialog of `oup login` when opened with `?madauth_device=<code>`, creates an
@@ -235,7 +235,7 @@ Database fails over, sign-in is unavailable (53 s measured on the dev
 cluster).
 
 The API accepts three kinds of madAuth credentials as `Authorization:
-Bearer` (#64, #87), and the session also as madAuth's cookie (#114):
+Bearer` (#64, #87), and the session also as madAuth's cookie (#116):
 
 - a session token: a JWT (ES256, `typ: madauth-session+jwt`, issuer
   checked, no audience) verified against madAuth's JWKS, fetched from madAuth
@@ -688,8 +688,11 @@ digest (#55).
   Route still targets cannot be deleted; deleting a Domain deletes its
   Routes, and deleting a Project deletes its Domains at once, so nothing of
   it is served any more.
-- The Routes operator applies, every 30 s, one IngressRoute per Domain in
-  the Project's namespace, with a Middleware per Route that sets the Host
+- The Routes operator applies, every 30 s, one IngressRoute per Domain and
+  Resource in the Project's namespace (`domain-<id>-bucket-<id>`,
+  `domain-<id>-svc-<id>`), so Traefik's per-rule metrics name the Resource
+  for metering (decision 114); the rules of several IngressRoutes for one
+  hostname compete by priority alone, as within one. A Middleware per Route that sets the Host
   header to the Bucket's name (how Garage's website endpoint finds the
   Bucket) and one that strips the prefix. It reaches Garage through an
   ExternalName Service in that namespace, since Traefik does not route
@@ -794,22 +797,56 @@ digest (#55).
 
 ## Metering and billing
 
-- Usage events are written from the first deployment on, even with a single
-  customer, to an append-only table in the control plane's Database, keyed by
-  Project and Resource. A trigger rejects updates, deletes and truncation.
+- Usage events are written to an append-only table in the control plane's
+  Database, keyed by Project and Resource, by the control plane's metering
+  pass (`src/usage/meter.ts`, decision 114): every completed hour, once its
+  last scrapes have settled (5 minutes), becomes one event per Resource and
+  unit. The hours it has recorded are listed (`metered_hours`), so it goes
+  on where it stopped after a restart or an outage, back to 14 days
+  (Prometheus keeps 15), and the billing service rates a month only once
+  all its hours are metered. An hour is recorded only when Prometheus and
+  Garage answered; one that Prometheus has no samples for waits two hours,
+  then is recorded from the rows alone (logged), so it cannot hold back the
+  hours after it. A Bucket Garage cannot size counts as empty and is
+  logged. Without Prometheus the pass does not run: a single-node dev
+  cluster (decision 112) records no usage.
+  A trigger rejects updates, deletes and truncation.
   Events have no foreign keys and carry the Account: the last hours of a
   deleted Resource or Project are still billed. There is at most one event
   per Resource, unit and interval start, so an emitter can retry without
   billing twice.
-- Units:
+- Units (GB is 2^30 bytes, as the sizes are); Resources are Databases,
+  Buckets, Services and Jobs:
   - `cpu_seconds`: actual consumption, summed over all pods of a Resource
-    (both Database instances, all replicas of a Service).
-  - `memory_gb_hours`: the configured limit, counted once, since it is
-    reserved.
+    (both Database instances and its Pooler, all replicas of a Service, all
+    runs of a Job), from the CPU agent (decision 115): a DaemonSet on the
+    compute nodes that reads each pod's total from its cgroup (the kernel's
+    exact count, gVisor's sandbox included) every second and the moment the
+    pod's last process exits, and keeps the final total in Prometheus for 15
+    minutes. A pod's hour is its total at the end of the hour less at the
+    end of the hour before. cAdvisor's counter, scraped every 30 s, missed up
+    to 30 s at each end of a pod's life and every Job run shorter than that:
+    a 5-second run's cgroup, with its total, was gone half a second after it
+    ended (dev cluster, 2026-11-15). When the agent first runs on a node, a
+    pod's CPU from before lands in the first metered hour.
+  - `memory_gb_hours`: the reserved size. A Database's from its row,
+    counted once, for the part of the hour it existed. A Service's from
+    Prometheus: each running pod's memory request for the minutes it ran,
+    so replicas count, and a deleted Service's last hour is not lost (its
+    row is gone); a rollout's extra pod counts while it runs. A Job's runs
+    are too short to sample: each run's memory request for exactly the
+    seconds it ran, from kube-state-metrics' start and completion times.
   - `storage_gb_hours`: logical size, counted once: the volume size of a
-    Database, the bytes stored in a Bucket.
-  - `egress_gb`: Traefik's response bytes per router, mapped to the router's
-    Project and Resource.
+    Database from its row, the bytes stored in a Bucket as Garage counts
+    them when the hour is metered.
+  - `egress_gb`: Traefik's response bytes over the hour per rule. Traefik
+    names a rule's service `<namespace>-<IngressRoute>-<hash of the
+    rule>`, and the IngressRoute is per Domain and Resource, so the name
+    carries the Resource, also of a Route deleted before its hour is
+    metered.
+- The billing service reads an Account's month through the internal API,
+  `GET /internal/v1/accounts/{id}/usage?month=YYYY-MM`: quantities summed
+  per Project, Resource and unit, with the hours metered so far.
 - Unit prices include the copies in the other Sites; the invoice shows what
   the customer configured or stored, not how many copies we keep.
 - Connections a Service opens to the internet are not metered or billed
@@ -1073,7 +1110,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 81 | Every Bucket has a Garage key of its own, created with it, that may read and write that Bucket and no other; the API shows it with the Bucket (Garage keeps the secret) | keys per Project with permissions the customer chooses (read-only, several Buckets); one key per Project for all its Buckets | the simplest model that is still least privilege: a leaked key exposes one Bucket, and a Service can later get exactly the keys of the Buckets it uses. Keys of their own, read-only keys or one key for several Buckets are a later addition |
 | 82 | A Bucket is created in Garage while the API request waits, and its row recorded only after that; deleting marks the row and the cleanup removes key, objects and bucket, keeping nothing. Buckets are reached at `https://<bucket>.s3.<customer domain>` through Traefik with one wildcard certificate | a row first and a reconcile loop, as for Databases; a retention window for deleted Buckets; the S3 endpoint only inside the cluster | a 201 means the Bucket can be used at once, with no state to poll and no second loop; Garage being down is a 503 the client can retry. Deleting is what the customer asked for, and keeping objects would mean billing for storage they deleted. A process that dies between Garage and the insert leaves an empty Garage bucket whose name stays taken |
 | 83 | Garage runs from our own manifests: a StatefulSet with one node per Site, Kubernetes discovery with its CustomResourceDefinition installed by us, the layout assigned once by the setup script | Garage's Helm chart (not published to a chart repository, only in Garage's git repository); letting Garage create its CustomResourceDefinition; connecting nodes by hand | a hundred lines of YAML we can read in one go, like the rest of `infra/`; Garage only needs rights on its own GarageNode objects, not to create any CustomResourceDefinition; nodes find each other again after restarts without a script |
-| 84 | Static sites: Garage's website endpoint behind Traefik. The control plane sets a Bucket's website settings (index, SPA fallback) in Garage when a Route is created; a Routes operator applies an IngressRoute per Domain with per-Route Middlewares (Host header = Bucket name, prefix stripped) and an ExternalName Service to Garage, and deletes its objects the routing table no longer has; default Domains share one wildcard certificate in Traefik's default TLS store; SPA fallback is per Bucket, so Routes to one Bucket must agree | the control plane writing the Traefik objects itself; keeping the prefix in object keys; SPA fallback in Traefik's errors middleware; a certificate per default Domain | the operator pattern of the Databases, with Garage's admin token staying in the control plane only; one site mounts at any prefix; Garage already has the routing rule; a wildcard needs no issuance per Project. Contradicts the earlier plan of an operator writing Garage's website settings. Traefik must allow ExternalName Services, which only the Routes operator creates |
+| 84 | Static sites: Garage's website endpoint behind Traefik. The control plane sets a Bucket's website settings (index, SPA fallback) in Garage when a Route is created; a Routes operator applies an IngressRoute per Domain (since decision 114: per Domain and Resource) with per-Route Middlewares (Host header = Bucket name, prefix stripped) and an ExternalName Service to Garage, and deletes its objects the routing table no longer has; default Domains share one wildcard certificate in Traefik's default TLS store; SPA fallback is per Bucket, so Routes to one Bucket must agree | the control plane writing the Traefik objects itself; keeping the prefix in object keys; SPA fallback in Traefik's errors middleware; a certificate per default Domain | the operator pattern of the Databases, with Garage's admin token staying in the control plane only; one site mounts at any prefix; Garage already has the routing rule; a wildcard needs no issuance per Project. Contradicts the earlier plan of an operator writing Garage's website settings. Traefik must allow ExternalName Services, which only the Routes operator creates |
 | 85 | Custom domains: a claim gets a random token, published by the Account as TXT at `_openupstream.<domain>` and looked up when it calls verify, once, through the cluster's resolver; hostnames under the customer and platform domains, or verified by another Project, cannot be claimed; the Routes operator gives a verified custom domain with Routes a cert-manager Certificate (HTTP-01, selected by label on the existing ClusterIssuers) and deletes it with the Domain, its Secret garbage-collected through cert-manager's owner references | the control plane polling pending claims; re-checking the TXT record periodically; a separate HTTP-01 ClusterIssuer; DNS-01 by CNAME-delegating `_acme-challenge` to us | verification while the request waits, like Buckets, gives the Account its answer at once; a removed record does not take a site down, the claim is what was proven; one issuer per environment keeps the platform's and customers' certificates on the same account; HTTP-01 needs nothing from the customer beyond the CNAME the traffic needs anyway. Traefik's Ingress provider is enabled, limited to cert-manager's solver Ingresses, and its port-80 redirect drops to the lowest priority |
 | 86 | Until a company exists and the hosted service can invoice ("Gate before the first invoice"), its sign-up is closed and `openupstream.com` serves a waitlist. This suspends decision 65's "anyone may sign up" there, not its payment-method gate; sign-up opens again (`SIGNUP=open`) once the gate is passed, and the waitlist is mailed once and deleted. Closed by the madAuth sidecar answering `user.signing_up` (`SIGNUP=closed`, `SIGNUP_ALLOW` for us), open by default. The waitlist: a page served by the control plane on its own port, its addresses in a table of the control plane's Database, double opt-in with a token link per e-mail, mailed through SES with madAuth's send-only key, a removal link in every e-mail, unconfirmed addresses deleted after 48 hours, at most one e-mail per address an hour, Traefik's per-IP limit on the form; English, with a consent text, privacy notice and an Impressum the operator sets | open sign-up with every new Account held (`NEW_ACCOUNT_HOLDS`); invitations only; a static page in a Bucket through the routing table, or an nginx container, posting to the API; single opt-in; a mailing-list provider | no Accounts to clean up or disappoint, and nobody signs up for something they cannot use; madAuth has no switch of its own, and the webhook covers every sign-up method, OAuth included. The page needs no dashboard, no CORS and no second image; a Bucket would need a Domain at `openupstream.com` in the platform Project. Double opt-in and a removal link are what German law (UWG § 7, Art. 7 GDPR) expects as proof of consent; no list provider means no further subprocessor. Self-hosters keep open sign-up without setting anything |
 | 87 | `oup login` uses madAuth's device authorization grant (RFC 8628, madAuth 0.7) as the public client `oup CLI`, asking for `openid email offline_access`; the control plane accepts madAuth access tokens (`at+jwt`, `aud` = `CLI_CLIENT_ID`) with a session's rights and tells the CLI the issuer and client ID at `GET /v1/login`; the refresh token is kept in `~/.config/openupstream/credentials.json` (mode 600) and each new one stored before use; `OUP_API_KEY` for CI | authorization code with PKCE and a loopback redirect; both flows; e-mail and password in the terminal turned into an API key; pasting an API key | the flow RFC 8628 wrote for command-line tools, as `gh auth login` and `az login` use: it works over SSH, in containers and on headless machines, with every sign-in method, passkeys included; `verification_uri_complete` makes it one click when a browser is at hand, so a loopback flow would add code for no gain; a password in the terminal would leave out passkey users. madAuth refuses clients without `deviceFlow`, and only an admin with a fresh sign-in registers one |
@@ -1103,7 +1140,9 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 111 | Storage grows by itself, on by default and without a limit unless the customer sets `maxStorageGb` (`autoGrow: false` turns it off): once a Database's fullest volume is 90% used, a control-plane pass raises `storageGb` by half (at least 1 GB), never past the maximum and by less if the nodes have less room, through the same path as decision 110; not while the Account has a Hold. Usage comes from the platform's Prometheus (`kubelet_volume_stats_*`). The API also checks memory room before accepting a size | off unless set, with a maximum (RDS); +max(10%, 1 GB) at 10% free (RDS's step, scaled down); TopoLVM's pvc-autoresizer (grows PVCs behind CloudNativePG's and the row's back); the kubelet's stats API (needs `nodes/proxy`, which reaches every pod); Postgres sizes over SQL (misses WAL and temp files) | a full disk stops every write, and most customers never set a limit; Supabase grows by half at 90% too, fewer and larger steps than RDS. TopoLVM grows in seconds, so no cooldown is needed. Prometheus already scrapes every volume. The pass also grows the PVCs of a Cluster CloudNativePG stopped for a full disk (it waits for them without growing them), so the control plane may patch PVCs. Costs: storage is a ratchet and, without a limit, a runaway writer grows the bill until the node is full (`DatabaseVolumeFull` alerts); without Prometheus nothing grows; a held Account's Database fills up |
 | 112 | A single-node dev cluster ([ADR-0004](docs/adr/0004-single-node-dev-cluster.md)): two layouts, `multi-node` (one node per Site) and `single-node` (one node standing in for every Site, development only), recorded once in the ConfigMap `openupstream-system/cluster-layout` by `install-multi-node.sh` or `install-single-node.sh`, which refuse a cluster without a node in each Site or with more than one node; every install step reads the layout. In single-node Garage and Loki keep one copy, a Database runs one instance and one PgBouncer (`layout` in the DatabaseConfig) on k3s's local-path storage instead of TopoLVM, so the API's room check finds no capacity and accepts sizes unchecked, the platform's per-Site components run once, and the node carries the label of `hetzner-fsn1`, so the API and placement stay unchanged. `infra/dev-cluster` installs onto any k3s cluster (`k3s-single-node.sh` sets one machine up over SSH); the Hetzner VM scripts move to `infra/dev-cluster-hetzner`. `dns.sh` reads the compute nodes' addresses from Kubernetes (ExternalIP first), so a home node's private or Tailscale address (`NODE_ADDRESS` in `k3s-single-node.sh`) goes into public DNS; the domains are required in single-node and may be names inside a bunny.net zone, certificates come from Let's Encrypt through DNS-01, by default from the production issuer, an exception to decision 70 | three VMs on one machine (manifests unchanged); TopoLVM on a single node from the free space of the OS's volume group (needs a room check per existing Site, and Database volumes next to the root volume); k3d (three k3s nodes as containers); detecting the layout from the node count; a local CA with sslip.io or a home DNS name; the API refusing `ovh-lim` in single-node | the three-node rules only protect against a machine failing when the nodes are different machines: three VMs on one box need about 24 GB of RAM and two or three copies of every byte for redundancy that is not there, while one node with one copy needs about a third of that. k3d shares that cost and may not run gVisor inside a container. A recorded layout cannot flip when a three-node cluster has temporarily lost two nodes, and a step run again on its own (e.g. `platform.sh` for `CLI_CLIENT_ID`) installs the same way. Public DNS pointing at a private address and DNS-01 give real certificates with no inbound connection and no CA to trust. Costs: no failover and no test of placement or the third Site on such a cluster, Database sizes neither reserved nor checked, storage growth (decision 110) never completing and automatic growth (decision 111) off there, downtime when its only Database instance restarts, no certificates for custom domains (HTTP-01 cannot reach it), and routers with DNS rebinding protection need an exception for the domain. Tested on a Minisforum mini PC on Ubuntu 26.04 reached over Tailscale (2026-11-15, k3s 1.36): 21 pods running, one instance per platform Database, DNS pointing at the Tailscale address, the API and madAuth answering with Let's Encrypt certificates (after decision 113) |
 | 113 | On nodes with AppArmor, containers run under our copy of containerd's profile `cri-containerd.apparmor.d` (`infra/apparmor`), containerd 2.3's own plus signal and ptrace rules for the stacked label `cri-containerd.apparmor.d//&unconfined`; installed into `/etc/apparmor.d` and loaded before k3s by `k3s-single-node.sh`, on every run. Delete it once k3s ships containerd's fix (containerd #14487) | `kernel.apparmor_restrict_unprivileged_unconfined=0`; the Databases' pods `Unconfined`; staying on Ubuntu 24.04 | Ubuntu 26.04 stacks every container's profile on `unconfined`, and containerd's rules name only the unstacked label, so a container's processes cannot signal each other: on the Minisforum (2026-11-15) every Postgres failed with `could not signal for checkpoint: Permission denied` and stayed in recovery. The copy fixes exactly that rule, as upstream does, and keeps the containers confined; the sysctl would switch off Ubuntu's restriction on unprivileged user namespaces for every program on the machine, and `Unconfined` drops AppArmor from the Databases. Costs: our copy lags behind changes to containerd's profile until it is deleted, and it must be in place before k3s first starts. The Hetzner dev cluster runs Ubuntu 24.04 and does not need it yet; production nodes on 26.04 will |
-| 114 | The dashboard is static files that call the API from the browser, authenticated by madAuth's session cookie: the API reads `madauth_session` (madAuth's `COOKIE_DOMAIN` = the platform domain) on requests whose `Origin` is one of `DASHBOARD_ORIGINS` (default `https://<platform domain>`), as a session token only, and answers those origins with CORS headers that allow credentials; the SDK takes `session: 'cookie'` in place of a token | the dashboard's server reading the cookie and calling the API with it as Bearer (a backend-for-frontend); an OIDC access token held by the page's JavaScript, like `oup`'s | madAuth's session cookie is HttpOnly, so a page cannot send it as Bearer, and decision 67 already put the API where the cookie reaches it. No Node server to run for the dashboard: it can be served like any static site, and log streams (#103) go straight to the API. No token a script could read (XSS), and a session carries the e-mail address that creating an Account needs, which an access token does not. Costs: the API has a CORS and CSRF surface of its own, held by the `Origin` check, which every browser sets and no page can forge; a browser extension or a script injected into the dashboard itself can still call the API as the Member |
+| 114 | Metering: a control-plane pass turns every completed hour into one usage event per Resource and unit. CPU seconds of all Resources come from the CPU agent through Prometheus (decision 115), memory of Services from running pods' requests and of Jobs from each run's request × run time (kube-state-metrics); egress from Traefik's per-rule response bytes, with an IngressRoute per Domain and Resource so each rule's metric names its Resource; Databases' memory and storage from their rows; Buckets' storage from Garage. Jobs are Resources of their own. Metered hours are listed; the billing service reads monthly sums per Project, Resource and unit | the Kubernetes metrics API (a sampled rate, not a counter); daily events; raw events to the billing service; one IngressRoute per Domain and the rules' hashes recomputed by metering (reproduces Traefik's internal naming; a Route deleted before its hour is metered is lost) | the counters are already scraped and exact over an hour; hourly events bill a Resource for the part of an hour it lived. Costs: billing depends on Prometheus (an outage longer than 14 days loses revenue, never overcharges); a Bucket's bytes are those at metering time, not the hour's average; a Project purged before its last hours are metered is not billed for them |
+| 115 | CPU seconds come from our own CPU agent, a DaemonSet on the compute nodes that reads each pod's total from its cgroup every second and when its last process exits (`cgroup.events`), and serves it to Prometheus, kept 15 minutes after the pod ended; metering bills a pod's total at the hour's end less at the previous hour's end | cAdvisor's counter (misses up to 30 s at each end of a pod's life and all of a run shorter than a scrape); Jobs' CPU as reservation × run time (Fargate, Cloud Run, Fly.io bill containers that way); measured CPU with short runs free | the kernel counts every pod's CPU exactly, but the count goes with the cgroup half a second after the pod ends; reading it then makes measured CPU exact for every Resource, short Job runs included, with one meaning for all. Costs: a component of our own on every compute node (read-only cgroup mount, listing its node's pods), and it races the cgroup's removal: if it loses, at most about a second of CPU is missing |
+| 116 | The dashboard is static files that call the API from the browser, authenticated by madAuth's session cookie: the API reads `madauth_session` (madAuth's `COOKIE_DOMAIN` = the platform domain) on requests whose `Origin` is one of `DASHBOARD_ORIGINS` (default `https://<platform domain>`), as a session token only, and answers those origins with CORS headers that allow credentials; the SDK takes `session: 'cookie'` in place of a token | the dashboard's server reading the cookie and calling the API with it as Bearer (a backend-for-frontend); an OIDC access token held by the page's JavaScript, like `oup`'s | madAuth's session cookie is HttpOnly, so a page cannot send it as Bearer, and decision 67 already put the API where the cookie reaches it. No Node server to run for the dashboard: it can be served like any static site, and log streams (#103) go straight to the API. No token a script could read (XSS), and a session carries the e-mail address that creating an Account needs, which an access token does not. Costs: the API has a CORS and CSRF surface of its own, held by the `Origin` check, which every browser sets and no page can forge; a browser extension or a script injected into the dashboard itself can still call the API as the Member |
 
 ## Open questions
 
@@ -1204,8 +1243,8 @@ Decisions table once it is settled.
     delegating `_acme-challenge` to such a zone.
 18. **Billing rules with Mollie and lexoffice** (in the billing service,
     decision 77).
-    - How the billing service reads usage events: an internal API route per
-      Account and month, like the Holds routes.
+    - ~~How the billing service reads usage events~~: settled by decision
+      114, `GET /internal/v1/accounts/{id}/usage?month=`.
     - Small amounts: a month of an idle Database can cost less than the
       transaction fee or Mollie's minimum; carry it over, or a minimum
       charge.
@@ -1231,7 +1270,7 @@ Decisions table once it is settled.
     also checks memory before accepting a size, and a volume grow that
     fails anyway fires `DatabaseVolumeResizeFailed`.
 22. **Where the dashboard is served from.** It is static files (decision
-    114) and runs in development (`npm run dev -w dashboard`), but nothing
+    116) and runs in development (`npm run dev -w dashboard`), but nothing
     serves it on a cluster yet; while sign-up is closed the waitlist has
     its paths at the platform domain (decision 86). Options: a Bucket of
     the platform Project behind a Domain at the platform domain, deployed
@@ -1326,7 +1365,7 @@ Decisions table once it is settled.
    index last and deleted the old bundle, and the served headers matched.
    Left: the approval page
    for `oup login` at madAuth's `loginUrl`, which the dashboard has
-   (decision 114; run locally 2026-11-15 against madAuth 0.7.0 and the
+   (decision 116; run locally 2026-11-15 against madAuth 0.7.0 and the
    control plane: sign-up with the code from the e-mail, the session
    cookie accepted by the API from the dashboard's origin, an Account,
    Projects created and deleted) but nothing serves on a cluster yet
@@ -1448,7 +1487,9 @@ or GmbH), a data processing agreement (AVV) template, the TOMs, and the list
 of subprocessors (Hetzner, OVHcloud, netcup, bunny.net, Mollie, lexoffice
 for invoices, Amazon Web Services for SES). Before the first invoice the
 billing run must also exist: the monthly rating, invoices through lexoffice
-and collection through Mollie, in the billing service (#74, #77).
+and collection through Mollie, in the billing service (#74, #77). Its
+input, metering and the internal usage route, is in this repository
+(decision 114).
 
 Until then sign-up on the hosted service is closed and `openupstream.com`
 serves the waitlist (#86). Passing the gate means: `SIGNUP=open`, the

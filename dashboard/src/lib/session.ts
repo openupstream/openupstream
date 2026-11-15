@@ -51,7 +51,7 @@ export const manageApiKeys = () => madauth().then(({ Madauth }) => Madauth.showM
 
 /**
  * The API as the signed-in Member: the browser sends madAuth's session
- * cookie (decision 114). Waits for a session that expired to be renewed
+ * cookie (decision 116). Waits for a session that expired to be renewed
  * first, so the API finds a valid one.
  */
 export async function api(): Promise<OpenUpstreamClient> {

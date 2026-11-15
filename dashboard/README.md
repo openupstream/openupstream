@@ -1,7 +1,7 @@
 # dashboard
 
 The web UI of openupstream: a Next.js app built as static files
-(ARCHITECTURE.md, decision 114). Every page renders in the browser, which
+(ARCHITECTURE.md, decision 116). Every page renders in the browser, which
 calls the API itself through `@openupstream/sdk`.
 
 What it does now:
