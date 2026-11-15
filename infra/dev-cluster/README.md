@@ -39,7 +39,9 @@ the Home site `ovh-lim` runs there as well.
 ./k3s-single-node.sh root@192.168.1.50
 ```
 
-It installs gVisor and then k3s on that machine over SSH (as root, or as a
+It installs our AppArmor profile for containers (`infra/apparmor`,
+needed on Ubuntu 26.04, decision 110), gVisor and then k3s on that machine
+over SSH (as root, or as a
 user with passwordless sudo; ports 80, 443 and 6443 must be free), labels
 the node, applies the RuntimeClass `gvisor` and writes the kubeconfig to
 `.state/kubeconfig`. Run again, it installs nothing on a machine that

@@ -70,6 +70,8 @@ args="$*"
 echo "ssh $args" >>"$STUB_LOG"
 case $args in
   *"test -x /usr/local/bin/k3s"*) [[ \${K3S_INSTALLED_STUB:-0} == 1 ]] ;;
+  *"test -d /sys/kernel/security/apparmor"*) [[ \${APPARMOR_STUB:-1} == 1 ]] ;;
+  *"apparmor_parser"*) echo "profile: $(grep -c '^profile cri-containerd.apparmor.d ')" >>"$STUB_LOG" ;;
   *"bash -s"*) cat >/dev/null ;;
   *"k3s.yaml"*) printf 'clusters:\n- cluster:\n    server: https://127.0.0.1:6443\n  name: default\n' ;;
 esac
@@ -275,4 +277,18 @@ test('k3s-single-node.sh installs nothing on a machine that has k3s, unless REIN
     const reinstall = k3s({ K3S_INSTALLED_STUB: '1', REINSTALL: '1' });
     assert.match(reinstall.log, /bash -s/);
     assert.match(reinstall.log, /get\.k3s\.io/);
+});
+
+test('k3s-single-node.sh installs the AppArmor profile before k3s, on every run, and only where AppArmor is on', () => {
+    const first = k3s({});
+    const lines = first.log.split('\n');
+    const profile = lines.findIndex((line) => line.includes('apparmor_parser -r /etc/apparmor.d/cri-containerd.apparmor.d'));
+    const install = lines.findIndex((line) => line.includes('get.k3s.io'));
+    assert.ok(profile >= 0 && profile < install, first.log);
+    assert.match(first.log, /^profile: [1-9]/m, 'the profile file was piped in');
+    const again = k3s({ K3S_INSTALLED_STUB: '1' });
+    assert.match(again.log, /apparmor_parser -r/);
+    const none = k3s({ APPARMOR_STUB: '0' });
+    assert.equal(none.status, 0);
+    assert.doesNotMatch(none.log, /apparmor_parser/);
 });

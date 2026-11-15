@@ -19,6 +19,9 @@ which is why it lives in the monorepo.
   decision 90).
 - `garage/` — Garage cluster layout and configuration: replication factor 3,
   one zone per site (1 on a single-node dev cluster).
+- `apparmor/` — our copy of containerd's AppArmor profile for containers,
+  with the rules Ubuntu 26.04's stacked labels need, so a container's
+  processes can signal each other (ARCHITECTURE.md, decision 110).
 - `ingress/` — Traefik's values, cert-manager's DNS-01 webhook for bunny.net
   and its issuers, and the platform's public routes (ARCHITECTURE.md,
   "Ingress and failover"; decisions 69, 72, 73).

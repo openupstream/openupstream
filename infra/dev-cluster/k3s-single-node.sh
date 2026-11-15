@@ -3,11 +3,15 @@
 # (ARCHITECTURE.md, decision 109), the counterpart of
 # infra/dev-cluster-hetzner/up.sh for any machine you can reach:
 #
-# 1. gVisor (infra/gvisor/install.sh), before k3s first starts;
-# 2. k3s as a single server with the same settings as on the Hetzner dev
+# 1. on a machine with AppArmor, our profile for containers
+#    (infra/apparmor/cri-containerd.apparmor.d), on every run: without it
+#    Ubuntu 26.04 keeps a container's processes from signalling each other
+#    and Postgres never starts (decision 110);
+# 2. gVisor (infra/gvisor/install.sh), before k3s first starts;
+# 3. k3s as a single server with the same settings as on the Hetzner dev
 #    cluster, the node labelled as the compute Site hetzner-fsn1 and for
 #    gVisor;
-# 3. the RuntimeClass gvisor, and the kubeconfig in .state/kubeconfig.
+# 4. the RuntimeClass gvisor, and the kubeconfig in .state/kubeconfig.
 #
 #   ./k3s-single-node.sh root@192.168.1.50
 #
@@ -44,6 +48,14 @@ SUDO="sudo -n"
 
 mkdir -p "$STATE"
 chmod 700 "$STATE"
+
+# Into /etc/apparmor.d, so it is loaded at boot before k3s, and loaded now;
+# replacing it applies to running containers without a restart.
+if "${SSH[@]}" test -d /sys/kernel/security/apparmor; then
+  echo "installing the AppArmor profile cri-containerd.apparmor.d on $HOST"
+  "${SSH[@]}" "$SUDO tee /etc/apparmor.d/cri-containerd.apparmor.d >/dev/null && $SUDO apparmor_parser -r /etc/apparmor.d/cri-containerd.apparmor.d" \
+    <../apparmor/cri-containerd.apparmor.d
+fi
 
 if [[ ${REINSTALL:-} != 1 ]] && "${SSH[@]}" test -x /usr/local/bin/k3s; then
   echo "k3s is already installed on $HOST; installing nothing (REINSTALL=1 to install again)"

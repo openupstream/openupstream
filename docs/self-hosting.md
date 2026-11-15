@@ -104,8 +104,9 @@ Three `cpx32` VMs cost about €0.20 an hour together;
 
 ### A single-node dev cluster
 
-One x86_64 Linux machine (Debian or Ubuntu; about 8 to 12 GB of RAM for the
-platform alone) runs the whole platform with one copy of everything, for
+One x86_64 Linux machine (Debian or Ubuntu, 26.04 included, whose AppArmor
+needs `infra/apparmor`, which the script installs; about 8 to 12 GB of RAM
+for the platform alone) runs the whole platform with one copy of everything, for
 development only: losing it loses everything but the Databases' backups.
 Nothing needs to be reachable from the internet.
 
