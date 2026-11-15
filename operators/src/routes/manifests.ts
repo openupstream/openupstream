@@ -8,7 +8,7 @@
  * Middlewares every Domain shares (compression, HSTS). Per Domain and
  * Resource it serves: one IngressRoute, `domain-<id>-bucket-<id>` or
  * `domain-<id>-svc-<id>`, so Traefik's per-rule metrics name the Resource
- * for metering (decision 112); rules of several IngressRoutes for one
+ * for metering (decision 114); rules of several IngressRoutes for one
  * hostname compete by priority alone, as within one. Per Route to a Bucket:
  * a Middleware that tells Garage which Bucket to serve (the Host header is
  * the Bucket's name), and one that strips the path prefix.

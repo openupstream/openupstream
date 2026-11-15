@@ -1,6 +1,6 @@
 /**
  * Instant queries against the platform's Prometheus (decision 106), for
- * storage auto-grow (decision 111) and metering (decision 112).
+ * storage auto-grow (decision 111) and metering (decision 114).
  */
 import { type Result, err, ok } from './result.js';
 

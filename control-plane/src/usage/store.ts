@@ -1,5 +1,5 @@
 /**
- * An Account's usage of one month for the billing service (decision 112):
+ * An Account's usage of one month for the billing service (decision 114):
  * usage events summed per Project, Resource and unit, and how many hours of
  * the month are metered, so it rates a month only once it is complete.
  */

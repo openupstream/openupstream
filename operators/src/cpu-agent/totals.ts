@@ -1,6 +1,6 @@
 /**
  * The CPU agent's bookkeeping (ARCHITECTURE.md, "Metering and billing";
- * decision 113), as pure functions: every pod's CPU total since it started,
+ * decision 115), as pure functions: every pod's CPU total since it started,
  * as the kernel counts it in the pod's cgroup, kept for a while after the
  * pod is gone, so Prometheus scrapes the final total of even a
  * 5-second Job run.

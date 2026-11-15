@@ -5,7 +5,7 @@
 ```sh
 npm i -g @openupstream/cli
 oup login
-oup link shop
+oup project create shop --link
 oup pg create main --memory 512 --storage 10
 oup service deploy api --image ghcr.io/acme/api:v3 --port 8080
 oup job deploy nightly --image ghcr.io/acme/api:v3 --schedule '0 3 * * *' --time-zone Europe/Berlin -- node dist/nightly.js
@@ -22,6 +22,11 @@ oup site deploy dist --bucket my-site
   600); the access token is refreshed when it has less than a minute left,
   by one `oup` process at a time (a lock file next to it).
 - `oup logout`: forgets them and ends the CLI's refresh tokens at madAuth.
+- `oup project list`: the Projects of your Accounts, with each one's
+  Account and id, and which one is linked in this directory.
+- `oup project create <name> [--account <name|id>] [--link]`: a new
+  Project in your Account; with several Accounts, `--account` says which.
+  `--link` also links this directory to it, as `oup link` does.
 - `oup link <project>`: the Project the commands below act on, by name
   (or id, when two of your Accounts have one of that name). It writes the
   id to `.openupstream.json` in this directory; commands in it or below
@@ -122,3 +127,16 @@ for each call, `src/deploy.ts` the site deploy (`planDeploy` is pure),
 (`planServiceDeploy` is pure), `src/jobs.ts` the Job deploy and runs
 (`planJobDeploy` is pure), `src/wait.ts` the polling both wait with and
 `src/stdin.ts` reading secret values.
+
+## Releasing
+
+Raise `version` in `package.json` and `CLI_VERSION` in `src/version.ts`
+(a test checks they match). When the CLI needs a newer SDK, raise the
+range of `@openupstream/sdk` and release the SDK first (sdk/README.md).
+Merge, then tag that commit `cli-v<version>` and push the tag; only admins
+may. The workflow `.github/workflows/cli-release.yml` waits in the
+Environment `npm-release` until a maintainer approves the run on GitHub,
+then checks that the tag names the version and that the SDK it needs is
+on npm, builds, tests, installs the packed CLI and runs `oup version`, and
+publishes with npm trusted publishing and provenance (ARCHITECTURE.md,
+decision 80).

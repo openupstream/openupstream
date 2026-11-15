@@ -22,14 +22,20 @@ which is why it lives in the monorepo.
   (`values.yaml`), made by `vgcreate.sh` from a block device
   (ARCHITECTURE.md, decision 109).
 - `garage/` — Garage cluster layout and configuration: replication factor 3,
-  one zone per site.
+  one zone per site (1 on a single-node dev cluster).
+- `apparmor/` — our copy of containerd's AppArmor profile for containers,
+  with the rules Ubuntu 26.04's stacked labels need, so a container's
+  processes can signal each other (ARCHITECTURE.md, decision 113).
 - `ingress/` — Traefik's values, cert-manager's DNS-01 webhook for bunny.net
   and its issuers, and the platform's public routes (ARCHITECTURE.md,
   "Ingress and failover"; decisions 69, 72, 73).
 - `madauth/` — madAuth, sign-in and API keys, as its published image with the
   control plane's sidecar (ARCHITECTURE.md, decision 63).
-- `dev-cluster/` — a throwaway three-Site k3s cluster on Hetzner Cloud for
-  one working session (ARCHITECTURE.md, decisions 33 and 52).
+- `dev-cluster/` — installs the platform onto a k3s cluster for
+  development, with one node per Site or on a single node, and sets up one
+  Linux machine as such a node (ARCHITECTURE.md, decision 112).
+- `dev-cluster-hetzner/` — a throwaway three-Site k3s cluster on Hetzner
+  Cloud for one working session (ARCHITECTURE.md, decisions 33 and 52).
 
 Bootstrap order: Terraform → k3s install on the nodes → Helm releases → Garage
 layout → control plane. A runbook lives in `docs/runbooks/bootstrap.md` once

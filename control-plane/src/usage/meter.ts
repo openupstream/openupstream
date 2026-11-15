@@ -1,5 +1,5 @@
 /**
- * Metering (ARCHITECTURE.md, "Metering and billing"; decision 112): every
+ * Metering (ARCHITECTURE.md, "Metering and billing"; decision 114): every
  * completed hour becomes usage events, one per Resource and unit, which the
  * billing service rates once a month.
  *
@@ -89,7 +89,7 @@ const NAMESPACE = new RegExp(`^project-(${UUID_PATTERN})$`);
 /**
  * Traefik's name for one rule's service: `<namespace>-<IngressRoute>-<hash
  * of the rule>@kubernetescrd`, the IngressRoute being `domain-<id>-bucket-<id>`
- * or `domain-<id>-svc-<id>` (one per Domain and Resource, decision 112).
+ * or `domain-<id>-svc-<id>` (one per Domain and Resource, decision 114).
  */
 const TRAEFIK_SERVICE = new RegExp(`^project-(${UUID_PATTERN})-domain-${UUID_PATTERN}-(svc|bucket)-(${UUID_PATTERN})-[0-9a-f]+@kubernetescrd$`);
 
@@ -167,7 +167,7 @@ const PROJECTS = 'namespace=~"project-.*"';
 const AGENT_CPU = `openupstream_pod_cpu_usage_seconds_total{${PROJECTS}, pod=~"(db|svc|job)-.*"}`;
 /**
  * Every pod's CPU seconds over the hour ending at the query time, from the
- * CPU agent's totals (decision 113): the kernel's count for the pod's whole
+ * CPU agent's totals (decision 115): the kernel's count for the pod's whole
  * life, gVisor's sandbox included, kept after the pod ended. A pod's hour is
  * its total at the end of the hour less its total at the end of the hour
  * before (none for a pod that started in this hour), per uid, so a restarted

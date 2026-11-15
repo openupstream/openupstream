@@ -273,7 +273,7 @@ size once its spec has it, as CloudNativePG waits for that without doing
 it. Each decision is logged (`growth:`).
 Without `PROMETHEUS_URL` the pass does not run.
 
-`src/usage/meter.ts` is metering (decision 112): every
+`src/usage/meter.ts` is metering (decision 114): every
 `CLEANUP_INTERVAL_SECONDS`, on one replica at a time, it turns each
 completed and settled hour into usage events, CPU and egress from
 Prometheus, Databases' sizes from their rows, Buckets' bytes from Garage,

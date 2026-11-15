@@ -20,13 +20,14 @@ context) and put them into the cluster as Kubernetes Secrets.
 | --- | --- |
 | Node.js 24 and npm (`nvm use` reads `.nvmrc`) | building and testing, the scripts in `operators/scripts` |
 | Docker (Docker Desktop or Colima) | the control plane's tests, building images locally |
-| `hcloud` | creating and deleting the development cluster's VMs |
+| `hcloud` | creating and deleting the Hetzner dev cluster's VMs (not needed for a single node) |
 | `kubectl` | everything on the cluster |
 | AWS CLI (`aws`) | the backup bucket (it speaks S3), and SES later |
-| `jq`, `curl`, `ssh`, `openssl` | the scripts in `infra/dev-cluster` |
+| `helm` | the Helm releases on the cluster (Traefik, monitoring) |
+| `jq`, `curl`, `ssh`, `openssl` | the scripts in `infra/dev-cluster` and `infra/dev-cluster-hetzner` |
 | `dig` | checking DNS delegations (section 5) |
 
-On macOS: `brew install hcloud kubectl awscli jq`.
+On macOS: `brew install hcloud kubectl helm awscli jq`.
 
 Then install and build the repository once; the dev-cluster scripts run
 code from it (`operators/scripts`, and libraries from `node_modules`):
@@ -72,13 +73,21 @@ Other names that are ours today and need yours:
 | --- | --- |
 | The backup bucket | `infra/dev-cluster/database-config.json` (section 4) |
 | madAuth's public URL | `MADAUTH_ISSUER` in `infra/dev-cluster/platform.sh` (on the dev cluster `http://localhost:8787`) |
-| Our hostnames (`openupstream.com`, `api.`) | decision 67; `PLATFORM_DOMAIN` in `infra/dev-cluster/platform.sh` |
-| The customer domain (`openupstream.app`), under which Buckets are reached | decision 68; `CUSTOMER_DOMAIN` in `infra/dev-cluster/garage.sh` and `platform.sh` |
+| Our hostnames (`openupstream.com`, `api.`) | decision 67; `PLATFORM_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
+| The customer domain (`openupstream.app`), under which Buckets are reached | decision 68; `CUSTOMER_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
 
-## 3. Hetzner Cloud: the development cluster
+## 3. Development clusters
 
-The development cluster is three Hetzner Cloud VMs created and deleted per
-working session (#33, #52); see [infra/dev-cluster](../infra/dev-cluster/README.md).
+[infra/dev-cluster](../infra/dev-cluster/README.md) installs the platform
+onto a k3s cluster with one node per Site, or onto a single node (#112,
+[ADR-0004](adr/0004-single-node-dev-cluster.md)). Either needs sections 4
+to 6 (backups, DNS, e-mail, or `MAIL=log` instead of 6).
+
+### Hetzner Cloud: one node per Site
+
+The Hetzner dev cluster is three Hetzner Cloud VMs created and deleted per
+working session (#33, #52); see
+[infra/dev-cluster-hetzner](../infra/dev-cluster-hetzner/README.md).
 
 1. In the [Hetzner Cloud Console](https://console.hetzner.cloud), create a
    project for it, e.g. `openupstream-dev`.
@@ -91,9 +100,46 @@ working session (#33, #52); see [infra/dev-cluster](../infra/dev-cluster/README.
    ```
 
 Three `cpx32` VMs cost about €0.20 an hour together, the two 40 GB volumes
-of the compute VMs about €0.005; `infra/dev-cluster/down.sh` deletes
+of the compute VMs about €0.005; `infra/dev-cluster-hetzner/down.sh` deletes
 everything `up.sh` created. A volume left behind by an interrupted run
 shows in `hcloud volume list --selector openupstream=dev`.
+
+### A single-node dev cluster
+
+One x86_64 Linux machine (Debian or Ubuntu, 26.04 included, whose AppArmor
+needs `infra/apparmor`, which the script installs; about 8 to 12 GB of RAM
+for the platform alone) runs the whole platform with one copy of everything, for
+development only: losing it loses everything but the Databases' backups.
+Nothing needs to be reachable from the internet, and no disk needs
+preparing: Databases use k3s's local-path storage on the root filesystem,
+not TopoLVM.
+
+1. Give the machine a fixed address in your router (a DHCP reservation):
+   its DNS records point at that address. In a Tailscale network, use its
+   Tailscale address instead (`NODE_ADDRESS`, in the
+   [infra/dev-cluster](../infra/dev-cluster/README.md) README), which stays
+   the same anyway; the cluster is then reachable from the tailnet only.
+2. Make sure you can log in over SSH as root, or as a user with
+   passwordless sudo, and that ports 80, 443 and 6443 are free on it.
+3. Pick two domains, one for the platform's hostnames and one for the
+   customer domain, each a bunny.net zone (section 5) or a name inside
+   one: `home.dev.example.com` in the zone `dev.example.com` needs no new
+   zone and no delegation. The scripts create the records in the zone.
+4. If your router has DNS rebinding protection, which drops public
+   answers that contain a private address, add both domains as exceptions
+   (with Tailscale, on the resolver your tailnet devices use; MagicDNS
+   forwards public names to it).
+   On a Fritz!Box: **Home Network → Network → Network Settings → DNS
+   Rebind Protection**, one domain per line.
+5. Run `k3s-single-node.sh` and then `install-single-node.sh` with both
+   domains, as the [infra/dev-cluster](../infra/dev-cluster/README.md)
+   README shows.
+
+Check from inside the network that the names resolve to the machine:
+
+```bash
+dig +short api.home.dev.example.com
+```
 
 ## 4. Hetzner Object Storage: backups
 
@@ -272,10 +318,12 @@ the domain's DNS is (ours: domaindiscount24).
    aws sesv2 send-email --profile openupstream-ses --region eu-central-1 --from-email-address no-reply@openupstream.com --destination ToAddresses=<you> --content 'Simple={Subject={Data="SES test"},Body={Text={Data="Sent with the send-only key."}}}'
    ```
 
-## 7. npm: the SDK
+## 7. npm: the SDK and the CLI
 
-`@openupstream/sdk` is published from GitHub Actions without a token (#80).
-Only needed by whoever publishes it; using the SDK needs nothing.
+`@openupstream/sdk` and `@openupstream/cli` are published from GitHub
+Actions without a token (#80). Only needed by whoever publishes them;
+using them needs nothing. Steps 2 to 4 are once per package (`sdk`, then
+`cli`; the CLI needs the SDK version it depends on on npm first).
 
 1. **An npm account** with two-factor authentication, and an
    **organization** `openupstream` (free plan, public packages) at
@@ -292,21 +340,24 @@ Only needed by whoever publishes it; using the SDK needs nothing.
    npm ci && npm run build -w sdk && npm publish -w sdk
    ```
 
+   For the CLI, `npm run build -w sdk -w cli && npm publish -w cli`.
+
 3. **On GitHub**, in the repository's settings:
    - an **Environment** `npm-release` with the maintainers as required
      reviewers and, under deployment branches and tags, only the tag
-     pattern `sdk-v*`;
-   - a **tag ruleset** "sdk release tags" for `refs/tags/sdk-v*` that
-     restricts creation, update and deletion, bypassed only by repository
-     and organization admins.
+     patterns `sdk-v*` and `cli-v*`;
+   - **tag rulesets** "sdk release tags" for `refs/tags/sdk-v*` and "cli
+     release tags" for `refs/tags/cli-v*` that restrict creation, update
+     and deletion, bypassed only by repository and organization admins.
 4. **Trusted publishing**: on the package's page on npmjs.com, **Settings →
    Trusted publisher → GitHub Actions**: organization `openupstream`,
-   repository `openupstream`, workflow `sdk-release.yml`, environment
-   `npm-release`, allowed action **npm publish**. Then, under
+   repository `openupstream`, workflow `sdk-release.yml` (for the CLI
+   `cli-release.yml`), environment `npm-release`, allowed action **npm
+   publish**. Then, under
    **Publishing access**, require two-factor authentication and disallow
    tokens, so only the workflow can publish.
-5. Later versions: a `sdk-v<version>` tag, then an approval on GitHub
-   (sdk/README.md, "Releasing").
+5. Later versions: a `sdk-v<version>` or `cli-v<version>` tag, then an
+   approval on GitHub (sdk/README.md and cli/README.md, "Releasing").
 
 ## 8. The CLI's sign-in
 

@@ -96,7 +96,7 @@ export const internalUsagePath = (accountId: Id, month: string): string => `${IN
 
 /**
  * An Account's usage summed per Project, Resource and unit over one
- * calendar month (UTC), as the billing service rates it (decision 112).
+ * calendar month (UTC), as the billing service rates it (decision 114).
  * Quantities are in the unit's own terms: seconds, GB-hours, GB.
  */
 export interface AccountUsage {
@@ -117,7 +117,7 @@ export interface AccountUsage {
 
 /**
  * The Traefik IngressRoute that serves one Resource under one Domain, in its
- * Project's namespace (decision 112): `domain-<id>-bucket-<id>` or
+ * Project's namespace (decision 114): `domain-<id>-bucket-<id>` or
  * `domain-<id>-svc-<id>`. Traefik names each rule's metrics after it, so
  * metering reads the Resource from them.
  */

@@ -1,4 +1,4 @@
-# The CPU agent (ARCHITECTURE.md, "Metering and billing"; decision 113):
+# The CPU agent (ARCHITECTURE.md, "Metering and billing"; decision 115):
 # one pod per compute node that reads every pod's CPU total from its cgroup
 # and serves it on :9101/metrics, where Prometheus scrapes it
 # (infra/monitoring/scrape.yaml) for metering. Only the compute nodes run

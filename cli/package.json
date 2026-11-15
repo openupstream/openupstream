@@ -1,8 +1,13 @@
 {
   "name": "@openupstream/cli",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "oup, the openupstream command line tool",
   "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openupstream/openupstream.git",
+    "directory": "cli"
+  },
   "private": false,
   "type": "module",
   "main": "dist/index.js",
@@ -10,6 +15,12 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -25,6 +36,6 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1161.0",
-    "@openupstream/sdk": "^0.1.0"
+    "@openupstream/sdk": "^0.2.0"
   }
 }

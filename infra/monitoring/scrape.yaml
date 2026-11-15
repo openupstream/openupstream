@@ -75,7 +75,7 @@ spec:
     - {port: http-metrics, honorLabels: true}
 ---
 # The CPU agent on each compute node (operators/deploy/cpu-agent.yaml,
-# decision 113): every pod's CPU total for metering. honorLabels keeps the
+# decision 115): every pod's CPU total for metering. honorLabels keeps the
 # measured pod's namespace and pod rather than the agent's own.
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor

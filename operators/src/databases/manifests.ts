@@ -4,7 +4,8 @@
  * One Database becomes four objects in its Project's namespace:
  *
  * - a CloudNativePG `Cluster` with two instances: the primary in the Home
- *   site, the standby in the other compute Site;
+ *   site, the standby in the other compute Site (one instance, no standby,
+ *   on a single-node dev cluster: decision 112);
  * - a PgBouncer `Pooler` of type `rw`, so it follows the primary;
  * - a Barman Cloud `ObjectStore` on Hetzner Object Storage NBG1, the WAL
  *   archive and base backup target;
@@ -45,6 +46,16 @@ export const BACKUP_CREDENTIAL_KEYS = { accessKeyId: 'ACCESS_KEY_ID', secretAcce
 
 export const DATABASE_INSTANCES = 2;
 export const POOLER_INSTANCES = 2;
+
+/**
+ * How the cluster is laid out (ARCHITECTURE.md, decision 112): one node per
+ * Site, or a single node standing in for all of them, for development only.
+ */
+export type ClusterLayout = 'multi-node' | 'single-node';
+
+/** Instances of a Database's Cluster and of its Pooler: one per compute Site, or one. */
+export const instancesFor = (layout: ClusterLayout | undefined): { database: number; pooler: number } =>
+    layout === 'single-node' ? { database: 1, pooler: 1 } : { database: DATABASE_INSTANCES, pooler: POOLER_INSTANCES };
 
 /**
  * A primary in a dark Site sends no TCP reset, so without these PgBouncer
@@ -99,6 +110,8 @@ export interface DatabaseConfig {
         /** CloudNativePG cron with a leading seconds field, e.g. `0 0 3 * * *`. */
         readonly schedule: string;
     };
+    /** Absent: `multi-node`. */
+    readonly layout?: ClusterLayout;
 }
 
 export type ClusterManifest = Manifest<Cluster, 'postgresql.cnpg.io/v1', 'Cluster'>;
@@ -196,7 +209,7 @@ const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig
     kind: 'Cluster',
     metadata: meta,
     spec: {
-        instances: DATABASE_INSTANCES,
+        instances: instancesFor(config.layout).database,
         imageName: config.postgresImage,
         ...PRIMARY_RESTART,
         // Pods, Services and PVCs carry the labels too, so usage can be
@@ -248,13 +261,13 @@ const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig
     },
 });
 
-const poolerFor = (meta: ObjectMeta, cluster: string): PoolerManifest => ({
+const poolerFor = (meta: ObjectMeta, cluster: string, config: DatabaseConfig): PoolerManifest => ({
     apiVersion: 'postgresql.cnpg.io/v1',
     kind: 'Pooler',
     metadata: meta,
     spec: {
         cluster: { name: cluster },
-        instances: POOLER_INSTANCES,
+        instances: instancesFor(config.layout).pooler,
         type: 'rw',
         pgbouncer: {
             poolMode: 'transaction',
@@ -438,7 +451,7 @@ export function databaseManifests(
     return ok({
         objectStore: objectStoreFor(meta(cluster), config),
         cluster: clusterFor(meta(cluster), database, config),
-        pooler: poolerFor(meta(poolerName(database)), cluster),
+        pooler: poolerFor(meta(poolerName(database)), cluster, config),
         scheduledBackup: scheduledBackupFor(meta(cluster), config),
     });
 }

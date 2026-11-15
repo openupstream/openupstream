@@ -1,5 +1,5 @@
 /**
- * The CPU agent (ARCHITECTURE.md, "Metering and billing"; decision 113): one
+ * The CPU agent (ARCHITECTURE.md, "Metering and billing"; decision 115): one
  * per compute node (operators/deploy/cpu-agent.yaml). It reads every pod's
  * CPU total from its cgroup and serves it to Prometheus on /metrics, the
  * final total of a pod kept for 15 minutes after it ended. cAdvisor, which

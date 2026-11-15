@@ -1,6 +1,6 @@
 -- Up Migration
 
--- Metering (ARCHITECTURE.md, "Metering and billing"; decision 112): Jobs
+-- Metering (ARCHITECTURE.md, "Metering and billing"; decision 114): Jobs
 -- are Resources of their own, and every hour the metering pass has
 -- recorded is listed, so it knows where to go on after a restart or a
 -- Prometheus outage, and the billing service knows when a month is

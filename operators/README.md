@@ -28,7 +28,7 @@ Traefik already implements is configured, not reimplemented.
   name and one that strips the prefix; per
   Domain and Resource, an IngressRoute (`domain-<id>-bucket-<id>`,
   `domain-<id>-svc-<id>`, so Traefik's metrics name the Resource for
-  metering, decision 112), on the default certificate for a default Domain,
+  metering, decision 114), on the default certificate for a default Domain,
   on a Certificate of its own from `CLUSTER_ISSUER` (HTTP-01) for a custom
   domain. `reconcileRoutes`
   applies them and deletes the objects labelled
@@ -62,7 +62,7 @@ Traefik already implements is configured, not reimplemented.
   runs go with them, by Kubernetes' garbage collection.
 - `src/owned.ts`: the apply-then-prune pass the Routes, Services and Jobs
   operators share.
-- `src/cpu-agent/`: the CPU agent (ARCHITECTURE.md, decision 113), the
+- `src/cpu-agent/`: the CPU agent (ARCHITECTURE.md, decision 115), the
   image's other entry point (`node operators/dist/cpu-agent/main.js`, a
   DaemonSet in `deploy/cpu-agent.yaml`): every pod's CPU total from its
   cgroup on the node, read every second and when its last process exits,

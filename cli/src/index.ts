@@ -4,6 +4,7 @@
  *
  *   oup login [--api <url>] [--no-browser]   sign in through the browser (device grant)
  *   oup logout
+ *   oup project list | create <name> [--account <name|id>] [--link]
  *   oup link <project>                       this directory's Project (.openupstream.json)
  *   oup pg list | show <name> | delete <name>
  *   oup pg create <name> [--memory <MB>] [--storage <GB>] [--site …]   waits until ready
@@ -35,6 +36,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import {
     COMPUTE_SITES,
     DEFAULT_API_URL,
+    type Account,
     type ApiResult,
     type JobDetails,
     type LogEntry,
@@ -48,7 +50,7 @@ import {
 import { credentialsPath, readCredentials, removeCredentials, writeCredentials } from './credentials.js';
 import { deploy } from './deploy.js';
 import { discover, emailOf, startDeviceSignIn, waitForApproval } from './oidc.js';
-import { projectFor, resolveProject, writeLink } from './project.js';
+import { accountFor, findLink, formatProjects, projectFor, resolveProject, writeLink } from './project.js';
 import {
     type DesiredJob,
     JOB_FLAGS,
@@ -67,10 +69,13 @@ import { type DesiredService, formatServices, planServiceDeploy, waitUntilRunnin
 import { apiAccess } from './session.js';
 import { readSecretValue } from './stdin.js';
 import { waitUntil } from './wait.js';
+import { CLI_VERSION } from './version.js';
 
 const USAGE = `usage:
   oup login [--api <url>] [--no-browser]
   oup logout
+  oup project list
+  oup project create <name> [--account <name|id>] [--link]
   oup link <project>
   oup pg list
   oup pg show <name>
@@ -211,6 +216,48 @@ async function inProject(flag: string | undefined): Promise<{ client: OpenUpstre
     const client = await apiClient();
     const project = await projectFor(await listProjects(client), flag ?? process.env['OUP_PROJECT'], process.cwd());
     return project.ok ? { client, project: project.value } : fail(project.error);
+}
+
+async function listAccounts(client: OpenUpstreamClient): Promise<Account[]> {
+    const accounts = await client.listAccounts();
+    return accounts.ok ? accounts.value : fail(accounts.error.message);
+}
+
+/** `oup project list` and `oup project create`: the caller's Projects, and a new one in an Account of theirs. */
+async function project(args: string[]): Promise<void> {
+    const [verb, ...rest] = args;
+    const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { account: { type: 'string' }, link: { type: 'boolean' } },
+    });
+    if (verb === 'list' && positionals.length === 0 && values.account === undefined && values.link === undefined) {
+        const client = await apiClient();
+        const [projects, accounts, found] = await Promise.all([listProjects(client), listAccounts(client), findLink(process.cwd())]);
+        const lines = formatProjects(projects, accounts, found.ok ? found.value?.link.projectId : undefined);
+        console.log(lines.length === 0 ? 'No Projects yet; oup project create <name> makes one.' : lines.join('\n'));
+        return;
+    }
+    const [name, ...extra] = positionals;
+    if (verb !== 'create' || name === undefined || extra.length > 0) {
+        return fail(USAGE);
+    }
+    const client = await apiClient();
+    const account = accountFor(await listAccounts(client), values.account);
+    if (!account.ok) {
+        return fail(account.error);
+    }
+    const created = await client.createProject({ accountId: account.value.id, name });
+    if (!created.ok) {
+        return fail(created.error.message);
+    }
+    console.log(`Created the Project ${created.value.name} (${created.value.id}) in the Account ${account.value.name}.`);
+    if (values.link === true) {
+        const path = await writeLink(process.cwd(), created.value);
+        console.log(`Linked to it in ${path}.`);
+        return;
+    }
+    console.log(`oup link ${created.value.name} makes the commands in a directory act on it.`);
 }
 
 async function link(args: string[]): Promise<void> {
@@ -830,6 +877,8 @@ const run = async (): Promise<void> => {
             return login(rest);
         case 'logout':
             return logout();
+        case 'project':
+            return project(rest);
         case 'link':
             return link(rest);
         case 'pg':
@@ -845,7 +894,7 @@ const run = async (): Promise<void> => {
         case 'version':
         case '--version':
         case '-v':
-            console.log(`oup ${SDK_VERSION}`);
+            console.log(`oup ${CLI_VERSION} (sdk ${SDK_VERSION})`);
             return;
         case undefined:
         case 'help':
