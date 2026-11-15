@@ -137,6 +137,7 @@ Merge, then tag that commit `cli-v<version>` and push the tag; only admins
 may. The workflow `.github/workflows/cli-release.yml` waits in the
 Environment `npm-release` until a maintainer approves the run on GitHub,
 then checks that the tag names the version and that the SDK it needs is
-on npm, builds, tests, installs the packed CLI and runs `oup version`, and
+on npm (waiting up to five minutes for its file, which npm serves a little
+after it lists a new version), builds, tests, installs the packed CLI and runs `oup version`, and
 publishes with npm trusted publishing and provenance (ARCHITECTURE.md,
 decision 80).
