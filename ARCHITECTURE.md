@@ -788,7 +788,9 @@ digest (#55).
   Garage answered; one that Prometheus has no samples for waits two hours,
   then is recorded from the rows alone (logged), so it cannot hold back the
   hours after it. A Bucket Garage cannot size counts as empty and is
-  logged. A trigger rejects updates, deletes and truncation.
+  logged. Without Prometheus the pass does not run: a single-node dev
+  cluster (decision 112) records no usage.
+  A trigger rejects updates, deletes and truncation.
   Events have no foreign keys and carry the Account: the last hours of a
   deleted Resource or Project are still billed. There is at most one event
   per Resource, unit and interval start, so an emitter can retry without
@@ -1221,7 +1223,7 @@ Decisions table once it is settled.
 18. **Billing rules with Mollie and lexoffice** (in the billing service,
     decision 77).
     - ~~How the billing service reads usage events~~: settled by decision
-      112, `GET /internal/v1/accounts/{id}/usage?month=`.
+      114, `GET /internal/v1/accounts/{id}/usage?month=`.
     - Small amounts: a month of an idle Database can cost less than the
       transaction fee or Mollie's minimum; carry it over, or a minimum
       charge.

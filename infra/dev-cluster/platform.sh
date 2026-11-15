@@ -182,7 +182,8 @@ fi
 # Storage auto-grow reads volume usage from the platform's Prometheus
 # (decision 111), once monitoring.sh has installed it; run this again after.
 # Not on a single node: its local-path volumes cannot grow, so a grown size
-# would never be reached (decision 112).
+# would never be reached (decision 112). Metering (decision 114) reads the
+# same Prometheus, so a single node records no usage either.
 PROMETHEUS_URL=""
 if [[ $LAYOUT == multi-node ]] && kubectl -n monitoring get service kube-prometheus-stack-prometheus >/dev/null 2>&1; then
   PROMETHEUS_URL=http://kube-prometheus-stack-prometheus.monitoring.svc:9090
