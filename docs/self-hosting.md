@@ -38,7 +38,7 @@ npm ci && npm run build
 
 ## 2. Container images
 
-GitHub Actions builds the control plane and operators images, and the demo
+GitHub Actions builds the control plane, operators and dashboard images, and the demo
 apps' (`example-notes` …, decision 99), on every push and publishes them to the GitHub Container Registry of the repository's
 owner (`.github/workflows/images.yml`, #55). The cluster pulls them without
 credentials, so the packages must be public:
@@ -52,7 +52,7 @@ credentials, so the packages must be public:
 
    ```bash
    owner=openupstream
-   for package in control-plane operators example-notes example-spa-api example-worker; do
+   for package in control-plane operators dashboard example-notes example-spa-api example-worker; do
      token=$(curl -s "https://ghcr.io/token?scope=repository:$owner/$package:pull" | jq -r .token)
      curl -s -o /dev/null -w "$package %{http_code}\n" -H "Authorization: Bearer $token" \
        -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
@@ -73,7 +73,8 @@ Other names that are ours today and need yours:
 | --- | --- |
 | The backup bucket | `infra/dev-cluster/database-config.json` (section 4) |
 | madAuth's public URL | `MADAUTH_ISSUER` in `infra/dev-cluster/platform.sh` (on the dev cluster `http://localhost:8787`) |
-| Our hostname (`openupstream.com`, the API under `/api`) | decisions 67 and 120; `PLATFORM_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
+| Our hostname (`console.openupstream.com`: the dashboard, madAuth under `/auth`, the API under `/api`) | decisions 67, 120 and 121; `PLATFORM_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
+| The waitlist's hostname (`openupstream.com`), only with `SIGNUP=closed` | decision 121; `WAITLIST_DOMAIN` for `infra/dev-cluster/platform.sh` (section 9) |
 | The customer domain (`openupstream.app`), under which Buckets are reached | decision 68; `CUSTOMER_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
 
 ## 3. Development clusters
@@ -371,14 +372,15 @@ decision 87), as a client an admin registers once per madAuth:
    ends up in the shell history:
 
    ```bash
-   infra/madauth/register-cli.sh https://openupstream.com
+   infra/madauth/register-cli.sh https://console.openupstream.com
    ```
 
    It prints `CLI_CLIENT_ID=mc_…`. An admin with a second factor adds the
    client in the browser instead, as the script's header shows.
 3. Set `CLI_CLIENT_ID` for the control plane (`platform.sh` takes it from
    the environment) and roll it out. `GET /v1/login` then answers, and
-   `oup login --api https://openupstream.com/api` works.
+   `oup login --api https://console.openupstream.com/api` works: it opens
+   the dashboard, which shows the approval dialog.
 
 ## 9. Sign-up and the waitlist
 
@@ -399,21 +401,27 @@ To close it, as the hosted service does until it can invoice:
    you can still create users:
 
    ```bash
-   SIGNUP=closed SIGNUP_ALLOW=you@example.com IMPRINT_FILE=~/.config/openupstream/imprint.txt ./platform.sh
+   SIGNUP=closed WAITLIST_DOMAIN=example.com SIGNUP_ALLOW=you@example.com IMPRINT_FILE=~/.config/openupstream/imprint.txt ./platform.sh
    ```
 
+   `WAITLIST_DOMAIN` is the waitlist's own host, a bunny.net zone or a
+   name inside one, and never the platform domain, which serves the
+   dashboard (decision 121): for the hosted service `openupstream.com`
+   next to `console.openupstream.com`. `platform.sh` points it at the
+   compute nodes and requests its certificate.
    `SIGNUP_ALLOW` takes addresses and `@domains`, comma-separated. madAuth
    now refuses everyone else, with a message that points to
-   `https://$PLATFORM_DOMAIN`, where the waitlist page takes e-mail
+   `https://$WAITLIST_DOMAIN`, where the waitlist page takes e-mail
    addresses (double opt-in, through SES as in section 6; `MAIL=log`
    writes the confirmation links to the control plane's log instead). It
    rolls out madAuth and the control plane when their settings changed.
 3. **Check it**: a sign-up with another address is refused, and
-   `https://$PLATFORM_DOMAIN` shows the waitlist; confirm an address of
+   `https://$WAITLIST_DOMAIN` shows the waitlist; confirm an address of
    your own with the link it mails you.
 
 To open sign-up again, run `platform.sh` with `SIGNUP=open` (it removes the
-waitlist route). The addresses stay in the table
+waitlist route and its certificate; remove its DNS record with
+`DNS_DOMAIN=$WAITLIST_DOMAIN infra/dev-cluster/dns.sh --delete`). The addresses stay in the table
 `waitlist` of the control plane's Database: write to the confirmed ones
 once, then delete them, as the privacy notice promises.
 

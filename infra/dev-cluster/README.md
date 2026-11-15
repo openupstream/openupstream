@@ -157,8 +157,8 @@ stop at their certificate wait, after everything but the operators that
 meanwhile, so the API works with `-k`.
 
 `platform.sh` creates the platform Project's Databases (the control plane's and
-madAuth's), runs madAuth with its sidecar, the control plane (once each on
-a single node), the public
+madAuth's), runs madAuth with its sidecar, the control plane and the
+dashboard (once each on a single node), the public
 routes with their certificate (with Let's Encrypt staging clients need `-k`)
 and the Databases, Routes and Services operators, with the GHCR images of the current commit
 pinned by digest (`IMAGE_TAG` to choose others; the commit must be pushed
@@ -169,7 +169,9 @@ them to the sidecar's log instead. To try the payment-method gate without a
 billing service, set `NEW_ACCOUNT_HOLDS=payment-method` and
 `BILLING_CALLERS` to a ServiceAccount you lift Holds with (control-plane
 README, "Internal API"). To close sign-up as the hosted service does, with
-the waitlist at `https://dev.openupstream.com`, set `SIGNUP=closed`,
+the waitlist at a host of its own (decision 121), set `SIGNUP=closed`,
+`WAITLIST_DOMAIN` to that host (e.g. `waitlist.dev.openupstream.com`; never
+the platform domain, which serves the dashboard),
 `IMPRINT_FILE` to a text file with an Impressum, and `SIGNUP_ALLOW` to your
 own address, so you can still create users (docs/self-hosting.md, "Sign-up
 and the waitlist").
@@ -203,13 +205,14 @@ staging. Delete the two records afterwards:
 `../dev-cluster-hetzner/down.sh` does not touch that zone. This needs the
 multi-node cluster: HTTP-01 must reach port 80 from the internet.
 
-madAuth is at `https://PLATFORM_DOMAIN/auth`, the API at
+The dashboard is at `https://PLATFORM_DOMAIN` (sign up and sign in there
+in a browser), madAuth at `https://PLATFORM_DOMAIN/auth`, the API at
 `https://PLATFORM_DOMAIN/api` (it was at `api.PLATFORM_DOMAIN` before
 decision 120: on a cluster installed then, run `ingress.sh` and
 `platform.sh` again, and sign in again with `oup login --api
 https://PLATFORM_DOMAIN/api`, since `oup` keeps the address it signed in
 at); the examples use the Hetzner dev cluster's
-`dev.openupstream.com` (drop `-k` with a production certificate). Sign up with e-mail and password
+`dev.openupstream.com` (drop `-k` with a production certificate). Without a browser, sign up with e-mail and password
 through madAuth's HTTP API (`Origin` must be the allowed origin), and
 confirm with the code from the e-mail; the session cookie
 `madauth_session` is a token for the API:
@@ -231,10 +234,10 @@ with that address as above, register the CLI with
 `CURL_OPTIONS=-k ../madauth/register-cli.sh https://dev.openupstream.com`,
 and run `platform.sh` again with the printed `CLI_CLIENT_ID` (and
 `INITIAL_ADMIN_EMAIL` still set); it rolls out the control plane and
-madAuth whenever their ConfigMap changed. Until the
-approval page exists, approve a code with the session cookie:
-`POST /auth/device/lookup` and then `POST /auth/device/approve`, each with
-`{"code": "<code>"}`.
+madAuth whenever their ConfigMap changed. `oup login` opens the dashboard,
+which shows the approval dialog; without a browser, approve a code with the
+session cookie: `POST /auth/device/lookup` and then
+`POST /auth/device/approve`, each with `{"code": "<code>"}`.
 
 Without the control plane, one pass from this machine, from `operators/`:
 

@@ -8,7 +8,7 @@
  * The API surface is defined here first and implemented in control-plane/.
  */
 
-export const SDK_VERSION = '0.3.0';
+export const SDK_VERSION = '0.3.1';
 
 export * from './model.js';
 export * from './internal.js';
@@ -44,7 +44,7 @@ import type {
 } from './model.js';
 
 /** The API is under `/api` of the platform's host (ARCHITECTURE.md, decision 120). */
-export const DEFAULT_API_URL = 'https://openupstream.com/api';
+export const DEFAULT_API_URL = 'https://console.openupstream.com/api';
 
 export interface ClientOptions {
     baseUrl?: string;

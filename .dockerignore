@@ -5,3 +5,4 @@ operators/src/generated
 infra/dev-cluster/.state
 .git
 .claude
+**/out

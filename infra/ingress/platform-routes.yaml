@@ -1,15 +1,16 @@
-# Our own public hostname (ARCHITECTURE.md, decisions 67 and 120), in the
-# platform Project's namespace. PLATFORM_DOMAIN is `openupstream.com` in
-# production and `dev.openupstream.com` on a dev cluster; CLUSTER_ISSUER is
-# `letsencrypt` or `letsencrypt-staging`. infra/dev-cluster/platform.sh fills
-# both in.
+# Our own public hostname (ARCHITECTURE.md, decisions 67, 120 and 121), in
+# the platform Project's namespace. PLATFORM_DOMAIN is
+# `console.openupstream.com` for the hosted service and
+# `dev.openupstream.com` on a dev cluster; CLUSTER_ISSUER is `letsencrypt` or
+# `letsencrypt-staging`. infra/dev-cluster/platform.sh fills both in.
 #
 # - /auth/* and /.well-known/*: madAuth, on the same origin as the
 #   dashboard.
 # - /api/*: the public API, which sees the path without `/api`. The
 #   internal API (port 8081) is never routed.
-# - the rest: the dashboard, once it is served; until then, while sign-up
-#   is closed, the waitlist (waitlist-route.yaml).
+# - the rest: the dashboard (dashboard/deploy/dashboard.yaml).
+#
+# The waitlist has a host of its own (waitlist-route.yaml).
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -126,4 +127,21 @@ spec:
       kind: Rule
       middlewares: [{name: hsts}, {name: api-rate-limit}, {name: api-strip-prefix}]
       services: [{name: control-plane, port: 8080, serversTransport: fail-fast}]
+  tls: {secretName: platform-tls}
+---
+# Every path that neither madAuth nor the API has: the lowest priority keeps
+# their routes, whose rules are longer, in front.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: dashboard
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`PLATFORM_DOMAIN`)
+      kind: Rule
+      priority: 1
+      middlewares: [{name: hsts}, {name: retry-other-pod}]
+      services: [{name: dashboard, port: 8080, serversTransport: fail-fast}]
   tls: {secretName: platform-tls}

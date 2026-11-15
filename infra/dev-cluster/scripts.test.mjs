@@ -163,6 +163,15 @@ test('a recorded layout is never changed', () => {
     assert.match(same.log, /layout=multi-node/);
 });
 
+test('platform.sh with SIGNUP=closed needs a waitlist host other than the platform domain, before it changes anything', () => {
+    for (const env of [{}, { WAITLIST_DOMAIN: 'dev.openupstream.com' }]) {
+        const { status, stderr, log } = run('./platform.sh', { LAYOUT_STUB: 'multi-node', SIGNUP: 'closed', MAIL: 'log', ...env });
+        assert.notEqual(status, 0);
+        assert.match(stderr, /SIGNUP=closed needs WAITLIST_DOMAIN.*dev\.openupstream\.com serves the dashboard/);
+        assert.equal(log, '');
+    }
+});
+
 test('install-multi-node.sh refuses a cluster without a node in every Site', () => {
     for (const sites of ['hetzner-fsn1', 'hetzner-fsn1 ovh-lim']) {
         const { status, stderr, log } = run('./install-multi-node.sh', { SITES_STUB: sites });

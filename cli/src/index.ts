@@ -28,7 +28,7 @@
  * Planned (ARCHITECTURE.md build order): oup bucket, oup routes, oup usage.
  *
  * `OUP_API_KEY` (a madAuth API key) replaces `oup login`, e.g. in CI, with
- * `OUP_API_URL` for another API than https://openupstream.com/api.
+ * `OUP_API_URL` for another API than https://console.openupstream.com/api.
  */
 import { spawn } from 'node:child_process';
 import { parseArgs } from 'node:util';

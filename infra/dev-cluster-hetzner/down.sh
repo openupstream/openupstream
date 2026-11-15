@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Deletes everything up.sh created (servers, their volumes, firewall, SSH
 # key, local state) and the DNS records that ../dev-cluster/ingress.sh and
-# garage.sh created.
+# garage.sh created, and with WAITLIST_DOMAIN set the one platform.sh
+# created for the waitlist (SIGNUP=closed).
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -16,6 +17,11 @@ if [[ -f ${BUNNY_API_KEY_FILE:-$HOME/.config/openupstream/bunny-api-key} ]]; the
     echo "could not remove the DNS records; remove them in bunny.net" >&2
   DNS_DOMAIN=${CUSTOMER_DOMAIN:-dev.openupstream.app} DNS_NAMES='* *.s3' "$DNS" --delete ||
     echo "could not remove the S3 records; remove them in bunny.net" >&2
+  # The waitlist's host, if platform.sh ran with SIGNUP=closed.
+  if [[ -n ${WAITLIST_DOMAIN:-} ]]; then
+    DNS_DOMAIN=$WAITLIST_DOMAIN "$DNS" --delete ||
+      echo "could not remove the waitlist's DNS record; remove it in bunny.net" >&2
+  fi
 fi
 for name in $(hcloud server list --selector "$LABEL" -o noheader -o columns=name); do
   echo "deleting $name"

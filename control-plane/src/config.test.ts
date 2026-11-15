@@ -4,7 +4,7 @@ import { configFrom } from './config.js';
 
 const env = {
     DATABASE_URL: 'postgres://app@db/app',
-    AUTH_ISSUER: 'https://openupstream.com',
+    AUTH_ISSUER: 'https://console.openupstream.com',
     MADAUTH_URL: 'http://madauth.project-00000000-0000-4000-8000-000000000002.svc:8787',
     BACKUP_BUCKET: 'openupstream-pg-backup',
     ACCESS_KEY_ID: 'id',
@@ -14,7 +14,7 @@ const env = {
     GARAGE_ADMIN_TOKEN: 'admin-token',
     GARAGE_S3_URL: 'http://garage.garage.svc.cluster.local:3900',
     CUSTOMER_DOMAIN: 'openupstream.app',
-    PLATFORM_DOMAIN: 'openupstream.com',
+    PLATFORM_DOMAIN: 'console.openupstream.com',
     SECRETS_KEK_ID: 'kek-2026-10',
     SECRETS_KEK: Buffer.alloc(32, 7).toString('base64'),
 };
@@ -41,7 +41,7 @@ test('Garage inside the cluster, the customer domain and the platform domain', (
         s3Url: env.GARAGE_S3_URL,
     });
     assert.equal(config.value.customerDomain, 'openupstream.app');
-    assert.equal(config.value.platformDomain, 'openupstream.com');
+    assert.equal(config.value.platformDomain, 'console.openupstream.com');
     assert.equal(config.value.auth.cliClientId, undefined);
     const withCli = configFrom({ ...env, CLI_CLIENT_ID: 'mc_cli' });
     assert.equal(withCli.ok && withCli.value.auth.cliClientId, 'mc_cli');
@@ -49,7 +49,7 @@ test('Garage inside the cluster, the customer domain and the platform domain', (
     assert.deepEqual(bad.ok ? [] : bad.error, [
         'GARAGE_ADMIN_URL and GARAGE_S3_URL must be URLs',
         'CUSTOMER_DOMAIN must be a domain name, e.g. openupstream.app',
-        'PLATFORM_DOMAIN must be a domain name, e.g. openupstream.com',
+        'PLATFORM_DOMAIN must be a domain name, e.g. console.openupstream.com',
     ]);
 });
 

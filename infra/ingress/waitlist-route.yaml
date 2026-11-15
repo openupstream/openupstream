@@ -1,13 +1,22 @@
-# The waitlist page at PLATFORM_DOMAIN (ARCHITECTURE.md, decision 86), while
-# sign-up on the hosted service is closed: every path of the host that
-# neither madAuth nor the API serves goes to the control plane's waitlist port. Applied
-# by infra/dev-cluster/platform.sh with SIGNUP=closed only, and removed
-# again with SIGNUP=open; the dashboard takes these paths once it exists.
-# It uses the Certificate, hsts and retry Middlewares of
-# platform-routes.yaml.
-#
-# The low priorities keep madAuth's routes (/auth/*, /.well-known/*) and
-# the API's (/api/*), whose rules are longer, in front.
+# The waitlist page (ARCHITECTURE.md, decisions 86 and 121), while sign-up
+# on the hosted service is closed, at a host of its own: WAITLIST_DOMAIN is
+# `openupstream.com` for the hosted service, whose dashboard, madAuth and
+# API are at `console.openupstream.com` (platform-routes.yaml). Every path
+# of the host goes to the control plane's waitlist port. Applied by
+# infra/dev-cluster/platform.sh with SIGNUP=closed only, and removed again
+# with SIGNUP=open. It uses the hsts, retry and madAuth rate-limit Middlewares and
+# the ServersTransport of platform-routes.yaml; CLUSTER_ISSUER as there.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: waitlist
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  secretName: waitlist-tls
+  issuerRef: {kind: ClusterIssuer, name: CLUSTER_ISSUER}
+  dnsNames: [WAITLIST_DOMAIN]
+  privateKey: {algorithm: ECDSA, size: 256, rotationPolicy: Always}
+---
 apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
@@ -29,14 +38,12 @@ metadata:
 spec:
   entryPoints: [websecure]
   routes:
-    - match: Host(`PLATFORM_DOMAIN`) && (Method(`GET`) || Method(`HEAD`))
+    - match: Host(`WAITLIST_DOMAIN`) && (Method(`GET`) || Method(`HEAD`))
       kind: Rule
-      priority: 2
       middlewares: [{name: hsts}, {name: madauth-rate-limit}, {name: retry-other-pod}]
       services: [{name: control-plane, port: 8082, serversTransport: fail-fast}]
-    - match: Host(`PLATFORM_DOMAIN`)
+    - match: Host(`WAITLIST_DOMAIN`)
       kind: Rule
-      priority: 1
       middlewares: [{name: hsts}, {name: waitlist-rate-limit}]
       services: [{name: control-plane, port: 8082, serversTransport: fail-fast}]
-  tls: {secretName: platform-tls}
+  tls: {secretName: waitlist-tls}
