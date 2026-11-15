@@ -13,7 +13,9 @@ export interface Tracked {
     /** Once known from the Kubernetes API; a pod may end before the agent has listed it. */
     readonly namespace?: string;
     readonly pod?: string;
-    /** When its cgroup was found gone or empty: its total is final. */
+    /** Set once a process was seen in its cgroup: a new cgroup is empty before its first process joins. */
+    readonly ran?: true;
+    /** When its cgroup was found gone, or empty after it ran: its total is final. */
     readonly endedAt?: number;
 }
 
@@ -38,16 +40,27 @@ export const usageOf = (cpuStat: string): number | undefined => {
     return usec === undefined ? undefined : Number(usec) / 1e6;
 };
 
-/** Whether a cgroup v2 `cgroup.events` says no process is left: the total is final. */
-export const isEmpty = (cgroupEvents: string): boolean => /^populated 0$/m.test(cgroupEvents);
+/** Whether a cgroup v2 `cgroup.events` says a process is in it (or below it). */
+export const isPopulated = (cgroupEvents: string): boolean => /^populated 1$/m.test(cgroupEvents);
 
-/** A reading: totals only grow, a final one ends the pod. */
-export function observe(totals: Totals, uid: string, seconds: number, now: number, final: boolean): Totals {
+/**
+ * A reading: totals only grow. An empty cgroup ends the pod only after it
+ * ran: when the kubelet creates a pod's cgroup it is empty for a moment,
+ * and taking that as the end froze every short run at 0 (dev cluster,
+ * 2026-11-15).
+ */
+export function observe(totals: Totals, uid: string, seconds: number, now: number, populated: boolean): Totals {
     const seen = totals.get(uid);
     if (seen?.endedAt !== undefined) {
         return totals;
     }
-    return new Map(totals).set(uid, { ...seen, seconds: Math.max(seen?.seconds ?? 0, seconds), ...(final ? { endedAt: now } : {}) });
+    const ran = seen?.ran === true || populated;
+    return new Map(totals).set(uid, {
+        ...seen,
+        seconds: Math.max(seen?.seconds ?? 0, seconds),
+        ...(ran ? { ran: true as const } : {}),
+        ...(ran && !populated ? { endedAt: now } : {}),
+    });
 }
 
 /** Pods whose cgroup is gone are ended with their last reading. */

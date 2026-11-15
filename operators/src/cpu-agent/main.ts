@@ -22,7 +22,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { CoreV1Api, KubeConfig } from '@kubernetes/client-node';
-import { type Totals, endMissing, expire, isEmpty, metricsText, name, observe, podUidOf, usageOf } from './totals.js';
+import { type Totals, endMissing, expire, isPopulated, metricsText, name, observe, podUidOf, usageOf } from './totals.js';
 
 const log = (entry: Record<string, unknown>): void => console.log(JSON.stringify({ time: new Date().toISOString(), ...entry }));
 
@@ -56,12 +56,13 @@ const watchIfThere = (path: string, onChange: (entry: string | null) => void): F
     return opened;
 };
 
-/** Reads one pod's total; `final` when its cgroup says no process is left. */
+/** Reads one pod's total and whether a process is still in its cgroup. */
 async function read(uid: string, dir: string): Promise<void> {
     const [cpuStat, events] = await Promise.all([text(join(dir, 'cpu.stat')), text(join(dir, 'cgroup.events'))]);
     const seconds = cpuStat === undefined ? undefined : usageOf(cpuStat);
+    // Unreadable events (the cgroup going away): not a reason to end it; endMissing does that.
     if (seconds !== undefined) {
-        totals = observe(totals, uid, seconds, Date.now(), events !== undefined && isEmpty(events));
+        totals = observe(totals, uid, seconds, Date.now(), events === undefined || isPopulated(events));
     }
 }
 
