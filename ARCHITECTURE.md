@@ -1295,10 +1295,37 @@ Decisions table once it is settled.
     before the unit prices are set. Options, none evaluated yet:
     - A CPU request below the limit, so cores are overcommitted. Costs:
       no guaranteed CPU when many Services are busy at once.
-    - A memory request below the limit. Costs: memory cannot be throttled,
-      so a full node means evictions and OOM kills, on nodes that also
-      run Databases; metering reads memory from the pods' requests
-      (decision 114) and would have to read the limit.
+    - A CPU request of half the limit, with the load spread evenly over
+      both compute Sites: each node is full by limits and half full by
+      requests, so every Service has its configured CPU while both Sites
+      are up, and when one is down all pods fit on the other and share its
+      CPU in proportion to their requests, at least half each. Today a
+      failed Site's pods would stay pending if both nodes were full by
+      requests. Needs the Home sites of new Projects alternated, since
+      single-replica Services run in their Databases' Home site
+      (Falkenstein by default). Costs: memory still has to fit on one
+      node, so this doubles CPU capacity only; an idle Service still
+      holds half its CPU; the promise becomes "half the CPU during a Site
+      outage", which is when many pods start at once. To test on the dev
+      cluster: start times and the failover at half the CPU.
+    - A memory request below the limit. Costs: without swap a full node
+      means evictions and OOM kills, on nodes that also run Databases;
+      metering reads memory from the pods' requests (decision 114) and
+      would have to read the limit.
+    - The same with swap on the nodes' NVMe disks, so the kernel moves
+      pages an idle Service has not touched to disk and a full node gets
+      slow instead of killing pods. The first request after a pause pages
+      them back in, without an activator in the request path. Databases
+      keep requests equal to limits and are not swapped. Costs: the
+      promise becomes "slower after idling"; swap holds customer data and
+      Secrets, so it must be encrypted; when a Site is down many Services
+      want their memory back on a node that is already full, and it may
+      thrash, so the memory of the Services expected to be active must
+      still fit on one node. To check and test on the dev cluster: swap
+      for pods in the k3s version in use and that only pods with a
+      request below the limit get it, whether the host swaps a gVisor
+      sandbox's memory and how fast it returns, and a Site failover with
+      swap in use.
     - Billing reserved instead of measured CPU while a pod runs, as
       Fargate and Fly.io do (Cloud Run only with instance-based billing;
       by default it bills CPU while a request is handled). Contradicts
