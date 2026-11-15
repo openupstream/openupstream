@@ -421,7 +421,7 @@ To close it, as the hosted service does until it can invoice:
 
 To open sign-up again, run `platform.sh` with `SIGNUP=open` (it removes the
 waitlist route and its certificate; remove its DNS record with
-`DNS_DOMAIN=$WAITLIST_DOMAIN infra/dev-cluster/dns.sh --delete`). The addresses stay in the table
+`DNS_DOMAIN=$WAITLIST_DOMAIN DNS_NAMES=@ infra/dev-cluster/dns.sh --delete`). The addresses stay in the table
 `waitlist` of the control plane's Database: write to the confirmed ones
 once, then delete them, as the privacy notice promises.
 

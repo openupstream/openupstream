@@ -33,7 +33,9 @@
 #    (VMs) or more than the line carries; unset, the interface's own.
 #
 # Images come from GHCR, pinned by digest: by default the ones built for the
-# current commit (.github/workflows/images.yml). Override with IMAGE_TAG.
+# current commit (.github/workflows/images.yml). Override with IMAGE_TAG, a
+# commit that has all three images: none from before the dashboard's image
+# (decision 123) can be installed with this script.
 #
 # Needs: KUBECONFIG, kubectl, curl, jq, node, aws (for MAIL=ses), and with
 # SIGNUP=closed the bunny.net API key (dns.sh).

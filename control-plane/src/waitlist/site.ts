@@ -103,7 +103,7 @@ const home = (error?: string, email?: string): Page =>
         html`<h1>openupstream</h1>
 <p class="muted">Coming soon</p>
 <p>An EU cloud for Postgres, object storage, static sites and containers, run in three data centres in Germany at three providers.</p>
-<p>The hosted service at openupstream.com is not open for sign-up yet. The code is open source, and you can <a href="https://github.com/openupstream/openupstream">run it yourself</a> today.</p>
+<p>The hosted service is not open for sign-up yet. The code is open source, and you can <a href="https://github.com/openupstream/openupstream">run it yourself</a> today.</p>
 ${signupForm(error, email)}`,
     );
 
