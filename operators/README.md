@@ -21,11 +21,13 @@ Traefik already implements is configured, not reimplemented.
   (ARCHITECTURE.md, decision 48).
 - `src/routes/`: the Routes operator (ARCHITECTURE.md, decisions 84 and
   85). `planRoutes` (pure) turns the routing table into, per Project, its
-  namespace and NetworkPolicy, an ExternalName Service to Garage's website endpoint and the
+  namespace and NetworkPolicy and the
   shared Middlewares (compression, HSTS), and with a Route to a Service the
   ServersTransport `fail-fast` and the Middleware `retry-other-pod`; per
-  Route to a Bucket, a Middleware that sets the Host header to the Bucket's
-  name and one that strips the prefix; per
+  Route to a Bucket, an ExternalName Service `bucket-<id>` to Garage's
+  website endpoint (one per Bucket, so Traefik counts its egress apart), a
+  Middleware that sets the Host header to the Bucket's name and one that
+  strips the prefix; per
   Domain, an IngressRoute, on the default certificate for a default Domain,
   on a Certificate of its own from `CLUSTER_ISSUER` (HTTP-01) for a custom
   domain. `reconcileRoutes`

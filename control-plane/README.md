@@ -236,6 +236,10 @@ valid token, 403 for anyone else, 503 when the token cannot be checked.
 - `PUT` and `DELETE /internal/v1/accounts/{id}/holds/{reason}`: place or
   lift a Hold; 204 whether or not it was there, 404 for an unknown Account.
   A reason is a DNS label. For `BILLING_CALLERS`.
+- `GET /internal/v1/accounts/{id}/usage?month=YYYY-MM`: the Account's usage
+  of that month (UTC), summed per Project, Resource and unit, with the
+  month's hours and how many are metered (`AccountUsage`); 400 for another
+  form of month, 404 for an unknown Account. For `BILLING_CALLERS`.
 
 The control plane's ServiceAccount is bound to `system:auth-delegator` to
 create TokenReviews.
@@ -268,6 +272,13 @@ full disk (phase `Not enough disk space`) gets its PVCs grown to the row's
 size once its spec has it, as CloudNativePG waits for that without doing
 it. Each decision is logged (`growth:`).
 Without `PROMETHEUS_URL` the pass does not run.
+
+`src/usage/meter.ts` is metering (decision 112): every
+`CLEANUP_INTERVAL_SECONDS`, on one replica at a time, it turns each
+completed and settled hour into usage events, CPU and egress from
+Prometheus, Databases' sizes from their rows, Buckets' bytes from Garage,
+and lists the hour in `metered_hours`; an hour whose figures cannot all be
+read waits for the next pass. It also needs `PROMETHEUS_URL`.
 
 ## Tests
 

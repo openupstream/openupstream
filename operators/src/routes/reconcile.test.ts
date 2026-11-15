@@ -17,7 +17,7 @@ const routing: DomainRouting = {
     domainId: '22222222-2222-4222-8222-222222222222',
     hostname: 'shop-a1b2c3d4.openupstream.app',
     kind: 'default',
-    routes: [{ id: '44444444-4444-4444-8444-444444444444', pathPrefix: '/', kind: 'bucket', bucketName: 'shop-site', spaFallback: true }],
+    routes: [{ id: '44444444-4444-4444-8444-444444444444', pathPrefix: '/', kind: 'bucket', bucketId: '77777777-7777-4777-8777-777777777777', bucketName: 'shop-site', spaFallback: true }],
 };
 
 /** A cluster holding `existing` objects of ours; records applies and removes. */

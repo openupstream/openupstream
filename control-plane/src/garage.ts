@@ -58,6 +58,8 @@ export interface ObjectStorage {
      * done, so a failed attempt can simply be repeated.
      */
     deleteBucket(bucket: GarageBucket): Promise<Result<number, string>>;
+    /** The bytes the bucket's objects take, as Garage counts them once (not per copy); metered as its storage. */
+    bucketBytes(bucketId: string): Promise<Result<number, string>>;
 }
 
 type Fetch = typeof fetch;
@@ -65,6 +67,7 @@ type Fetch = typeof fetch;
 const keySchema = z.object({ accessKeyId: z.string(), name: z.string(), secretAccessKey: z.string().nullish() });
 const keyListSchema = z.array(z.object({ id: z.string(), name: z.string() }));
 const bucketSchema = z.object({ id: z.string() });
+const bucketInfoSchema = z.object({ bytes: z.number() });
 const problemSchema = z.object({ code: z.string().optional(), message: z.string().optional() });
 
 /** A Garage answer that is not a 2xx: its status and code, e.g. 404 NoSuchBucket. */
@@ -238,6 +241,10 @@ export function garageStorage(config: GarageConfig, options: { fetch?: Fetch } =
             return updated.ok ? ok(undefined) : err(describe(updated.error));
         },
         deleteKey: (accessKeyId) => deleteKey(accessKeyId),
+        bucketBytes: async (bucketId) => {
+            const info = await call('GET', `/v2/GetBucketInfo?id=${encodeURIComponent(bucketId)}`, bucketInfoSchema);
+            return info.ok ? ok(info.value.bytes) : err(describe(info.error));
+        },
         deleteBucket: async ({ bucketId, accessKeyId }) => {
             const keyDeleted = await deleteKey(accessKeyId);
             if (!keyDeleted.ok) {

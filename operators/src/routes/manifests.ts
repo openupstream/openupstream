@@ -2,13 +2,14 @@
  * The Traefik objects for the routing table (ARCHITECTURE.md, "Routing and
  * domains"; decision 84), as a pure function of the control plane's rows.
  *
- * Per Project with Routes, in its namespace: the Namespace itself, an
- * ExternalName Service `garage-web` for Garage's website endpoint (Traefik
- * routes only to Services in the IngressRoute's own namespace), and the
+ * Per Project with Routes, in its namespace: the Namespace itself and the
  * Middlewares every Domain shares (compression, HSTS). Per Domain: one
- * IngressRoute. Per Route to a Bucket: a Middleware that tells Garage which
- * Bucket to serve (the Host header is the Bucket's name), and one that
- * strips the path prefix.
+ * IngressRoute. Per Route to a Bucket: an ExternalName Service
+ * `bucket-<id>` for Garage's website endpoint (Traefik routes only to
+ * Services in the IngressRoute's own namespace; one per Bucket so Traefik
+ * counts each Bucket's response bytes apart, decision 112), a Middleware
+ * that tells Garage which Bucket to serve (the Host header is the
+ * Bucket's name), and one that strips the path prefix.
  *
  * A Route to a Service goes to its Kubernetes Service (decision 93), path
  * unchanged. Like the platform's own routes (infra/ingress), Traefik gives
@@ -22,7 +23,7 @@
  * which cert-manager solves with HTTP-01: the ClusterIssuer picks that
  * solver for Certificates carrying COMPONENT_LABEL (decision 85).
  */
-import { type DomainRouting, type RoutedPath, ingressRouteName, serviceObjectName } from '@openupstream/sdk';
+import { type DomainRouting, type RoutedPath, bucketObjectName, ingressRouteName, serviceObjectName } from '@openupstream/sdk';
 import type { KubeObject } from '../kube.js';
 import { COMPONENT_LABEL, LABELS, MANAGED_BY, projectNamespace, projectObjectsFor } from '../kubernetes.js';
 
@@ -94,12 +95,6 @@ const serviceRoutingObjects = (projectId: string): KubeObject[] => [
 /** What a Project's namespace needs once it has a Route. */
 const projectObjects = (routing: DomainRouting): KubeObject[] => [
     ...projectObjectsFor({ id: routing.projectId, name: routing.projectName }),
-    {
-        apiVersion: 'v1',
-        kind: 'Service',
-        metadata: { name: 'garage-web', namespace: projectNamespace(routing.projectId), labels: labels(routing.projectId) },
-        spec: { type: 'ExternalName', externalName: GARAGE_WEB.host, ports: [{ name: 'web', port: GARAGE_WEB.port }] },
-    },
     middleware(routing.projectId, 'compress', { compress: {} }),
     // Every customer hostname is HTTPS only, like the platform's (decision 68).
     middleware(routing.projectId, 'hsts', { headers: { stsSeconds: 31536000 } }),
@@ -114,6 +109,12 @@ export const matchOf = (hostname: string, pathPrefix: string): string =>
 const routeObjects = (routing: DomainRouting, route: Routed): KubeObject[] => (route.kind === 'bucket' ? bucketRouteObjects(routing, route) : []);
 
 const bucketRouteObjects = (routing: DomainRouting, route: BucketRoute): KubeObject[] => [
+    {
+        apiVersion: 'v1',
+        kind: 'Service',
+        metadata: { name: bucketObjectName({ id: route.bucketId }), namespace: projectNamespace(routing.projectId), labels: labels(routing.projectId) },
+        spec: { type: 'ExternalName', externalName: GARAGE_WEB.host, ports: [{ name: 'web', port: GARAGE_WEB.port }] },
+    },
     // Garage's website endpoint finds the Bucket by the Host header, its global alias.
     middleware(routing.projectId, hostMiddlewareName(route), { headers: { customRequestHeaders: { Host: route.bucketName } } }),
     ...(route.pathPrefix === '/'
@@ -163,7 +164,7 @@ const bucketRule = (routing: DomainRouting, route: BucketRoute): Rule => ({
         ...(route.pathPrefix === '/' ? [] : [{ name: stripMiddlewareName(route) }]),
         { name: hostMiddlewareName(route) },
     ],
-    services: [{ name: 'garage-web', port: GARAGE_WEB.port }],
+    services: [{ name: bucketObjectName({ id: route.bucketId }), port: GARAGE_WEB.port }],
 });
 
 const serviceRules = (routing: DomainRouting, route: Extract<RoutedPath, { kind: 'service' }>): Rule[] => {
@@ -203,7 +204,7 @@ const ingressRoute = (routing: DomainRouting): KubeObject => ({
  */
 export function planRoutes(routings: readonly DomainRouting[], settings: RoutesSettings): KubeObject[] {
     const projects = [...new Map(routings.map((routing) => [routing.projectId, routing])).values()];
-    return [
+    return firstOfEach([
         ...projects.flatMap((routing) => [
             ...projectObjects(routing),
             ...(servesServices(routings, routing.projectId) ? serviceRoutingObjects(routing.projectId) : []),
@@ -213,5 +214,11 @@ export function planRoutes(routings: readonly DomainRouting[], settings: RoutesS
             ...(routing.kind === 'custom' ? [certificate(routing, settings)] : []),
             ingressRoute(routing),
         ]),
-    ];
+    ]);
 }
+
+/** One Bucket served under several Routes or Domains renders its Service each time; applied once. */
+const firstOfEach = (objects: readonly KubeObject[]): KubeObject[] => {
+    const key = (o: KubeObject) => `${o.apiVersion} ${o.kind} ${o.metadata.namespace ?? ''} ${o.metadata.name}`;
+    return objects.filter((o, i) => objects.findIndex((other) => key(other) === key(o)) === i);
+};

@@ -654,8 +654,9 @@ digest (#55).
   the Project's namespace, with a Middleware per Route that sets the Host
   header to the Bucket's name (how Garage's website endpoint finds the
   Bucket) and one that strips the prefix. It reaches Garage through an
-  ExternalName Service in that namespace, since Traefik does not route
-  across namespaces. A custom domain also gets a cert-manager Certificate
+  ExternalName Service per Bucket in that namespace, `bucket-<id>`, since
+  Traefik does not route across namespaces; one per Bucket, so Traefik
+  counts each Bucket's response bytes apart for metering (decision 112). A custom domain also gets a cert-manager Certificate
   there, which its IngressRoute uses. Unlike the Databases operator it
   deletes: objects of its own that the routing table no longer has (#84),
   a Certificate's Secret with it (#85).
@@ -756,22 +757,38 @@ digest (#55).
 
 ## Metering and billing
 
-- Usage events are written from the first deployment on, even with a single
-  customer, to an append-only table in the control plane's Database, keyed by
-  Project and Resource. A trigger rejects updates, deletes and truncation.
+- Usage events are written to an append-only table in the control plane's
+  Database, keyed by Project and Resource, by the control plane's metering
+  pass (`src/usage/meter.ts`, decision 112): every completed hour, once its
+  last scrapes have settled (5 minutes), becomes one event per Resource and
+  unit. The hours it has recorded are listed (`metered_hours`), so it goes
+  on where it stopped after a restart or an outage, back to 14 days
+  (Prometheus keeps 15), and the billing service rates a month only once
+  all its hours are metered. An hour is recorded only when every figure
+  could be read. A trigger rejects updates, deletes and truncation.
   Events have no foreign keys and carry the Account: the last hours of a
   deleted Resource or Project are still billed. There is at most one event
   per Resource, unit and interval start, so an emitter can retry without
   billing twice.
-- Units:
+- Units (GB is 2^30 bytes, as the sizes are); Resources are Databases,
+  Buckets, Services and Jobs:
   - `cpu_seconds`: actual consumption, summed over all pods of a Resource
-    (both Database instances, all replicas of a Service).
-  - `memory_gb_hours`: the configured limit, counted once, since it is
-    reserved.
+    (both Database instances and its Pooler, all replicas of a Service, all
+    runs of a Job), from cAdvisor's per-pod counter in Prometheus (the
+    pod-level cgroup, which covers gVisor's sandbox too).
+  - `memory_gb_hours`: the reserved size. A Database's from its row,
+    counted once, for the part of the hour it existed. A Service's and a
+    Job's from Prometheus: each running pod's memory request for the minutes
+    it ran, so replicas and runs count, and a deleted Service's last hour is
+    not lost (its row is gone); a rollout's extra pod counts while it runs.
   - `storage_gb_hours`: logical size, counted once: the volume size of a
-    Database, the bytes stored in a Bucket.
-  - `egress_gb`: Traefik's response bytes per router, mapped to the router's
-    Project and Resource.
+    Database from its row, the bytes stored in a Bucket as Garage counts
+    them when the hour is metered.
+  - `egress_gb`: Traefik's response bytes per backend Service over the
+    hour: `svc-<id>` is a Service, `bucket-<id>` a Bucket.
+- The billing service reads an Account's month through the internal API,
+  `GET /internal/v1/accounts/{id}/usage?month=YYYY-MM`: quantities summed
+  per Project, Resource and unit, with the hours metered so far.
 - Unit prices include the copies in the other Sites; the invoice shows what
   the customer configured or stored, not how many copies we keep.
 - Connections a Service opens to the internet are not metered or billed
@@ -1063,6 +1080,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 109 | Databases' volumes are thick logical volumes from TopoLVM in the volume group `openupstream` on each compute Site, placed through Kubernetes' storage capacity tracking (no scheduler extender), 10 GB of each group spare; on the dev cluster the group is a Hetzner Cloud Volume per compute VM | thin provisioning with an overprovision ratio; local-path on the dev cluster; a loop device on the VM's disk | one Database filling its volume never stops another, and nothing new needs watching; RAM, not disk, fills a node first (decision 1), so thin's density buys little while its full pool would stop every Database on the node. A cloud volume is a real block device, so the dev cluster sets up storage as the servers do. Costs: storage billed but unused still takes disk; about €0.005 an hour per dev session for two volumes. Replaces decision 52's local-path storage |
 | 110 | `PATCH …/databases/{id}` takes `memoryMb` (up or down) and `storageGb` (up only); growing either is refused while the Account has a Hold, and with 507 when TopoLVM reports no room; the API reports `resizing` until the Cluster's spec has the row's sizes and no volume is growing. A rolling restart restarts the primary in place after the standby, with a 30 s smart shutdown and PgBouncer's `server_login_retry` at 1 s | storage only; resizing by recreating the Database; switchover (8 s pause, but the primary leaves its Home site); switchover and back; a temporary third instance in the Home site (a full copy per resize) | a volume cannot shrink, and TopoLVM grows one online; memory changes are CloudNativePG's rolling restart; in place keeps the primary where Services expect it, and the shorter shutdown wait cut a resize from 4 to 1.5 minutes with one 12 s write pause (dev cluster, 2026-11-15). The state comes from comparing sizes, so no spec version is needed. Costs: the control plane lists CSIStorageCapacity and PVCs; the room check is racy (two requests can take the same space); a shrunk Database's data must fit its memory's working set; a smaller disk means restoring into a new Database |
 | 111 | Storage grows by itself, on by default and without a limit unless the customer sets `maxStorageGb` (`autoGrow: false` turns it off): once a Database's fullest volume is 90% used, a control-plane pass raises `storageGb` by half (at least 1 GB), never past the maximum and by less if the nodes have less room, through the same path as decision 110; not while the Account has a Hold. Usage comes from the platform's Prometheus (`kubelet_volume_stats_*`). The API also checks memory room before accepting a size | off unless set, with a maximum (RDS); +max(10%, 1 GB) at 10% free (RDS's step, scaled down); TopoLVM's pvc-autoresizer (grows PVCs behind CloudNativePG's and the row's back); the kubelet's stats API (needs `nodes/proxy`, which reaches every pod); Postgres sizes over SQL (misses WAL and temp files) | a full disk stops every write, and most customers never set a limit; Supabase grows by half at 90% too, fewer and larger steps than RDS. TopoLVM grows in seconds, so no cooldown is needed. Prometheus already scrapes every volume. The pass also grows the PVCs of a Cluster CloudNativePG stopped for a full disk (it waits for them without growing them), so the control plane may patch PVCs. Costs: storage is a ratchet and, without a limit, a runaway writer grows the bill until the node is full (`DatabaseVolumeFull` alerts); without Prometheus nothing grows; a held Account's Database fills up |
+| 112 | Metering: a control-plane pass turns every completed hour into one usage event per Resource and unit. CPU seconds of all Resources, and memory of Services and Jobs (running pods' requests), come from Prometheus (cAdvisor, kube-state-metrics); egress from Traefik's per-Service response bytes, with an ExternalName Service per Bucket so Buckets count apart; Databases' memory and storage from their rows; Buckets' storage from Garage. Jobs are Resources of their own. Metered hours are listed; the billing service reads monthly sums per Project, Resource and unit | the Kubernetes metrics API (a sampled rate, not a counter); daily events; raw events to the billing service; per-router byte counters (Traefik's router names carry a hash of the rule) | the counters are already scraped and exact over an hour; hourly events bill a Resource for the part of an hour it lived. Costs: billing depends on Prometheus (an outage longer than 14 days loses revenue, never overcharges); a Bucket's bytes are those at metering time, not the hour's average; a Project purged before its last hours are metered is not billed for them |
 
 ## Open questions
 
@@ -1163,8 +1181,8 @@ Decisions table once it is settled.
     delegating `_acme-challenge` to such a zone.
 18. **Billing rules with Mollie and lexoffice** (in the billing service,
     decision 77).
-    - How the billing service reads usage events: an internal API route per
-      Account and month, like the Holds routes.
+    - ~~How the billing service reads usage events~~: settled by decision
+      112, `GET /internal/v1/accounts/{id}/usage?month=`.
     - Small amounts: a month of an idle Database can cost less than the
       transaction fee or Mollie's minimum; carry it over, or a minimum
       charge.
@@ -1393,7 +1411,9 @@ or GmbH), a data processing agreement (AVV) template, the TOMs, and the list
 of subprocessors (Hetzner, OVHcloud, netcup, bunny.net, Mollie, lexoffice
 for invoices, Amazon Web Services for SES). Before the first invoice the
 billing run must also exist: the monthly rating, invoices through lexoffice
-and collection through Mollie, in the billing service (#74, #77).
+and collection through Mollie, in the billing service (#74, #77). Its
+input, metering and the internal usage route, is in this repository
+(decision 112).
 
 Until then sign-up on the hosted service is closed and `openupstream.com`
 serves the waitlist (#86). Passing the gate means: `SIGNUP=open`, the

@@ -4,7 +4,8 @@ import type { ControlPlaneKube } from '../kube.js';
 import { err, ok } from '../result.js';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
 import { GiB } from './capacity.js';
-import { type GrowthRow, type PrometheusSample, CAPACITY_QUERY, USED_QUERY, growthPass, planGrowth, prometheusClient, usageOf } from './growth.js';
+import { type PrometheusSample, prometheusClient } from '../prometheus.js';
+import { type GrowthRow, CAPACITY_QUERY, USED_QUERY, growthPass, planGrowth, usageOf } from './growth.js';
 
 const row = (overrides: Partial<GrowthRow> = {}): GrowthRow => ({
     id: 'a',

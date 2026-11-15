@@ -10,8 +10,8 @@ const routing: DomainRouting = {
     hostname: 'shop-a1b2c3d4.openupstream.app',
     kind: 'default',
     routes: [
-        { id: '33333333-3333-4333-8333-333333333333', pathPrefix: '/docs', kind: 'bucket', bucketName: 'shop-docs', spaFallback: false },
-        { id: '44444444-4444-4444-8444-444444444444', pathPrefix: '/', kind: 'bucket', bucketName: 'shop-site', spaFallback: true },
+        { id: '33333333-3333-4333-8333-333333333333', pathPrefix: '/docs', kind: 'bucket', bucketId: '66666666-6666-4666-8666-666666666666', bucketName: 'shop-docs', spaFallback: false },
+        { id: '44444444-4444-4444-8444-444444444444', pathPrefix: '/', kind: 'bucket', bucketId: '77777777-7777-4777-8777-777777777777', bucketName: 'shop-site', spaFallback: true },
     ],
 };
 const namespace = 'project-11111111-1111-4111-8111-111111111111';
@@ -22,24 +22,25 @@ test('a prefix matches itself and what is below it, not a longer segment', () =>
     assert.equal(matchOf('a.test', '/docs'), 'Host(`a.test`) && (Path(`/docs`) || PathPrefix(`/docs/`))');
 });
 
-test("a Project's namespace and NetworkPolicy, Garage's website endpoint and the shared Middlewares, then each Route's, then the IngressRoute", () => {
+test("a Project's namespace and NetworkPolicy and the shared Middlewares, then each Route's Bucket Service and Middlewares, then the IngressRoute", () => {
     const plan = planRoutes([routing], settings);
     assert.deepEqual(
         plan.map((o) => `${o.kind} ${o.metadata.name}`),
         [
             `Namespace ${namespace}`,
             'NetworkPolicy project-isolation',
-            'Service garage-web',
             'Middleware compress',
             'Middleware hsts',
+            'Service bucket-66666666-6666-4666-8666-666666666666',
             'Middleware route-33333333-3333-4333-8333-333333333333-bucket',
             'Middleware route-33333333-3333-4333-8333-333333333333-strip',
+            'Service bucket-77777777-7777-4777-8777-777777777777',
             'Middleware route-44444444-4444-4444-8444-444444444444-bucket',
             'IngressRoute domain-22222222-2222-4222-8222-222222222222',
         ],
     );
     assert.ok(plan.slice(2).every((o) => o.metadata.namespace === namespace && o.metadata.labels?.['openupstream.io/component'] === 'routes'));
-    assert.deepEqual(plan[2]?.['spec'], {
+    assert.deepEqual(plan[4]?.['spec'], {
         type: 'ExternalName',
         externalName: 'garage.garage.svc.cluster.local',
         ports: [{ name: 'web', port: 3902 }],
@@ -63,24 +64,25 @@ test('the IngressRoute sends each prefix to Garage with its Middlewares, on the 
                     { name: 'route-33333333-3333-4333-8333-333333333333-strip' },
                     { name: 'route-33333333-3333-4333-8333-333333333333-bucket' },
                 ],
-                services: [{ name: 'garage-web', port: 3902 }],
+                services: [{ name: 'bucket-66666666-6666-4666-8666-666666666666', port: 3902 }],
             },
             {
                 match: 'Host(`shop-a1b2c3d4.openupstream.app`)',
                 kind: 'Rule',
                 priority: 1000,
                 middlewares: [{ name: 'hsts' }, { name: 'compress' }, { name: 'route-44444444-4444-4444-8444-444444444444-bucket' }],
-                services: [{ name: 'garage-web', port: 3902 }],
+                services: [{ name: 'bucket-77777777-7777-4777-8777-777777777777', port: 3902 }],
             },
         ],
         tls: {},
     });
 });
 
-test('two Domains of one Project share its objects', () => {
-    const second = { ...routing, domainId: '55555555-5555-4555-8555-555555555555', routes: [] };
+test('two Domains of one Project share its objects, and a Bucket under both has one Service', () => {
+    const second = { ...routing, domainId: '55555555-5555-4555-8555-555555555555', routes: routing.routes.slice(1) };
     const kinds = planRoutes([routing, second], settings).map((o) => `${o.kind} ${o.metadata.name}`);
-    assert.equal(kinds.filter((k) => k === 'Service garage-web').length, 1);
+    assert.equal(kinds.filter((k) => k === 'Middleware hsts').length, 1);
+    assert.equal(kinds.filter((k) => k === 'Service bucket-77777777-7777-4777-8777-777777777777').length, 1);
     assert.equal(kinds.filter((k) => k.startsWith('IngressRoute')).length, 2);
 });
 
