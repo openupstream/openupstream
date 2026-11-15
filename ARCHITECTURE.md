@@ -370,6 +370,13 @@ operator may create and patch, not delete.
 `operators/scripts/reconcile-databases.ts` runs a single pass from this
 machine, for the bootstrap.
 
+The operators' image has two more entry points, each a DaemonSet on the
+compute nodes with no part in reconciling: the CPU agent
+(`operators/deploy/cpu-agent.yaml`, decision 115, see "Metering and
+billing") and the bandwidth agent (`operators/deploy/bandwidth-agent.yaml`,
+decision 122, see "Project isolation"), for which the image carries
+`iproute2`.
+
 The control plane and operators images are built by GitHub Actions and
 pushed to GHCR as public packages (`ghcr.io/openupstream/{control-plane,
 operators}`, tagged with the commit), and clusters run them pinned by
@@ -593,7 +600,14 @@ digest (#55).
   Rollouts start the new pod before stopping the old one. Requests and
   limits are both the configured memory and CPU, so the memory billed is
   reserved and no Service takes another's CPU; CPU is billed as measured,
-  not as reserved (Open question 23). Pods mount no
+  not as reserved (Open question 23). A pod may write 2 GiB to its
+  container's filesystem and logs (`ephemeral-storage`, decision 121),
+  the same for every Service and Job and not billed: the kubelet evicts a
+  pod above it, so a Service's pod is replaced by a new, empty one and a
+  Job's run ends. Nothing a container writes there outlives its pod
+  anyway; data belongs in a Database or a Bucket. The scheduler counts
+  100 MiB of it per pod, so the limit is not reserved on the node's disk.
+  Pods mount no
   ServiceAccount token, read `project-secrets` with `envFrom` and do not
   start before it exists; a version of the Project's Secrets on the pod
   template rolls the Service when they change. The control plane records
@@ -735,9 +749,9 @@ digest (#55).
   CloudNativePG's pods only (`cnpg.io/cluster`): Prometheus's pods in
   `monitoring` may reach their metrics ports, 9187 and 9127 (decision
   106). No other pod of a Project, and no other pod in `monitoring`.
-- Egress to the internet is allowed, with a per-pod bandwidth limit (not
-  set yet). A Service's pods may connect only to DNS, their own Project's
-  namespace (its Databases' Poolers) and public addresses: the
+- Egress to the internet is allowed. A Service's pods may connect only to
+  DNS, their own Project's namespace (its Databases' Poolers) and public
+  addresses: the
   NetworkPolicy `service-egress` (#93) leaves out every loopback, private,
   shared and link-local range, which holds the cluster's pod and service
   networks, the nodes' private addresses and metadata endpoints. Their
@@ -752,6 +766,28 @@ digest (#55).
   node that joins is left out at once, and a pass that cannot list them
   applies nothing. The `kubernetes` Service's address is rewritten to a
   node's 6443 before the policy sees it, so it is closed with them.
+- Every pod of a Service or Job is limited to 300 Mbit/s in each
+  direction (decision 122), all its traffic counted, to its Databases and
+  from Traefik too. The operators set the annotations
+  `kubernetes.io/ingress-bandwidth` and `kubernetes.io/egress-bandwidth`,
+  from which the `bandwidth` plugin in k3s's CNI configuration puts a token
+  bucket on the pod's interface on the node when the pod starts; it works
+  the same under gVisor. Four pods at that limit still fill a 1 Gbit/s
+  uplink, and the CNI gives each bucket a burst of 512 MB, so the bandwidth
+  agent (`operators/src/bandwidth-agent`, a DaemonSet on the compute
+  nodes) looks every second: it sets a new pod's burst to a tenth of a
+  second of its limit, and while the node's uplink carries more than 80%
+  of its speed in a direction it lowers every customer pod's limit in that
+  direction to the fair share. Pods below the share keep their traffic,
+  the pods at their limit split the rest equally, never below 10 Mbit/s,
+  and all are back at 300 once there is room. The platform's own traffic
+  (Database replication, Traefik, Garage) is never limited; the pods give
+  way to it. The agent takes the uplink's speed from its interface on
+  every pass, or from `UPLINK_MBIT` (set through `platform.sh`) where that
+  reports none or more than the line carries; without a speed it only
+  sets bursts. A limit follows down from a change of 1% and up from 5%. It runs on the node's
+  network as root with NET_ADMIN and no other capability, uses neither the
+  Kubernetes API nor a port, and sets every pod back to 300 when it stops.
 - One-off jobs are an API call; customers cannot spawn containers from inside
   containers.
 - Deleting a Project deletes its namespace and every Resource, Secret and
@@ -1147,6 +1183,8 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 118 | The two NVMe disks of each compute server are mirrored by software RAID 1 in two parts: a small one for the operating system and the rest, left empty by the installer, as the volume group `openupstream` (`infra/topolvm/vgcreate.sh /dev/md…`) | both disks in the volume group without RAID | a dead disk costs a disk swap; without RAID it takes down every Database instance on it, their primaries fail over and each instance is rebuilt from the other Site while its Database runs on one copy. Two parts keep the system's disk use and the Databases' apart, and a default install would give the whole mirror to `/`. Costs: half the room for Databases, and changing it later means reinstalling the node |
 | 119 | The production servers are ordered one after another: OVHcloud first on a monthly term, to measure FSN1↔Limburg RTT with WireGuard over a few days, then Hetzner and netcup. The OVHcloud server is a RISE-2 or RISE-S with 64 GB and two NVMe disks; the order waits until one is in stock in Limburg | all three at once; what Limburg had in stock on 2026-11-15: RISE-1 (32 GB only), Rise-Game-1 with 64 GB (game range, its DDoS filter in front of WireGuard's UDP), RISE-2 with 128 GB (about €53/month more), ADVANCE-2 (about €100/month more); another provider for this Site, checked the same day: IONOS (64 GB for €69/month only with a 4-core CPU from 2017 and hardware RAID, 8 cores only on a 12-month term or for €171), webtropia in Düsseldorf (from €160), Cherry Servers in Frankfurt (from $186), Contabo (out of stock) | if Limburg's latency does not hold, only one month of one server is lost and ADR-0002 can still change; both compute Sites get the same RAM, since each must carry the other's Services (decision 33's cost stays). Another provider would also need its latency measured, a new ADR and the Site's name `ovh-lim` changed. Costs: production waits for OVHcloud's stock, for which it gives no date |
 | 120 | The API is under `/api` of the platform's host, `https://openupstream.com/api/v1/…`, for the dashboard, `oup` and the SDK alike; `api.openupstream.com` is gone, which supersedes that part of decision 67. Traefik routes `/api/*` to the control plane and strips the prefix, so its routes still start at `/v1`. madAuth's session cookie stays host-only (no `COOKIE_DOMAIN`), and the API reads it only on requests with `Sec-Fetch-Site: same-origin`; the API sets no CORS headers | the cookie for the whole platform domain with CORS and an `Origin` check (decision 116 as first built); the API at both `api.` and `/api`; madAuth also served on `api.` with a hand-over of the session by a one-time code after every sign-in and renewal; a short-lived access token from madAuth for the page; the control plane mounted under `/api` itself | browsers know only a host-only cookie or one for a domain and all its subdomains: the latter sent production's session token to every host under `openupstream.com`, dev clusters at `dev.openupstream.com` included, which could replay it. Host-only, no subdomain ever sees it; same origin needs no CORS and no preflights; one address for every client, one DNS record and one certificate name fewer per installation. A page cannot set `Sec-Fetch-Site`, and every current browser sends it (Safari since 16.4), to HTTPS and localhost origins only; without it the answer is 401, so the dashboard needs HTTPS, as madAuth does in production. Stripping at the ingress leaves the control plane the same locally, in tests and on its internal port. Costs: the paths `/api`, `/auth` and `/.well-known` are taken on the dashboard's host, and the API shares that host's ingress, apart only by path and its own rate limit; `Location` headers name `/v1/…` without the prefix; SDK 0.2 and `oup` 0.1 default to the old host and need `baseUrl` or `OUP_API_URL` |
+| 121 | Every pod of a Service or Job may write 2 GiB to its container's filesystem and logs: an `ephemeral-storage` limit of 2 GiB with a request of 100 MiB, the same for all, not billed and not a field of the API | the limit also as the request (reserved: the scheduler never promises more disk than a node has); a `diskMb` field per Service and Job; no limit, relying on the kubelet's eviction under disk pressure | without a limit one customer's container could fill a node's system disk, and the kubelet then evicts other customers' pods. DigitalOcean App Platform fixes 4 GiB, Azure Container Apps 1 to 8 GiB by vCPU, Cloud Run counts files against memory. gVisor keeps a container's writes in a file in the container's root on the host, which the kubelet counts: a gVisor pod that wrote 2.4 GB was evicted within seconds (dev cluster, 2026-11-15). A request must be given, since Kubernetes takes the limit as the request otherwise, and reserving 2 GiB per pod would cap a node at its system disk's size / 2 GiB, a disk decision 118 keeps small. Costs: not reserved, so many pods filling up at once can still put a node under disk pressure, where the kubelet evicts the pods furthest above their request first; a customer who needs more scratch space has no setting for it; an evicted pod whose process exits 0 on the kill is reported as succeeded (seen on that test's pod), so such a Job run looks successful |
+| 122 | Every pod of a Service or Job is limited to 300 Mbit/s each way by the annotations `kubernetes.io/{ingress,egress}-bandwidth`, which the `bandwidth` plugin of k3s's CNI enforces, and a bandwidth agent, a DaemonSet on the compute nodes from the operators' image, sets each bucket's burst to 0.1 s of its limit and, while the node's uplink is above 80% of its speed, lowers all customer pods' limits to the fair share (max-min: pods below it keep their traffic, the others split the rest, at least 10 Mbit/s) | 100 Mbit/s fixed without an agent; egress only; a limit that grows with the CPU; the fixed limit alone; a fair queue (cake, fq_codel) on the uplink instead of an agent; Cilium's bandwidth manager | one pod could fill a node's uplink for everyone on it. The annotation is all that k3s needs and holds from a pod's first packet, also under gVisor, but the CNI reads it once, when the pod starts, and containerd asks for the largest burst there is: a pod at 300 Mbit/s received 2.1 Gbit/s for two seconds and sent above its limit for as long as measured (dev cluster, 2026-11-15); with the burst set by hand it held 296 Mbit/s both ways from the first second. 300 is generous for a web app, and four pods at it fill 1 Gbit/s, so the limit must come down under load: a fair queue shares by connection, not by customer, and Cilium would replace flannel and k3s's policy controller for a limit that is fixed per pod as well. None of Azure Container Apps, Fargate, Cloud Run, DigitalOcean App Platform or Fly.io documents a limit per container. Costs: a component of our own on every compute node that runs as root with NET_ADMIN on the node's network, which can change the node's whole network configuration (decision 90 installed gVisor by script to leave nothing privileged running; this is the one exception, with no API access, no port and a read-only filesystem); a pod started while the agent is down has the 512 MB burst until it is back, and a lowered limit stays until then; the uplink's speed is one setting for all nodes where the interfaces do not report it (`UPLINK_MBIT` of `platform.sh`), and without one nothing is lowered; a pod's bucket counts all its traffic, so what stays on the node (to a Pooler, from Traefik) is limited with the rest while the uplink is full, whoever fills it; limiting what a pod receives does not stop the packets from arriving at the node |
 
 ## Open questions
 
@@ -1511,7 +1549,20 @@ Decisions table once it is settled.
    such a container `terminated` during the back-off, so it is the
    current log). No `Forbidden` or other error in the control plane's
    log; `kubectl auth can-i` confirmed it may list pods, read their logs
-   and read a node, not list nodes.
+   and read a node, not list nodes. The disk and bandwidth limits
+   (decisions 121 and 122), tested on the single-node dev cluster
+   (2026-11-15, k3s 1.36) with gVisor pods made by hand with a Service's
+   annotations and limits, and the bandwidth agent as its DaemonSet from
+   the built image with `UPLINK_MBIT=100`: a pod that wrote 2.4 GB was
+   evicted within seconds, and its QoS class stayed Guaranteed; a new
+   pod's burst was 3.75 MB a moment after it started, and it then held
+   296 Mbit/s each way from the first second (2.1 Gbit/s for two seconds
+   with the CNI's burst); two pods downloading from the internet were cut
+   to 39 Mbit/s each with the uplink at 79.8 Mbit/s, one alone to 79; the
+   limits were back at 300 a second after the downloads ended, and at
+   once when the DaemonSet was deleted during a cut. Left: the limits on
+   a Service deployed through the API, the cut in the sending direction
+   (the same code), and more than one node.
 4. Containers, Cron job and One-off job modes. Done: Jobs API (#95,
    ADR-0003), the Jobs operator and runs, `oup job` (#96). Tested on the
    dev cluster (2026-11-01) with `oup job`: a Cron job every minute in

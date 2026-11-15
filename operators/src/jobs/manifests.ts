@@ -10,8 +10,8 @@
  * owner of its runs, so deleting it deletes them.
  *
  * Every run is one pod under the `gvisor` RuntimeClass with the image
- * pinned by digest, never retried, stopped at the Job's timeout and kept
- * 24 hours after it finished. Its pod prefers the Job's Site and goes to
+ * pinned by digest and a Service's disk and bandwidth limits, never
+ * retried, stopped at the Job's timeout and kept 24 hours after it finished. Its pod prefers the Job's Site and goes to
  * the other one when that one is down.
  */
 import { JOB_ID_LABEL, PROJECT_REGISTRY_AUTH, PROJECT_SECRETS, SPEC_VERSION_ANNOTATION, type JobRow, jobObjectName, jobSpecVersion } from '@openupstream/sdk';
@@ -21,8 +21,10 @@ import {
     COMPONENT_LABEL,
     LABELS,
     MANAGED_BY,
+    POD_BANDWIDTH_ANNOTATIONS,
     ZONE_LABEL,
     customerEgressPolicy,
+    customerResources,
     databaseEnv,
     projectNamespace,
     projectObjectsFor,
@@ -60,7 +62,6 @@ const labels = (projectId: string) => ({
 const cronJob = (row: JobRow): KubeObject => {
     const { project, job } = row;
     const runLabels = { ...labels(project.id), [JOB_ID_LABEL]: job.id, [JOB_NAME_LABEL]: job.name };
-    const resources = { cpu: `${job.cpuMillicores}m`, memory: `${job.memoryMb}Mi` };
     return {
         apiVersion: 'batch/v1',
         kind: 'CronJob',
@@ -88,7 +89,7 @@ const cronJob = (row: JobRow): KubeObject => {
                     activeDeadlineSeconds: job.timeoutSeconds,
                     ttlSecondsAfterFinished: FINISHED_RUN_TTL_SECONDS,
                     template: {
-                        metadata: { labels: runLabels },
+                        metadata: { labels: runLabels, annotations: POD_BANDWIDTH_ANNOTATIONS },
                         spec: {
                             restartPolicy: 'Never',
                             runtimeClassName: RUNTIME_CLASS,
@@ -111,8 +112,8 @@ const cronJob = (row: JobRow): KubeObject => {
                                     ...(job.args === null ? {} : { args: job.args }),
                                     envFrom: [{ secretRef: { name: PROJECT_SECRETS } }],
                                     ...(row.databases.length === 0 ? {} : { env: databaseEnv(row.project.id, row.databases) }),
-                                    // As for a Service: the limits are what is reserved and billed.
-                                    resources: { requests: resources, limits: resources },
+                                    // As for a Service: CPU and memory as reserved and billed, and the disk limit.
+                                    resources: customerResources(job),
                                     securityContext: { allowPrivilegeEscalation: false },
                                 },
                             ],

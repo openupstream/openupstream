@@ -94,9 +94,22 @@ test('the pod runs the pinned image under gVisor, with the Project Secrets and r
     const [container] = pod.spec.containers;
     assert.equal(container?.image, `ghcr.io/acme/api@${digest}`);
     assert.deepEqual(container?.envFrom, [{ secretRef: { name: 'project-secrets' } }]);
-    assert.deepEqual(container?.resources, { requests: { cpu: '250m', memory: '256Mi' }, limits: { cpu: '250m', memory: '256Mi' } });
     assert.deepEqual(container?.ports, [{ name: 'http', containerPort: 8080, protocol: 'TCP' }]);
     assert.equal(pod.metadata.annotations['openupstream.io/secrets-version'], 'v1');
+});
+
+test("the pod's CPU and memory are reserved in full; its disk is limited to 2 GiB, of which the scheduler counts 100 MiB", () => {
+    const [container] = podOf(planServices([row()], NODE_BLOCKS).find((o) => o.kind === 'Deployment')).spec.containers;
+    assert.deepEqual(container?.resources, {
+        requests: { cpu: '250m', memory: '256Mi', 'ephemeral-storage': '100Mi' },
+        limits: { cpu: '250m', memory: '256Mi', 'ephemeral-storage': '2Gi' },
+    });
+});
+
+test('the pod is limited to 300 Mbit/s each way by the annotations the CNI reads', () => {
+    const { annotations } = podOf(planServices([row()], NODE_BLOCKS).find((o) => o.kind === 'Deployment')).metadata;
+    assert.equal(annotations['kubernetes.io/ingress-bandwidth'], '300M');
+    assert.equal(annotations['kubernetes.io/egress-bandwidth'], '300M');
 });
 
 test('a single replica prefers its Site; more are spread over both compute Sites', () => {
