@@ -140,6 +140,12 @@ export interface ControlPlaneKube {
      * undefined when there are none (storage other than TopoLVM).
      */
     storageCapacity(): Promise<Result<Map<string, number> | undefined, string>>;
+    /**
+     * Memory a new pod could still request on the node: its allocatable
+     * memory less what its running and pending pods request; undefined when
+     * the node is gone.
+     */
+    memoryFree(nodeName: string): Promise<Result<number | undefined, string>>;
     /** The nodes holding the volumes of the Cluster `name` (its PVCs' selected node). */
     volumeNodes(namespace: string, name: string): Promise<Result<string[], string>>;
     /** The Site (zone label) of a node; undefined when it has none or is gone. */
@@ -252,7 +258,7 @@ interface CronJobObject {
 
 interface PodObject {
     metadata: { name: string; deletionTimestamp?: Date };
-    spec?: { nodeName?: string; containers?: { name: string }[] };
+    spec?: { nodeName?: string; containers?: { name: string; resources?: { requests?: Record<string, string> } }[] };
     status?: {
         containerStatuses?: { name: string; restartCount?: number; state?: { running?: unknown; terminated?: unknown; waiting?: unknown } }[];
     };
@@ -410,6 +416,34 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
                 return node === undefined || bytes === undefined ? [] : [[node, bytes] as const];
             });
             return ok(entries.length === 0 ? undefined : new Map(entries));
+        },
+        memoryFree: async (nodeName) => {
+            const node = await within(
+                api.read<{ apiVersion: string; kind: string; metadata: { name: string }; status?: { allocatable?: Record<string, string> } }>({
+                    apiVersion: 'v1',
+                    kind: 'Node',
+                    metadata: { name: nodeName },
+                }),
+                timeoutMs,
+            );
+            if (!node.ok) {
+                return node.error.status === NOT_FOUND ? ok(undefined) : err(node.error.message);
+            }
+            const allocatable = bytesOf(node.value.status?.allocatable?.['memory'] ?? '');
+            if (allocatable === undefined) {
+                return err(`node ${nodeName} states no allocatable memory`);
+            }
+            const pods = await within(
+                api.list<PodObject>('v1', 'Pod', undefined, undefined, undefined, undefined, `spec.nodeName=${nodeName},status.phase!=Succeeded,status.phase!=Failed`),
+                timeoutMs,
+            );
+            if (!pods.ok) {
+                return err(pods.error.message);
+            }
+            const requested = pods.value.items
+                .flatMap((pod) => pod.spec?.containers ?? [])
+                .reduce((sum, container) => sum + (bytesOf(container.resources?.requests?.['memory'] ?? '0') ?? 0), 0);
+            return ok(allocatable - requested);
         },
         volumeNodes: async (namespace, name) => {
             const result = await within(

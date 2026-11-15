@@ -55,6 +55,8 @@ export interface Config {
     /** Our own hostnames live under it (decision 67); like the customer domain, no Account may claim it. */
     readonly platformDomain: string;
     readonly cleanupIntervalMs: number;
+    /** The platform's Prometheus, where storage auto-grow reads volume usage (decision 111); without it, nothing grows by itself. */
+    readonly prometheusUrl: string | undefined;
     /** The waitlist page while hosted sign-up is closed (decision 86); undefined: not served. */
     readonly waitlist?: WaitlistConfig;
 }
@@ -196,6 +198,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
         customerDomain,
         platformDomain,
         cleanupIntervalMs: cleanupSeconds * 1000,
+        prometheusUrl: env['PROMETHEUS_URL'] || undefined,
         ...(waitlist === undefined ? {} : { waitlist }),
     });
 }

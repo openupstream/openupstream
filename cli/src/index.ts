@@ -62,7 +62,7 @@ import {
     strayFlag,
 } from './jobs.js';
 import { formatLogEntry, parseTail } from './logs.js';
-import { DATABASE_DEFAULTS, formatDatabases, planRestore } from './databases.js';
+import { DATABASE_DEFAULTS, formatDatabases, growthOf, growthSettings, planRestore } from './databases.js';
 import { type DesiredService, formatServices, planServiceDeploy, waitUntilRunning } from './services.js';
 import { apiAccess } from './session.js';
 import { readSecretValue } from './stdin.js';
@@ -74,9 +74,9 @@ const USAGE = `usage:
   oup link <project>
   oup pg list
   oup pg show <name>
-  oup pg create <name> [--memory <MB>] [--storage <GB>] [--site hetzner-fsn1|ovh-lim] [--no-wait]
-  oup pg restore <source> <name> [--time <RFC 3339>] [--memory <MB>] [--storage <GB>] [--site …] [--no-wait]
-  oup pg resize <name> [--memory <MB>] [--storage <GB>] [--no-wait]
+  oup pg create <name> [--memory <MB>] [--storage <GB>] [--site hetzner-fsn1|ovh-lim] [--max-storage <GB> | --no-auto-grow] [--no-wait]
+  oup pg restore <source> <name> [--time <RFC 3339>] [--memory <MB>] [--storage <GB>] [--site …] [--max-storage <GB> | --no-auto-grow] [--no-wait]
+  oup pg resize <name> [--memory <MB>] [--storage <GB>] [--max-storage <GB> | --no-max-storage] [--auto-grow | --no-auto-grow] [--no-wait]
   oup pg delete <name>
   oup service list
   oup service show <name>
@@ -108,6 +108,8 @@ creates a new Database that starts as a copy of <source> at --time, or at
 the latest point its backups reach; <source> keeps running. Its size and
 Site default to the source's. A deleted Database can be restored by its id
 (oup pg delete prints it) within the backup retention window, with --storage.
+Storage grows by itself by half once 90% full, without a limit unless
+--max-storage sets one; --no-auto-grow leaves it to pg resize.
 pg resize grows the storage online; a new memory size restarts the
 instances one after the other (writes pause for seconds).
 
@@ -241,9 +243,9 @@ const PG_FLAGS = {
     list: [],
     show: [],
     delete: [],
-    create: ['memory', 'storage', 'site', 'no-wait'],
-    restore: ['memory', 'storage', 'site', 'no-wait', 'time'],
-    resize: ['memory', 'storage', 'no-wait'],
+    create: ['memory', 'storage', 'site', 'no-wait', 'max-storage', 'no-auto-grow'],
+    restore: ['memory', 'storage', 'site', 'no-wait', 'time', 'max-storage', 'no-auto-grow'],
+    resize: ['memory', 'storage', 'no-wait', 'max-storage', 'no-max-storage', 'auto-grow', 'no-auto-grow'],
 } as const satisfies Record<string, readonly string[]>;
 
 async function pg(args: string[]): Promise<void> {
@@ -258,6 +260,10 @@ async function pg(args: string[]): Promise<void> {
             site: { type: 'string' },
             time: { type: 'string' },
             'no-wait': { type: 'boolean' },
+            'max-storage': { type: 'string' },
+            'no-max-storage': { type: 'boolean' },
+            'auto-grow': { type: 'boolean' },
+            'no-auto-grow': { type: 'boolean' },
         },
     });
     if (verb === undefined || !Object.hasOwn(PG_FLAGS, verb)) {
@@ -278,6 +284,10 @@ async function pg(args: string[]): Promise<void> {
     const memoryMb = count('memory', values.memory);
     const storageGb = count('storage', values.storage);
     const homeSite = values.site !== undefined && isSite(values.site) ? values.site : undefined;
+    const growth = growthSettings(values);
+    if (!growth.ok) {
+        return fail(growth.reason);
+    }
     const { client, project } = await inProject(values.project);
     const databases = await client.listDatabases(project.id);
     if (!databases.ok) {
@@ -302,18 +312,22 @@ async function pg(args: string[]): Promise<void> {
         }
         case 'resize': {
             const database = found();
-            if (memoryMb === undefined && storageGb === undefined) {
-                return fail('oup pg resize needs --memory, --storage or both');
+            if (memoryMb === undefined && storageGb === undefined && Object.keys(growth.settings).length === 0) {
+                return fail('oup pg resize needs --memory, --storage, --max-storage, --no-max-storage, --auto-grow or --no-auto-grow');
             }
             const resized = await client.updateDatabase(project.id, database.id, {
                 ...(memoryMb === undefined ? {} : { memoryMb }),
                 ...(storageGb === undefined ? {} : { storageGb }),
+                ...growth.settings,
             });
             if (!resized.ok) {
                 return fail(resized.error.message);
             }
-            console.log(`Resizing ${name}: ${database.memoryMb} → ${resized.value.memoryMb} MB, ${database.storageGb} → ${resized.value.storageGb} GB`);
-            if (values['no-wait'] === true) {
+            console.log(
+                `${name}: ${database.memoryMb} → ${resized.value.memoryMb} MB, ${database.storageGb} → ${resized.value.storageGb} GB, storage grows ${growthOf(resized.value)}`,
+            );
+            // Only the growth settings changed: nothing to wait for.
+            if (values['no-wait'] === true || (memoryMb === undefined && storageGb === undefined)) {
                 return;
             }
             return waitReady(client, project.id, database.id, name as string);
@@ -342,12 +356,12 @@ async function pg(args: string[]): Promise<void> {
             if (!planned.ok) {
                 return fail(planned.reason);
             }
-            const created = await client.createDatabase(project.id, planned.input);
+            const created = await client.createDatabase(project.id, { ...planned.input, ...growth.settings });
             if (!created.ok) {
                 return fail(created.error.message);
             }
             const { name: createdName, memoryMb: mb, storageGb: gb, homeSite: site, id } = created.value;
-            console.log(`${verb === 'create' ? 'Created' : 'Restoring into'} ${createdName}: ${mb} MB, ${gb} GB, primary in ${site}`);
+            console.log(`${verb === 'create' ? 'Created' : 'Restoring into'} ${createdName}: ${mb} MB, ${gb} GB (grows ${growthOf(created.value)}), primary in ${site}`);
             if (values['no-wait'] === true) {
                 return;
             }

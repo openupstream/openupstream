@@ -237,6 +237,8 @@ export const PLATFORM = {
         homeSite: 'hetzner-fsn1',
         memoryMb: 512,
         storageGb: 5,
+        autoGrow: true,
+        maxStorageGb: null,
         createdAt: '2026-10-17T00:00:00Z',
     },
     authDatabase: {
@@ -246,6 +248,8 @@ export const PLATFORM = {
         homeSite: 'hetzner-fsn1',
         memoryMb: 512,
         storageGb: 2,
+        autoGrow: true,
+        maxStorageGb: null,
         createdAt: '2026-10-17T00:00:00Z',
     },
     /** The billing service's state; seeded only where a billing service runs (BILLING_CALLERS). */
@@ -256,6 +260,8 @@ export const PLATFORM = {
         homeSite: 'hetzner-fsn1',
         memoryMb: 512,
         storageGb: 2,
+        autoGrow: true,
+        maxStorageGb: null,
         createdAt: '2026-10-20T00:00:00Z',
     },
 } as const satisfies {

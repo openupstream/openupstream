@@ -55,6 +55,13 @@ export interface Database {
     homeSite: Site;
     memoryMb: number;
     storageGb: number;
+    /**
+     * Whether storage grows by itself (decision 111): by half once a volume
+     * is 90% used, up to maxStorageGb. False: only resizing grows it.
+     */
+    autoGrow: boolean;
+    /** How far auto-grow may take storageGb; null: no limit but the nodes' free space. */
+    maxStorageGb: number | null;
     createdAt: Timestamp;
     /** Set when the Database started as a copy of another one. */
     restoredFrom?: DatabaseRestore;
@@ -100,6 +107,10 @@ export interface DatabaseInput {
     homeSite?: Site;
     memoryMb: number;
     storageGb: number;
+    /** Default true. */
+    autoGrow?: boolean;
+    /** Default null: no limit. At least storageGb. */
+    maxStorageGb?: number | null;
     restoreFrom?: DatabaseRestore;
 }
 
@@ -111,6 +122,9 @@ export interface DatabaseInput {
 export interface DatabasePatch {
     memoryMb?: number;
     storageGb?: number;
+    autoGrow?: boolean;
+    /** null removes the limit. */
+    maxStorageGb?: number | null;
 }
 
 /**

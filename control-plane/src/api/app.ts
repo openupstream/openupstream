@@ -55,7 +55,7 @@ import type pg from 'pg';
 import { z } from 'zod';
 import { createAccount, holdsOf, listAccounts } from '../accounts/store.js';
 import { type BucketRecord, createBucket, deleteBucket, getBucket, listBuckets } from '../buckets/store.js';
-import { roomForGrowth, roomForNew } from '../databases/capacity.js';
+import { GiB, MiB, roomForGrowth, roomForNew } from '../databases/capacity.js';
 import { checkRestore, restoreCheckMessage } from '../databases/restore.js';
 import { createDatabase, deleteDatabase, getDatabase, getRestoreSource, listDatabases, updateDatabase } from '../databases/store.js';
 import type { TxtLookup } from '../domains/dns.js';
@@ -143,6 +143,8 @@ const databaseInput = z.strictObject({
     homeSite: z.enum(COMPUTE_SITES).optional(),
     memoryMb: z.int().min(DATABASE_MIN_MEMORY_MB),
     storageGb: z.int().min(1),
+    autoGrow: z.boolean().optional(),
+    maxStorageGb: z.int().min(1).nullable().optional(),
     restoreFrom: z
         .strictObject({
             databaseId: z.string().regex(UUID),
@@ -150,14 +152,19 @@ const databaseInput = z.strictObject({
             targetTime: z.iso.datetime({ offset: true }).optional(),
         })
         .optional(),
+}).refine((input) => input.maxStorageGb == null || input.maxStorageGb >= input.storageGb, {
+    message: 'at least storageGb',
+    path: ['maxStorageGb'],
 });
 
 const databasePatch = z
     .strictObject({
         memoryMb: z.int().min(DATABASE_MIN_MEMORY_MB).optional(),
         storageGb: z.int().min(1).optional(),
+        autoGrow: z.boolean().optional(),
+        maxStorageGb: z.int().min(1).nullable().optional(),
     })
-    .refine((patch) => patch.memoryMb !== undefined || patch.storageGb !== undefined, 'memoryMb or storageGb');
+    .refine((patch) => Object.keys(patch).length > 0, 'memoryMb, storageGb, autoGrow or maxStorageGb');
 
 const bucketInput = z.strictObject({
     name: z.string().regex(BUCKET_NAME, 'a hostname label of 3 to 63 lowercase letters, digits and hyphens'),
@@ -301,34 +308,61 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     };
     const isComputeSite = (site: string): site is Site => (COMPUTE_SITES as readonly string[]).includes(site);
     /**
-     * Whether the compute Sites have room for `storageGb` more of this
-     * Database (decision 109): a new one needs it in each Site; a grow on the
-     * nodes that hold its volumes. A message for the 507 when not; undefined
-     * when there is room, the storage reports no capacity, or Kubernetes
-     * cannot be asked: then the size is accepted, as without the check, so a
-     * slow API server does not stop Databases from being created.
+     * Whether the compute Sites have room for the Database at `wanted`
+     * (decisions 109 and 110): a new one needs its storage and memory on a
+     * node in each Site; a grow needs the extra on the nodes holding its
+     * instances. A message for the 507 when not; undefined when there is
+     * room, the storage is not TopoLVM (then the compute nodes are not
+     * known), or Kubernetes cannot be asked: then the size is accepted, as
+     * without the check, so a slow API server does not stop Databases from
+     * being created.
      */
-    const noRoom = async (storageGb: number, existing?: Database): Promise<{ readonly value: string | undefined }> => {
-        const checked = await roomCheck(storageGb, existing);
+    const noRoom = async (wanted: { readonly storageGb: number; readonly memoryMb: number }, existing?: Database): Promise<{ readonly value: string | undefined }> => {
+        const checked = await roomCheck(wanted, existing);
         if (!checked.ok) {
-            deps.log?.({ msg: 'cannot read the storage capacity; size accepted unchecked', database: existing?.id, error: checked.error });
+            deps.log?.({ msg: 'cannot read the free room; size accepted unchecked', database: existing?.id, error: checked.error });
         }
         return { value: checked.ok ? checked.value : undefined };
     };
-    const roomCheck = async (storageGb: number, existing?: Database): Promise<Result<string | undefined, string>> => {
-        const capacity = await kube.storageCapacity();
-        if (!capacity.ok || capacity.value === undefined) {
-            return capacity.ok ? ok(undefined) : capacity;
+    const memoryRoom = async (nodes: readonly string[]): Promise<Result<Map<string, number>, string>> => {
+        const free = await Promise.all(nodes.map(async (node) => [node, await kube.memoryFree(node)] as const));
+        const failed = free.find(([, bytes]) => !bytes.ok);
+        if (failed !== undefined && !failed[1].ok) {
+            return err(failed[1].error);
         }
-        const nodes = existing === undefined ? ok([]) : await kube.volumeNodes(projectNamespace(existing.projectId), clusterName(existing));
-        if (!nodes.ok) {
-            return nodes;
+        return ok(new Map(free.flatMap(([node, bytes]): [string, number][] => (bytes.ok && bytes.value !== undefined ? [[node, bytes.value]] : []))));
+    };
+    const roomCheck = async (
+        wanted: { readonly storageGb: number; readonly memoryMb: number },
+        existing?: Database,
+    ): Promise<Result<string | undefined, string>> => {
+        const storage = await kube.storageCapacity();
+        if (!storage.ok || storage.value === undefined) {
+            return storage.ok ? ok(undefined) : storage;
         }
-        if (existing !== undefined && nodes.value.length > 0) {
-            const grow = roomForGrowth(capacity.value, nodes.value, storageGb - existing.storageGb);
-            return ok(grow.ok ? undefined : `no room to grow ${existing.name} by ${storageGb - existing.storageGb} GB now; at most ${grow.error.largestGb} GB more`);
+        const instanceNodes = existing === undefined ? ok([]) : await kube.volumeNodes(projectNamespace(existing.projectId), clusterName(existing));
+        if (!instanceNodes.ok) {
+            return instanceNodes;
         }
-        const sites = await Promise.all([...capacity.value.keys()].map(async (node) => [node, await kube.nodeSite(node)] as const));
+        if (existing !== undefined && instanceNodes.value.length > 0) {
+            const extraGb = Math.max(0, wanted.storageGb - existing.storageGb);
+            const extraMb = Math.max(0, wanted.memoryMb - existing.memoryMb);
+            const disk = roomForGrowth(storage.value, instanceNodes.value, extraGb * GiB);
+            if (!disk.ok) {
+                return ok(`no room to grow ${existing.name} by ${extraGb} GB now; at most ${Math.floor(disk.error.largest / GiB)} GB more`);
+            }
+            if (extraMb === 0) {
+                return ok(undefined);
+            }
+            const memory = await memoryRoom(instanceNodes.value);
+            if (!memory.ok) {
+                return memory;
+            }
+            const fits = roomForGrowth(memory.value, instanceNodes.value, extraMb * MiB);
+            return ok(fits.ok ? undefined : `no room for ${extraMb} MB more memory for ${existing.name} now; at most ${Math.floor(fits.error.largest / MiB)} MB more`);
+        }
+        const nodes = [...storage.value.keys()];
+        const sites = await Promise.all(nodes.map(async (node) => [node, await kube.nodeSite(node)] as const));
         const failed = sites.find(([, site]) => !site.ok);
         if (failed !== undefined && !failed[1].ok) {
             return err(failed[1].error);
@@ -336,8 +370,16 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         const siteOf = new Map<string, Site>(
             sites.flatMap(([node, site]): [string, Site][] => (site.ok && site.value !== undefined && isComputeSite(site.value) ? [[node, site.value]] : [])),
         );
-        const room = roomForNew(capacity.value, siteOf, storageGb);
-        return ok(room.ok ? undefined : `no room for ${storageGb} GB in both compute Sites now; at most ${room.error.largestGb} GB`);
+        const disk = roomForNew(storage.value, siteOf, wanted.storageGb * GiB);
+        if (!disk.ok) {
+            return ok(`no room for ${wanted.storageGb} GB in both compute Sites now; at most ${Math.floor(disk.error.largest / GiB)} GB`);
+        }
+        const memory = await memoryRoom(nodes);
+        if (!memory.ok) {
+            return memory;
+        }
+        const fits = roomForNew(memory.value, siteOf, wanted.memoryMb * MiB);
+        return ok(fits.ok ? undefined : `no room for ${wanted.memoryMb} MB of memory in both compute Sites now; at most ${Math.floor(fits.error.largest / MiB)} MB`);
     };
     const insufficientStorage = (c: Context<Env>, message: string) => c.json({ error: message }, 507);
 
@@ -450,13 +492,13 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (!input.success) {
             return c.json(invalid(input.error.issues), 400);
         }
-        const { homeSite, restoreFrom, ...rest } = input.data;
+        const { homeSite, restoreFrom, autoGrow, maxStorageGb, ...rest } = input.data;
         // A held Account learns that first, not after the storage or backup checks.
         const holds = await holdsOf(pool, project.accountId);
         if (holds.length > 0) {
             return held(c, holds);
         }
-        const room = await noRoom(rest.storageGb);
+        const room = await noRoom(rest);
         if (room.value !== undefined) {
             return insufficientStorage(c, room.value);
         }
@@ -479,6 +521,8 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         const created = await createDatabase(pool, project.id, {
             ...rest,
             ...(homeSite === undefined ? {} : { homeSite }),
+            ...(autoGrow === undefined ? {} : { autoGrow }),
+            ...(maxStorageGb === undefined ? {} : { maxStorageGb }),
             ...(restoreFrom === undefined
                 ? {}
                 : {
@@ -518,9 +562,13 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (!patch.success) {
             return c.json(invalid(patch.error.issues), 400);
         }
-        const { memoryMb, storageGb } = patch.data;
+        const { memoryMb, storageGb, autoGrow, maxStorageGb } = patch.data;
         if (storageGb !== undefined && storageGb < database.storageGb) {
             return c.json({ error: `storage only grows: ${database.name} has ${database.storageGb} GB, and a volume cannot shrink` }, 400);
+        }
+        const maximum = maxStorageGb === undefined ? database.maxStorageGb : maxStorageGb;
+        if (maximum !== null && maximum < (storageGb ?? database.storageGb)) {
+            return c.json({ error: `maxStorageGb must be at least the storage, ${storageGb ?? database.storageGb} GB` }, 400);
         }
         // Growing costs more, so a held Account may only shrink memory (decision 78).
         const grows = (memoryMb ?? 0) > database.memoryMb || (storageGb ?? 0) > database.storageGb;
@@ -531,8 +579,8 @@ export function createApi(deps: ApiDeps): Hono<Env> {
                 return held(c, holds);
             }
         }
-        if (storageGb !== undefined && storageGb > database.storageGb) {
-            const room = await noRoom(storageGb, database);
+        if (grows) {
+            const room = await noRoom({ storageGb: storageGb ?? database.storageGb, memoryMb: memoryMb ?? database.memoryMb }, database);
             if (room.value !== undefined) {
                 return insufficientStorage(c, room.value);
             }
@@ -540,6 +588,8 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         const updated = await updateDatabase(pool, database.projectId, database.id, {
             ...(memoryMb === undefined ? {} : { memoryMb }),
             ...(storageGb === undefined ? {} : { storageGb }),
+            ...(autoGrow === undefined ? {} : { autoGrow }),
+            ...(maxStorageGb === undefined ? {} : { maxStorageGb }),
         });
         return updated === undefined ? c.json(notFound, 404) : c.json(await details(updated));
     });

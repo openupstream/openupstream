@@ -25,6 +25,7 @@ const fakes = () => {
         readRecoveryWindow: async () => ok(undefined),
         storageCapacity: async () => ok(undefined),
         volumeNodes: async () => ok([]),
+        memoryFree: async () => ok(undefined),
         readDeployment: async () => ok(undefined),
         readCronJob: async () => ok(undefined),
         createJob: async () => err('not in this test'),

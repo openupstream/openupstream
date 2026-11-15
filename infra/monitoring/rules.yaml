@@ -48,6 +48,32 @@ spec:
           annotations:
             summary: Database {{ $labels.cluster }} in {{ $labels.namespace }} cannot archive its WAL
             description: Every archive attempt in the last 15 minutes failed; backups and point-in-time restore fall behind.
+        - alert: DatabaseVolumeFull
+          # Storage grows by itself at 90% (decision 111), so a volume past
+          # 95% for long has not: auto-grow is off, at the customer's
+          # maximum, the Account is held, or the node has no room. At 100%
+          # Postgres stops writing. Also fires for a runaway writer that
+          # auto-grow keeps up with until the node is full.
+          expr: |
+            max by (namespace, persistentvolumeclaim) (
+              kubelet_volume_stats_used_bytes{namespace=~"project-.*", persistentvolumeclaim=~"db-.*"}
+              / kubelet_volume_stats_capacity_bytes{namespace=~"project-.*", persistentvolumeclaim=~"db-.*"}
+            ) > 0.95
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: Database volume {{ $labels.persistentvolumeclaim }} in {{ $labels.namespace }} is {{ $value | humanizePercentage }} full
+            description: It did not grow by itself; check its auto-grow setting and maximum, the Account's Holds and the node's free space (the control plane logs `growth:`).
+        - alert: DatabaseVolumeResizeFailed
+          # A grow the API or the growth pass accepted that TopoLVM could not
+          # carry out (two requests took the same room): the Database reads
+          # `resizing` and keeps its old size.
+          expr: max by (namespace, persistentvolumeclaim) (kube_persistentvolumeclaim_status_condition{namespace=~"project-.*", condition=~"ControllerResizeError|NodeResizeError", status="true"}) == 1
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: Database volume {{ $labels.persistentvolumeclaim }} in {{ $labels.namespace }} cannot grow
+            description: TopoLVM refused the resize, most likely for lack of room on the node; it retries and completes once there is room.
     - name: object-storage
       rules:
         - alert: GarageUnhealthy

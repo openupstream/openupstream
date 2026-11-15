@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { DatabaseDetails } from '@openupstream/sdk';
-import { formatDatabases, planRestore } from './databases.js';
+import { formatDatabases, growthOf, growthSettings, planRestore } from './databases.js';
 
 const orders: DatabaseDetails = {
     id: '55555555-5555-4555-8555-555555555555',
@@ -10,6 +10,8 @@ const orders: DatabaseDetails = {
     homeSite: 'ovh-lim',
     memoryMb: 1024,
     storageGb: 20,
+    autoGrow: true,
+    maxStorageGb: null,
     createdAt: '2026-11-01T00:00:00Z',
     state: 'ready',
     connection: { host: 'db-x-pooler', port: 5432, database: 'app', user: 'app' },
@@ -51,5 +53,21 @@ test('--time needs its zone', () => {
 
 test('the list shows what a Database was restored from', () => {
     const [line] = formatDatabases([{ ...orders, restoredFrom: { databaseId: 'abc', targetTime: '2026-11-10T09:30:00.000Z' } }]);
-    assert.match(line ?? '', /^orders\s+ready\s+ovh-lim\s+1024 MB\s+20 GB  restored from abc at 2026-11-10T09:30:00.000Z$/);
+    assert.match(line ?? '', /^orders\s+ready\s+ovh-lim\s+1024 MB\s+20 GB  auto\s+restored from abc at 2026-11-10T09:30:00.000Z$/);
+});
+
+test('auto-grow: auto, with a maximum, or manual', () => {
+    assert.equal(growthOf(orders), 'auto');
+    assert.equal(growthOf({ autoGrow: true, maxStorageGb: 40 }), 'auto ≤ 40 GB');
+    assert.equal(growthOf({ autoGrow: false, maxStorageGb: 40 }), 'manual');
+});
+
+test('the growth flags become the settings they name, nothing else', () => {
+    assert.deepEqual(growthSettings({}), { ok: true, settings: {} });
+    assert.deepEqual(growthSettings({ 'max-storage': '40' }), { ok: true, settings: { maxStorageGb: 40 } });
+    assert.deepEqual(growthSettings({ 'no-max-storage': true, 'auto-grow': true }), { ok: true, settings: { autoGrow: true, maxStorageGb: null } });
+    assert.deepEqual(growthSettings({ 'no-auto-grow': true }), { ok: true, settings: { autoGrow: false } });
+    assert.equal(growthSettings({ 'max-storage': '40', 'no-max-storage': true }).ok, false);
+    assert.equal(growthSettings({ 'auto-grow': true, 'no-auto-grow': true }).ok, false);
+    assert.equal(growthSettings({ 'max-storage': '2.5' }).ok, false);
 });
