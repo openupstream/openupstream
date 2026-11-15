@@ -54,6 +54,8 @@ export interface Config {
     readonly customerDomain: string;
     /** Our own hostnames live under it (decision 67); like the customer domain, no Account may claim it. */
     readonly platformDomain: string;
+    /** The origins of the dashboard, whose browsers may call the API with the session cookie (decision 114). */
+    readonly dashboardOrigins: readonly string[];
     readonly cleanupIntervalMs: number;
     /** The platform's Prometheus, where storage auto-grow reads volume usage (decision 111); without it, nothing grows by itself. */
     readonly prometheusUrl: string | undefined;
@@ -163,6 +165,13 @@ export function configFrom(env: Env): Result<Config, string[]> {
     if (!Number.isFinite(cleanupSeconds) || cleanupSeconds < 1) {
         problems.push('CLEANUP_INTERVAL_SECONDS must be a number of seconds, at least 1');
     }
+    // By default the platform domain, which is checked above.
+    const setOrigins = list(env['DASHBOARD_ORIGINS']);
+    const dashboardOrigins = setOrigins.length > 0 ? setOrigins : [`https://${platformDomain}`];
+    const badOrigin = setOrigins.find((origin) => !URL.canParse(origin) || new URL(origin).origin !== origin);
+    if (badOrigin !== undefined) {
+        problems.push(`DASHBOARD_ORIGINS must be origins like https://openupstream.com, not ${badOrigin}`);
+    }
     const waitlist = waitlistFrom(env, problems);
     if (
         problems.length > 0 ||
@@ -197,6 +206,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
         kek: kek.value,
         customerDomain,
         platformDomain,
+        dashboardOrigins,
         cleanupIntervalMs: cleanupSeconds * 1000,
         prometheusUrl: env['PROMETHEUS_URL'] || undefined,
         ...(waitlist === undefined ? {} : { waitlist }),

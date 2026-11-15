@@ -140,6 +140,7 @@ async function main(): Promise<void> {
     internal.listen(config.value.internalPort);
 
     const madauthKeys = keysFrom(auth.jwks === undefined ? { jwksUrl: new URL('/.well-known/jwks.json', auth.madauthUrl).href } : { jwks: auth.jwks });
+    const sessions = sessionVerifier({ issuer: auth.issuer, keys: madauthKeys });
     const api = createApi({
         pool,
         kube,
@@ -151,8 +152,9 @@ async function main(): Promise<void> {
         lookupTxt: txtLookup(),
         newAccountHolds: config.value.newAccountHolds,
         ...(auth.cliClientId === undefined ? {} : { cliLogin: { issuer: auth.issuer, clientId: auth.cliClientId } }),
+        dashboard: { origins: config.value.dashboardOrigins, sessions },
         authenticate: madauthAuthenticator(
-            sessionVerifier({ issuer: auth.issuer, keys: madauthKeys }),
+            sessions,
             apiKeyVerifier(auth.madauthUrl),
             accessTokenVerifier({ issuer: auth.issuer, keys: madauthKeys, clientIds: auth.cliClientId === undefined ? [] : [auth.cliClientId] }),
         ),

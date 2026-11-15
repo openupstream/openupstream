@@ -209,7 +209,14 @@ deleted, an Account with a Hold creates no Resource, and usage events are
 append-only. Its tests run against a real
 Postgres in Docker. The API types are in `sdk/src/model.ts`.
 
-The dashboard (`dashboard/`) is a Next.js app on the same API.
+The dashboard (`dashboard/`) is a Next.js app on the same API, built as
+static files (#114): every page renders in the browser, which calls the API
+itself through `@openupstream/sdk`. It signs Members in and up with
+madAuth's dialog (`@madauth/web`, e-mail and password), shows the approval
+dialog of `oup login` when opened with `?madauth_device=<code>`, creates an
+Account on the first visit (#62) and lists, creates and deletes Projects;
+the pages for Resources follow. It finds the API at `api.` in front of its
+own hostname, so one build serves every installation.
 
 Sign-in for Members and API keys for `oup` and the SDK come from
 [madAuth](https://madauth.com), self-hosted on the cluster as its published
@@ -227,7 +234,8 @@ front of each. madAuth needs its Database for every sign-in: while that
 Database fails over, sign-in is unavailable (53 s measured on the dev
 cluster).
 
-The API accepts three kinds of madAuth credentials (#64, #87):
+The API accepts three kinds of madAuth credentials as `Authorization:
+Bearer` (#64, #87), and the session also as madAuth's cookie (#114):
 
 - a session token: a JWT (ES256, `typ: madauth-session+jwt`, issuer
   checked, no audience) verified against madAuth's JWKS, fetched from madAuth
@@ -255,6 +263,18 @@ The API accepts three kinds of madAuth credentials (#64, #87):
   sign-in in CI. An admin registers the CLI once
   (`infra/madauth/register-cli.sh`); the approval page at madAuth's
   `loginUrl` comes with the dashboard's first page.
+
+The dashboard's JavaScript never holds a credential: madAuth keeps the
+session token in an HttpOnly cookie (`madauth_session`, for the Domain
+`COOKIE_DOMAIN` names, the platform domain), which the browser sends to
+`api.<platform domain>` as well. The API reads the cookie only on a request
+whose `Origin` header is one of the dashboard's origins
+(`DASHBOARD_ORIGINS`, by default `https://<platform domain>`), takes it for
+a session token only, never an API key, and answers only those origins
+with CORS headers that allow credentials. A page of another site can make
+the browser send the cookie but cannot set that header, so it is answered
+401 like a request without a credential (CSRF); a Project's site cannot
+either, since customer hostnames are on another registrable domain (#31).
 
 The subject is a madAuth user, which can be a Member of several Accounts.
 A signed-in user creates an Account with `POST /v1/accounts` and becomes its
@@ -1083,6 +1103,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 111 | Storage grows by itself, on by default and without a limit unless the customer sets `maxStorageGb` (`autoGrow: false` turns it off): once a Database's fullest volume is 90% used, a control-plane pass raises `storageGb` by half (at least 1 GB), never past the maximum and by less if the nodes have less room, through the same path as decision 110; not while the Account has a Hold. Usage comes from the platform's Prometheus (`kubelet_volume_stats_*`). The API also checks memory room before accepting a size | off unless set, with a maximum (RDS); +max(10%, 1 GB) at 10% free (RDS's step, scaled down); TopoLVM's pvc-autoresizer (grows PVCs behind CloudNativePG's and the row's back); the kubelet's stats API (needs `nodes/proxy`, which reaches every pod); Postgres sizes over SQL (misses WAL and temp files) | a full disk stops every write, and most customers never set a limit; Supabase grows by half at 90% too, fewer and larger steps than RDS. TopoLVM grows in seconds, so no cooldown is needed. Prometheus already scrapes every volume. The pass also grows the PVCs of a Cluster CloudNativePG stopped for a full disk (it waits for them without growing them), so the control plane may patch PVCs. Costs: storage is a ratchet and, without a limit, a runaway writer grows the bill until the node is full (`DatabaseVolumeFull` alerts); without Prometheus nothing grows; a held Account's Database fills up |
 | 112 | A single-node dev cluster ([ADR-0004](docs/adr/0004-single-node-dev-cluster.md)): two layouts, `multi-node` (one node per Site) and `single-node` (one node standing in for every Site, development only), recorded once in the ConfigMap `openupstream-system/cluster-layout` by `install-multi-node.sh` or `install-single-node.sh`, which refuse a cluster without a node in each Site or with more than one node; every install step reads the layout. In single-node Garage and Loki keep one copy, a Database runs one instance and one PgBouncer (`layout` in the DatabaseConfig) on k3s's local-path storage instead of TopoLVM, so the API's room check finds no capacity and accepts sizes unchecked, the platform's per-Site components run once, and the node carries the label of `hetzner-fsn1`, so the API and placement stay unchanged. `infra/dev-cluster` installs onto any k3s cluster (`k3s-single-node.sh` sets one machine up over SSH); the Hetzner VM scripts move to `infra/dev-cluster-hetzner`. `dns.sh` reads the compute nodes' addresses from Kubernetes (ExternalIP first), so a home node's private or Tailscale address (`NODE_ADDRESS` in `k3s-single-node.sh`) goes into public DNS; the domains are required in single-node and may be names inside a bunny.net zone, certificates come from Let's Encrypt through DNS-01, by default from the production issuer, an exception to decision 70 | three VMs on one machine (manifests unchanged); TopoLVM on a single node from the free space of the OS's volume group (needs a room check per existing Site, and Database volumes next to the root volume); k3d (three k3s nodes as containers); detecting the layout from the node count; a local CA with sslip.io or a home DNS name; the API refusing `ovh-lim` in single-node | the three-node rules only protect against a machine failing when the nodes are different machines: three VMs on one box need about 24 GB of RAM and two or three copies of every byte for redundancy that is not there, while one node with one copy needs about a third of that. k3d shares that cost and may not run gVisor inside a container. A recorded layout cannot flip when a three-node cluster has temporarily lost two nodes, and a step run again on its own (e.g. `platform.sh` for `CLI_CLIENT_ID`) installs the same way. Public DNS pointing at a private address and DNS-01 give real certificates with no inbound connection and no CA to trust. Costs: no failover and no test of placement or the third Site on such a cluster, Database sizes neither reserved nor checked, storage growth (decision 110) never completing and automatic growth (decision 111) off there, downtime when its only Database instance restarts, no certificates for custom domains (HTTP-01 cannot reach it), and routers with DNS rebinding protection need an exception for the domain. Tested on a Minisforum mini PC on Ubuntu 26.04 reached over Tailscale (2026-11-15, k3s 1.36): 21 pods running, one instance per platform Database, DNS pointing at the Tailscale address, the API and madAuth answering with Let's Encrypt certificates (after decision 113) |
 | 113 | On nodes with AppArmor, containers run under our copy of containerd's profile `cri-containerd.apparmor.d` (`infra/apparmor`), containerd 2.3's own plus signal and ptrace rules for the stacked label `cri-containerd.apparmor.d//&unconfined`; installed into `/etc/apparmor.d` and loaded before k3s by `k3s-single-node.sh`, on every run. Delete it once k3s ships containerd's fix (containerd #14487) | `kernel.apparmor_restrict_unprivileged_unconfined=0`; the Databases' pods `Unconfined`; staying on Ubuntu 24.04 | Ubuntu 26.04 stacks every container's profile on `unconfined`, and containerd's rules name only the unstacked label, so a container's processes cannot signal each other: on the Minisforum (2026-11-15) every Postgres failed with `could not signal for checkpoint: Permission denied` and stayed in recovery. The copy fixes exactly that rule, as upstream does, and keeps the containers confined; the sysctl would switch off Ubuntu's restriction on unprivileged user namespaces for every program on the machine, and `Unconfined` drops AppArmor from the Databases. Costs: our copy lags behind changes to containerd's profile until it is deleted, and it must be in place before k3s first starts. The Hetzner dev cluster runs Ubuntu 24.04 and does not need it yet; production nodes on 26.04 will |
+| 114 | The dashboard is static files that call the API from the browser, authenticated by madAuth's session cookie: the API reads `madauth_session` (madAuth's `COOKIE_DOMAIN` = the platform domain) on requests whose `Origin` is one of `DASHBOARD_ORIGINS` (default `https://<platform domain>`), as a session token only, and answers those origins with CORS headers that allow credentials; the SDK takes `session: 'cookie'` in place of a token | the dashboard's server reading the cookie and calling the API with it as Bearer (a backend-for-frontend); an OIDC access token held by the page's JavaScript, like `oup`'s | madAuth's session cookie is HttpOnly, so a page cannot send it as Bearer, and decision 67 already put the API where the cookie reaches it. No Node server to run for the dashboard: it can be served like any static site, and log streams (#103) go straight to the API. No token a script could read (XSS), and a session carries the e-mail address that creating an Account needs, which an access token does not. Costs: the API has a CORS and CSRF surface of its own, held by the `Origin` check, which every browser sets and no page can forge; a browser extension or a script injected into the dashboard itself can still call the API as the Member |
 
 ## Open questions
 
@@ -1209,6 +1230,15 @@ Decisions table once it is settled.
 21. ~~**Capacity beyond storage.**~~ Settled with decision 111: the API
     also checks memory before accepting a size, and a volume grow that
     fails anyway fires `DatabaseVolumeResizeFailed`.
+22. **Where the dashboard is served from.** It is static files (decision
+    114) and runs in development (`npm run dev -w dashboard`), but nothing
+    serves it on a cluster yet; while sign-up is closed the waitlist has
+    its paths at the platform domain (decision 86). Options: a Bucket of
+    the platform Project behind a Domain at the platform domain, deployed
+    with `oup site deploy` (our own product; the routing table then has to
+    leave `/auth/*` and `/.well-known/*` to madAuth), or an nginx container
+    with the files. Until it is served, `oup login` has no approval page
+    at madAuth's `loginUrl`.
 
 ## Build order
 
@@ -1295,7 +1325,12 @@ Decisions table once it is settled.
    deploy uploaded nothing, a new build only its changed files with the
    index last and deleted the old bundle, and the served headers matched.
    Left: the approval page
-   for `oup login` at madAuth's `loginUrl`, the production DNS zones.
+   for `oup login` at madAuth's `loginUrl`, which the dashboard has
+   (decision 114; run locally 2026-11-15 against madAuth 0.7.0 and the
+   control plane: sign-up with the code from the e-mail, the session
+   cookie accepted by the API from the dashboard's origin, an Account,
+   Projects created and deleted) but nothing serves on a cluster yet
+   (Open question 22); the production DNS zones.
 3. Containers, Service mode. Done on the dev cluster (2026-10-31): the
    NetworkPolicy `project-isolation` in every Project namespace (#89),
    gVisor on the compute nodes and the RuntimeClass `gvisor` (#90),

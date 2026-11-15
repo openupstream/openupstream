@@ -45,11 +45,19 @@ import type {
 
 export const DEFAULT_API_URL = 'https://api.openupstream.com';
 
-export interface ClientOptions {
-    baseUrl?: string;
-    /** A madAuth session token, an access token of `oup`, or one of the user's madAuth API keys (`madauth_…`). */
-    token: string;
-}
+export type ClientOptions = { baseUrl?: string } & (
+    | {
+          /** A madAuth session token, an access token of `oup`, or one of the user's madAuth API keys (`madauth_…`). */
+          token: string;
+      }
+    | {
+          /**
+           * In a browser on the dashboard's origin: no token, the browser
+           * sends madAuth's session cookie along (`credentials: 'include'`).
+           */
+          session: 'cookie';
+      }
+);
 
 /** Where the CLI signs in; asked before there is a token. 404 when the platform has no CLI client. */
 export async function cliLogin(baseUrl: string = DEFAULT_API_URL): Promise<ApiResult<CliLogin>> {
@@ -66,11 +74,12 @@ export type ApiResult<T> = { readonly ok: true; readonly value: T } | { readonly
 
 export class OpenUpstreamClient {
     readonly baseUrl: string;
-    readonly #token: string;
+    /** The credential of every request: the token as a header, or the browser's cookie. */
+    readonly #auth: { readonly headers: Record<string, string>; readonly credentials?: 'include' };
 
     constructor(options: ClientOptions) {
         this.baseUrl = options.baseUrl ?? DEFAULT_API_URL;
-        this.#token = options.token;
+        this.#auth = 'token' in options ? { headers: { authorization: `Bearer ${options.token}` } } : { headers: {}, credentials: 'include' };
     }
 
     async health(): Promise<{ ok: boolean }> {
@@ -301,7 +310,7 @@ export class OpenUpstreamClient {
     /** A GET whose answer is NDJSON, one entry per line, read as it arrives. */
     async #stream<T>(path: string, signal?: AbortSignal): Promise<ApiResult<AsyncIterable<T>>> {
         const response = await fetch(`${this.baseUrl}${path}`, {
-            headers: { authorization: `Bearer ${this.#token}` },
+            ...this.#auth,
             ...(signal === undefined ? {} : { signal }),
         }).then(
             (value) => ({ ok: true as const, value }),
@@ -327,8 +336,9 @@ export class OpenUpstreamClient {
     async #call<T>(method: string, path: string, body?: unknown): Promise<ApiResult<T>> {
         const response = await fetch(`${this.baseUrl}${path}`, {
             method,
+            ...this.#auth,
             headers: {
-                authorization: `Bearer ${this.#token}`,
+                ...this.#auth.headers,
                 ...(body === undefined ? {} : { 'content-type': 'application/json' }),
             },
             ...(body === undefined ? {} : { body: JSON.stringify(body) }),

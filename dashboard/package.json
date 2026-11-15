@@ -4,7 +4,25 @@
   "description": "openupstream web dashboard",
   "license": "AGPL-3.0-only",
   "private": true,
+  "type": "module",
   "scripts": {
-    "build": "echo 'dashboard: not scaffolded yet (Next.js lands with the Postgres product)'"
+    "dev": "NEXT_TELEMETRY_DISABLED=1 next dev",
+    "build": "NEXT_TELEMETRY_DISABLED=1 next build",
+    "typecheck": "next typegen && tsc -p tsconfig.json --noEmit",
+    "test": "node --test --import tsx 'src/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@madauth/web": "0.7.6",
+    "@openupstream/sdk": "^0.2.0",
+    "next": "16.4.6",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
   }
 }

@@ -34,6 +34,7 @@ import { fakeStorage } from '../testing/storage.js';
 import { createApi } from './app.js';
 import { type Authenticate, SESSION_TOKEN_TYPE, madauthAuthenticator, sessionVerifier } from './auth.js';
 
+const DASHBOARD = 'https://openupstream.test';
 const ISSUER = 'https://openupstream.test';
 
 /** API keys as madAuth would verify them: `madauth_<subject>_<read|write|none>`. */
@@ -213,6 +214,7 @@ before(async () => {
         storage,
         ...domainDeps,
         authenticate: madauthAuthenticator(sessionVerifier({ issuer: ISSUER, keys: jwks }), apiKeys),
+        dashboard: { origins: [DASHBOARD], sessions: sessionVerifier({ issuer: ISSUER, keys: jwks }) },
         logStream: { pollMs: 20, maxMs: 2_000 },
     });
     const accounts = await db.pool.query<{ id: string }>(`insert into accounts (name) values ('A'), ('B') returning id`);
@@ -238,6 +240,67 @@ const call = async (method: string, path: string, subject?: string, body?: unkno
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+
+describe('the dashboard: the session cookie from its origin', () => {
+    const withCookie = async (method: string, origin: string | undefined, value?: string) =>
+        api.request('/v1/projects', {
+            method,
+            headers: {
+                cookie: `other=1; madauth_session=${value ?? (await token('alice'))}`,
+                ...(origin === undefined ? {} : { origin }),
+                ...(method === 'POST' ? { 'content-type': 'application/json' } : {}),
+            },
+            ...(method === 'POST' ? { body: JSON.stringify({ accountId: accountA, name: 'from-the-dashboard' }) } : {}),
+        });
+
+    test('counts as the credential, and the answer may be read by the dashboard', async () => {
+        const response = await withCookie('GET', DASHBOARD);
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('access-control-allow-origin'), DASHBOARD);
+        assert.equal(response.headers.get('access-control-allow-credentials'), 'true');
+        const created = await withCookie('POST', DASHBOARD);
+        assert.equal(created.status, 201);
+        const { id } = (await created.json()) as { id: string };
+        assert.equal((await call('DELETE', `/v1/projects/${id}`, 'alice')).status, 202);
+    });
+
+    test('from another origin or without one (CSRF): 401, and no CORS headers', async () => {
+        for (const origin of ['https://evil.test', `${DASHBOARD}.evil.test`, undefined]) {
+            for (const method of ['GET', 'POST']) {
+                const response = await withCookie(method, origin);
+                assert.equal(response.status, 401, `${method} from ${origin}`);
+                assert.equal(response.headers.get('access-control-allow-origin'), null);
+            }
+        }
+    });
+
+    test('must be a session: an API key or a forged token in the cookie is 401', async () => {
+        assert.equal((await withCookie('GET', DASHBOARD, 'madauth_key')).status, 401);
+        assert.equal((await withCookie('GET', DASHBOARD, await token('alice', { key: otherKey }))).status, 401);
+    });
+
+    test('the preflight is answered without a credential, for the dashboard only', async () => {
+        const preflight = (origin: string) =>
+            api.request('/v1/projects', {
+                method: 'OPTIONS',
+                headers: { origin, 'access-control-request-method': 'POST', 'access-control-request-headers': 'content-type' },
+            });
+        const allowed = await preflight(DASHBOARD);
+        assert.equal(allowed.status, 204);
+        assert.equal(allowed.headers.get('access-control-allow-origin'), DASHBOARD);
+        assert.match(allowed.headers.get('access-control-allow-methods') ?? '', /DELETE/);
+        assert.equal((await preflight('https://evil.test')).headers.get('access-control-allow-origin'), null);
+    });
+
+    test('a bearer token works from the dashboard origin too; without the dashboard setting no cookie is read', async () => {
+        const bearer = await api.request('/v1/projects', { headers: { origin: DASHBOARD, authorization: `Bearer ${await token('alice')}` } });
+        assert.equal(bearer.status, 200);
+        const plain = createApi({ pool: db.pool, kube, storage, ...domainDeps, authenticate: async () => err({ kind: 'invalid', reason: 'none' }) });
+        const response = await plain.request('/v1/projects', { headers: { origin: DASHBOARD, cookie: `madauth_session=${await token('alice')}` } });
+        assert.equal(response.status, 401);
+        assert.equal(response.headers.get('access-control-allow-origin'), null);
+    });
+});
 
 describe('authentication', () => {
     test('health needs no token', async () => {

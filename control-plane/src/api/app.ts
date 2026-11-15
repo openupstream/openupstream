@@ -50,6 +50,8 @@ import {
 } from '@openupstream/sdk';
 import { randomUUID } from 'node:crypto';
 import { type Context, Hono } from 'hono';
+import { getCookie } from 'hono/cookie';
+import { cors } from 'hono/cors';
 import { stream } from 'hono/streaming';
 import type pg from 'pg';
 import { z } from 'zod';
@@ -103,6 +105,13 @@ export interface ApiDeps {
     readonly lookupTxt: TxtLookup;
     /** Where `oup login` signs in (decision 87); without it, `GET /v1/login` answers 404. */
     readonly cliLogin?: { readonly issuer: string; readonly clientId: string };
+    /**
+     * The dashboard (decision 114): browsers on these origins may call the
+     * API, and their madAuth session cookie counts as the credential, checked
+     * by `sessions`. Without it the API answers no other origin and reads no
+     * cookie.
+     */
+    readonly dashboard?: { readonly origins: readonly string[]; readonly sessions: Authenticate };
     /** The Holds every new Account starts with (ARCHITECTURE.md, decision 78). */
     readonly newAccountHolds?: readonly string[];
     /** How often a followed log stream lists the pods again, and how long it lasts at most (default LOG_LIMITS). */
@@ -115,6 +124,9 @@ const logQuery = z.strictObject({
     tail: z.string().regex(/^\d{1,5}$/, 'a whole number').transform(Number).pipe(z.number().max(LOG_LIMITS.maxTailLines)).optional(),
     follow: z.enum(['true', 'false']).optional(),
 });
+
+/** madAuth's session cookie: the session token, HttpOnly, for the Domain madAuth's `COOKIE_DOMAIN` names. */
+export const SESSION_COOKIE = 'madauth_session';
 
 /** Set by the Kubernetes Job controller on a run's pods: the run's name. */
 const RUN_POD_LABEL = 'batch.kubernetes.io/job-name';
@@ -389,6 +401,22 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         connection: databaseConnection(database),
     });
 
+    // The dashboard's browser calls from another origin (decision 114). Only
+    // its origins get an answer a script may read, and may send the cookie.
+    const dashboardOrigins = new Set(deps.dashboard?.origins ?? []);
+    if (deps.dashboard !== undefined) {
+        app.use(
+            '/v1/*',
+            cors({
+                origin: (origin) => (dashboardOrigins.has(origin) ? origin : null),
+                credentials: true,
+                allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+                allowHeaders: ['content-type'],
+                maxAge: 600,
+            }),
+        );
+    }
+
     app.get('/v1/health', (c) => c.json({ ok: true }));
 
     // Before the authentication below: the CLI asks this before it has a token.
@@ -396,10 +424,17 @@ export function createApi(deps: ApiDeps): Hono<Env> {
 
     app.use('/v1/*', async (c, next) => {
         const token = /^Bearer (\S+)$/.exec(c.req.header('authorization') ?? '')?.[1];
-        if (token === undefined) {
+        // The session cookie counts only with the dashboard's Origin header,
+        // which a page cannot forge: another site's page that makes the
+        // browser send the cookie along (CSRF) is answered like no credential.
+        const cookie =
+            token === undefined && deps.dashboard !== undefined && dashboardOrigins.has(c.req.header('origin') ?? '')
+                ? getCookie(c, SESSION_COOKIE)
+                : undefined;
+        if (token === undefined && cookie === undefined) {
             return c.json({ error: 'bearer token required' }, 401);
         }
-        const identity = await authenticate(token);
+        const identity = token !== undefined ? await authenticate(token) : await deps.dashboard!.sessions(cookie!);
         if (!identity.ok) {
             if (identity.error.kind === 'unavailable') {
                 deps.log?.({ msg: 'cannot verify tokens', error: identity.error.reason });

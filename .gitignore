@@ -22,3 +22,5 @@ operators/src/generated/
 # throwaway dev cluster state (SSH key, k3s token, kubeconfig)
 infra/dev-cluster/.state/
 infra/dev-cluster-hetzner/.state/
+dashboard/out/
+next-env.d.ts
