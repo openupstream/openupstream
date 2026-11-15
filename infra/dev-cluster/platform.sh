@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Bootstraps the platform on the dev cluster, after operators.sh, ingress.sh
-# and garage.sh:
+# and garage.sh. On a single-node cluster madAuth and the control plane run
+# once instead of once per compute Site, and Databases get no standby
+# (decision 112):
 #
 # 1. the platform Project's Databases (PLATFORM in sdk/src/internal.ts):
 #    the control plane's and madAuth's, with one reconcile pass from this
@@ -31,17 +33,17 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 ROOT=$(git rev-parse --show-toplevel)
+source ./lib.sh
+load_layout
+load_domains
 IMAGE_TAG=${IMAGE_TAG:-$(git rev-parse HEAD)}
-CONFIG=$PWD/database-config.json
+# The DatabaseConfig for the cluster's layout (database_config in lib.sh).
+CONFIG=$(mktemp)
+trap 'rm -f "$CONFIG"' EXIT
+database_config >"$CONFIG"
 PLATFORM_NS=project-00000000-0000-4000-8000-000000000002
 PLATFORM_DB=db-00000000-0000-4000-8000-000000000003
 AUTH_DB=db-00000000-0000-4000-8000-000000000004
-# Our hostnames (ARCHITECTURE.md, decision 67): openupstream.com in
-# production, the delegated dev zone here.
-PLATFORM_DOMAIN=${PLATFORM_DOMAIN:-dev.openupstream.com}
-# The customer domain (decision 68), as garage.sh set it up.
-CUSTOMER_DOMAIN=${CUSTOMER_DOMAIN:-dev.openupstream.app}
-CLUSTER_ISSUER=${CLUSTER_ISSUER:-letsencrypt-staging}
 # madAuth's public URL: the issuer of its tokens, and the only app origin.
 MADAUTH_ISSUER=https://$PLATFORM_DOMAIN
 MAIL=${MAIL:-ses}
@@ -139,7 +141,18 @@ config_rollout() { # deployment, configmap
     -p "{\"spec\": {\"template\": {\"metadata\": {\"annotations\": {\"openupstream.io/config-hash\": \"$hash\"}}}}}"
 }
 
-sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/infra/madauth/madauth.yaml" |
+# Both manifests run two replicas, one per compute Site; SITE_REPLICAS
+# replaces that. Fails if a manifest no longer has that line, rather than
+# silently running the multi-node count.
+replicas() {
+  local manifest
+  manifest=$(sed "s#^  replicas: 2\$#  replicas: $SITE_REPLICAS#")
+  grep -q "^  replicas: $SITE_REPLICAS\$" <<<"$manifest" ||
+    { echo "no '  replicas: 2' in the manifest to set to $SITE_REPLICAS" >&2; return 1; }
+  printf '%s\n' "$manifest"
+}
+
+sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/infra/madauth/madauth.yaml" | replicas |
   kubectl apply -f - >/dev/null
 config_rollout madauth madauth-config
 kubectl -n "$PLATFORM_NS" rollout status deployment/madauth --timeout=5m
@@ -166,9 +179,12 @@ if [[ $SIGNUP == closed ]]; then
 fi
 # Storage auto-grow reads volume usage from the platform's Prometheus
 # (decision 111), once monitoring.sh has installed it; run this again after.
+# Not on a single node: its local-path volumes cannot grow, so a grown size
+# would never be reached (decision 112).
 PROMETHEUS_URL=""
-kubectl -n monitoring get service kube-prometheus-stack-prometheus >/dev/null 2>&1 &&
+if [[ $LAYOUT == multi-node ]] && kubectl -n monitoring get service kube-prometheus-stack-prometheus >/dev/null 2>&1; then
   PROMETHEUS_URL=http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+fi
 kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client -o yaml \
   --from-literal=AUTH_ISSUER="$MADAUTH_ISSUER" \
   --from-literal=MADAUTH_URL="http://madauth.$PLATFORM_NS.svc:8787" \
@@ -183,7 +199,7 @@ kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client
   --from-literal=CLI_CLIENT_ID="${CLI_CLIENT_ID:-}" \
   --from-literal=PROMETHEUS_URL="$PROMETHEUS_URL" \
   ${WAITLIST_CONFIG[@]+"${WAITLIST_CONFIG[@]}"} | kubectl apply -f - >/dev/null
-sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/control-plane/deploy/control-plane.yaml" |
+sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/control-plane/deploy/control-plane.yaml" | replicas |
   kubectl apply -f - >/dev/null
 config_rollout control-plane control-plane-config
 kubectl -n "$PLATFORM_NS" rollout status deployment/control-plane --timeout=5m

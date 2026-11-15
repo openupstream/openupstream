@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Creates a throwaway three-Site k3s cluster on Hetzner Cloud for one working
-# session (ARCHITECTURE.md decision #33). Destroy it with down.sh.
+# session (ARCHITECTURE.md decisions 33 and 52). Install the platform on it
+# with ../dev-cluster/install-multi-node.sh; destroy it with down.sh.
 #
 # Cloud locations stand in for the Sites; nodes carry the real Site names, so
 # the operators' manifests apply unchanged:
@@ -109,6 +110,7 @@ install_k3s() { # site, ip, extra args...
     --flannel-backend=wireguard-native \
     --node-label topology.kubernetes.io/zone=$site \
     --tls-san $node_ip \
+    --node-external-ip $node_ip \
     --secrets-encryption \
     --kube-apiserver-arg default-not-ready-toleration-seconds=30 \
     --kube-apiserver-arg default-unreachable-toleration-seconds=30 \
@@ -116,6 +118,18 @@ install_k3s() { # site, ip, extra args...
     --disable traefik --disable servicelb \
     $*"
 }
+
+# Our AppArmor profile for containers on every node with AppArmor, before
+# containerd loads its own: without it Ubuntu 26.04 (IMAGE=ubuntu-26.04)
+# keeps a container's processes from signalling each other and Postgres
+# never starts (ARCHITECTURE.md, decision 113).
+for node_ip in "${IPS[@]}"; do
+  if "${SSH[@]}" "root@$node_ip" test -d /sys/kernel/security/apparmor; then
+    echo "installing the AppArmor profile cri-containerd.apparmor.d on $node_ip"
+    "${SSH[@]}" "root@$node_ip" "tee /etc/apparmor.d/cri-containerd.apparmor.d >/dev/null && apparmor_parser -r /etc/apparmor.d/cri-containerd.apparmor.d" \
+      <../apparmor/cri-containerd.apparmor.d
+  fi
+done
 
 # gVisor on the compute nodes, before k3s renders containerd's config at its
 # first start; the label lets the RuntimeClass gvisor schedule only there.
@@ -137,5 +151,6 @@ chmod 600 "$STATE/kubeconfig"
 KUBECONFIG=$STATE/kubeconfig kubectl wait --for=condition=Ready node --all --timeout=5m
 KUBECONFIG=$STATE/kubeconfig kubectl apply -f ../gvisor/runtimeclass.yaml >/dev/null
 echo "export KUBECONFIG=$PWD/$STATE/kubeconfig"
+echo "then: ../dev-cluster/install-multi-node.sh"
 echo "The API server is on $FIRST (hetzner-fsn1); switch the kubeconfig to"
 echo "another node's IP before switching that Site off."

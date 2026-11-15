@@ -9,6 +9,9 @@
 # 3. Loki with its chunks in a Garage bucket of its own, and Alloy shipping
 #    the platform's namespaces' logs to it.
 #
+# On a single-node cluster Prometheus, Alertmanager and Loki run once, Loki
+# with one copy (decision 112).
+#
 # ALERT_EMAIL is where alerts go (never committed). The healthchecks.io ping
 # URL is read from HEALTHCHECKS_URL_FILE, the SES key from the AWS profile
 # SES_PROFILE (docs/self-hosting.md, sections 6 and 10).
@@ -18,6 +21,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 ROOT=$(git rev-parse --show-toplevel)
+source ./lib.sh
+load_layout
+# One Loki and one copy per Site.
+LOKI_REPLICAS=3
+[[ $LAYOUT == single-node ]] && LOKI_REPLICAS=1
 NS=monitoring
 ALERT_EMAIL=${ALERT_EMAIL:?ALERT_EMAIL: where alerts go}
 HEALTHCHECKS_URL_FILE=${HEALTHCHECKS_URL_FILE:-$HOME/.config/openupstream/healthchecks-ping-url-dev}
@@ -52,9 +60,13 @@ helm upgrade --install kube-prometheus-stack oci://ghcr.io/prometheus-community/
   -n "$NS" -f "$ROOT/infra/monitoring/kube-prometheus-stack-values.yaml" \
   --set-string alerts.email="$ALERT_EMAIL" --set-string alerts.smtpUser="$SES_KEY_ID" \
   --set-string alerts.sesRegion="$SES_REGION" \
+  --set alertmanager.alertmanagerSpec.replicas="$SITE_REPLICAS" \
+  --set prometheus.prometheusSpec.replicas="$SITE_REPLICAS" \
   --wait --timeout 10m >/dev/null
 unset SES_KEY_ID
-kubectl apply -f "$ROOT/infra/monitoring/scrape.yaml" -f "$ROOT/infra/monitoring/rules.yaml" >/dev/null
+kubectl apply -f "$ROOT/infra/monitoring/scrape.yaml" >/dev/null
+# A Database has as many instances as there are compute Sites.
+sed "s#DATABASE_INSTANCES#$SITE_REPLICAS#" "$ROOT/infra/monitoring/rules.yaml" | kubectl apply -f - >/dev/null
 
 # Loki's bucket and its own key, created once through the garage CLI. The
 # name has a dot, which customers' Bucket names cannot.
@@ -75,7 +87,8 @@ kubectl -n "$NS" create secret generic loki-s3 --dry-run=client -o yaml \
 unset key_id key_secret
 
 helm upgrade --install loki loki --repo "$GRAFANA_CHARTS" --version 7.5.0 \
-  -n "$NS" -f "$ROOT/infra/monitoring/loki-values.yaml" --wait --timeout 10m >/dev/null
+  -n "$NS" -f "$ROOT/infra/monitoring/loki-values.yaml" \
+  --set singleBinary.replicas="$LOKI_REPLICAS" --set loki.commonConfig.replication_factor="$LOKI_REPLICAS" --wait --timeout 10m >/dev/null
 helm upgrade --install alloy alloy --repo "$GRAFANA_CHARTS" --version 1.15.0 \
   -n "$NS" -f "$ROOT/infra/monitoring/alloy-values.yaml" --wait --timeout 5m >/dev/null
 

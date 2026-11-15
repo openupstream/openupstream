@@ -162,6 +162,32 @@ test('PgBouncer follows the primary, one per Site', () => {
     ]);
 });
 
+test('an explicit multi-node layout is the default one', () => {
+    const multiNode = databaseManifests(project, database, { ...config, layout: 'multi-node' });
+    assert.ok(multiNode.ok);
+    assert.deepEqual(multiNode.value, manifestsFor());
+});
+
+test('on a single-node cluster a Database runs one instance and one PgBouncer, everything else unchanged', () => {
+    const singleNode = databaseManifests(project, database, { ...config, layout: 'single-node' });
+    assert.ok(singleNode.ok, JSON.stringify(!singleNode.ok && singleNode.error));
+    const { cluster, pooler } = singleNode.value;
+    assert.equal(cluster.spec.instances, 1);
+    assert.equal(pooler.spec.instances, 1);
+    const multiNode = manifestsFor();
+    assert.deepEqual({ ...cluster.spec, instances: 2 }, multiNode.cluster.spec);
+    assert.deepEqual({ ...pooler.spec, instances: 2 }, multiNode.pooler.spec);
+    assert.deepEqual(singleNode.value.objectStore, multiNode.objectStore);
+    assert.deepEqual(singleNode.value.scheduledBackup, multiNode.scheduledBackup);
+});
+
+test('a restored Database on a single-node cluster runs one instance too', () => {
+    const result = restoredDatabaseManifests(project, restoredDatabase, { ...config, layout: 'single-node' }, source);
+    assert.ok(result.ok, JSON.stringify(!result.ok && result.error));
+    assert.equal(result.value.cluster.spec.instances, 1);
+    assert.equal(result.value.pooler.spec.instances, 1);
+});
+
 test('PgBouncer drops connections to a primary in a dark Site within seconds', () => {
     const parameters = manifestsFor().pooler.spec.pgbouncer.parameters ?? {};
     assert.equal(parameters.max_prepared_statements, '200');

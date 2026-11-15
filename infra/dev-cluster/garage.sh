@@ -5,7 +5,8 @@
 # 1. the Secret garage (RPC secret and admin token), generated once and kept
 #    in the cluster only; the admin token also goes to the platform
 #    Project's namespace as garage-admin, for the control plane;
-# 2. Garage, one node per Site (infra/garage/crd.yaml, then garage.yaml);
+# 2. Garage, one node per Site (infra/garage/crd.yaml, then garage.yaml),
+#    or one node with one copy on a single-node cluster (decision 112);
 # 3. the layout: each node's zone is its Site, with GARAGE_CAPACITY each,
 #    applied once;
 # 4. the public S3 endpoint https://<bucket>.s3.$CUSTOMER_DOMAIN: the
@@ -22,11 +23,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 ROOT=$(git rev-parse --show-toplevel)
+source ./lib.sh
+load_layout
+load_domains
 PLATFORM_NS=project-00000000-0000-4000-8000-000000000002
-# The customer domain (decision 68): openupstream.app in production, its
-# delegated dev zone here.
-CUSTOMER_DOMAIN=${CUSTOMER_DOMAIN:-dev.openupstream.app}
-CLUSTER_ISSUER=${CLUSTER_ISSUER:-letsencrypt-staging}
+# One Garage node and copy per Site.
+GARAGE_NODES=3
+[[ $LAYOUT == single-node ]] && GARAGE_NODES=1
+PODS=()
+for ((i = 0; i < GARAGE_NODES; i++)); do PODS+=("garage-$i"); done
 GARAGE_DATA_SIZE=${GARAGE_DATA_SIZE:-20Gi}
 # What each node offers to the layout; at most its volume.
 GARAGE_CAPACITY=${GARAGE_CAPACITY:-20G}
@@ -46,11 +51,12 @@ kubectl -n garage get secret garage -o jsonpath='{.data.GARAGE_ADMIN_TOKEN}' | b
 # established gets a 429 from its discovery and joins only minutes later.
 kubectl apply -f "$ROOT/infra/garage/crd.yaml" >/dev/null
 kubectl wait crd/garagenodes.deuxfleurs.fr --for=condition=Established --timeout=1m >/dev/null
-sed -e "s#CUSTOMER_DOMAIN#$CUSTOMER_DOMAIN#g" -e "s#GARAGE_DATA_SIZE#$GARAGE_DATA_SIZE#g" "$ROOT/infra/garage/garage.yaml" |
+sed -e "s#CUSTOMER_DOMAIN#$CUSTOMER_DOMAIN#g" -e "s#GARAGE_DATA_SIZE#$GARAGE_DATA_SIZE#g" -e "s#GARAGE_NODES#$GARAGE_NODES#g" \
+  "$ROOT/infra/garage/garage.yaml" |
   kubectl apply -f - >/dev/null
 # Not ready until the layout is applied (its health check needs a quorum),
 # so wait for the pods to run, not for the rollout.
-for pod in garage-0 garage-1 garage-2; do
+for pod in "${PODS[@]}"; do
   kubectl -n garage wait pod/"$pod" --for=create --timeout=2m >/dev/null
 done
 kubectl -n garage wait pod -l app.kubernetes.io/name=garage --for=jsonpath='{.status.phase}'=Running --timeout=5m >/dev/null
@@ -59,15 +65,15 @@ kubectl -n garage wait pod -l app.kubernetes.io/name=garage --for=jsonpath='{.st
 garage() { kubectl -n garage exec garage-0 -- /garage "$@" 2>/dev/null; }
 
 # The nodes find each other through their GarageNode objects; wait until
-# the first one is connected to all three.
+# the first one is connected to all of them.
 for _ in $(seq 60); do
-  [[ $(garage status | grep -c ' garage-[0-9] ') -ge 3 ]] && break
+  [[ $(garage status | grep -c ' garage-[0-9] ') -ge $GARAGE_NODES ]] && break
   sleep 5
 done
 
 # A node's zone is its pod's Site.
 if [[ $(garage layout show | grep -c 'Current cluster layout version: 0') -eq 1 ]]; then
-  for pod in garage-0 garage-1 garage-2; do
+  for pod in "${PODS[@]}"; do
     node=$(kubectl -n garage get pod "$pod" -o jsonpath='{.spec.nodeName}')
     site=$(kubectl get node "$node" -o jsonpath='{.metadata.labels.topology\.kubernetes\.io/zone}')
     # Each node publishes its id as the name of its GarageNode, with its pod's name as hostname.
@@ -85,6 +91,6 @@ sed -e "s#CUSTOMER_DOMAIN_REGEX#$escaped#g" -e "s#CUSTOMER_DOMAIN#$CUSTOMER_DOMA
   "$ROOT/infra/garage/s3-route.yaml" | kubectl apply -f - >/dev/null
 sed -e "s#CUSTOMER_DOMAIN#$CUSTOMER_DOMAIN#g" -e "s#CLUSTER_ISSUER#$CLUSTER_ISSUER#g" \
   "$ROOT/infra/ingress/customer-domain.yaml" | kubectl apply -f - >/dev/null
-DEV_ZONE=$CUSTOMER_DOMAIN DNS_NAMES='* *.s3' ./dns.sh
+DNS_DOMAIN=$CUSTOMER_DOMAIN DNS_NAMES='* *.s3' ./dns.sh
 kubectl -n garage wait certificate/s3 --for=condition=Ready --timeout=10m
 kubectl -n traefik wait certificate/customer-domain --for=condition=Ready --timeout=10m

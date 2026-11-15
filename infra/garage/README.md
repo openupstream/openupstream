@@ -15,7 +15,9 @@ storage" and "Static sites"; decisions 81 to 84).
   domain>` through Traefik, with one wildcard certificate.
 
 Both have placeholders that `infra/dev-cluster/garage.sh` fills in
-(`CUSTOMER_DOMAIN`, `GARAGE_DATA_SIZE`, `CLUSTER_ISSUER`); the same script
+(`CUSTOMER_DOMAIN`, `GARAGE_DATA_SIZE`, `GARAGE_NODES`, `CLUSTER_ISSUER`).
+`GARAGE_NODES` is 3, or 1 on a single-node dev cluster: one node, one copy
+of every object, nothing survives losing it (decision 112). The same script
 creates the Secret `garage` (RPC secret and admin token) and assigns the
 layout once. The control plane creates and deletes buckets and keys
 through the admin API on port 3903, which ingress never routes.

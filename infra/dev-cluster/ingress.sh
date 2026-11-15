@@ -5,8 +5,10 @@
 # 1. cert-manager's DNS-01 webhook for bunny.net, with the API key as the
 #    one Secret it may read;
 # 2. the Let's Encrypt ClusterIssuers;
-# 3. Traefik on both compute nodes, on their ports 80 and 443;
-# 4. the platform hostnames in bunny.net DNS (dns.sh).
+# 3. Traefik on the compute nodes (both, or the single node), on their
+#    ports 80 and 443;
+# 4. the platform hostnames in bunny.net DNS (dns.sh), PLATFORM_DOMAIN and
+#    api.PLATFORM_DOMAIN.
 #
 # platform.sh then adds the platform's routes and certificate.
 #
@@ -16,6 +18,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 ROOT=$(git rev-parse --show-toplevel)
+source ./lib.sh
+load_layout
+load_domains
 KEY_FILE=${BUNNY_API_KEY_FILE:-$HOME/.config/openupstream/bunny-api-key}
 
 kubectl -n cert-manager create secret generic bunny-api --dry-run=client -o yaml \
@@ -30,4 +35,4 @@ helm upgrade --install traefik oci://ghcr.io/traefik/helm/traefik --version 42.0
   -n traefik --create-namespace -f "$ROOT/infra/ingress/traefik-values.yaml" --wait --timeout 5m >/dev/null
 kubectl -n traefik get pods -o wide --no-headers | awk '{print $1, $3, $7}'
 
-./dns.sh
+DNS_DOMAIN=$PLATFORM_DOMAIN ./dns.sh
