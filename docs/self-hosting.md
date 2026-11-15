@@ -479,5 +479,5 @@ sent at all.
 - **Storage on the compute servers**: TopoLVM needs the LVM volume group
   `openupstream` on each compute server, made from its NVMe with
   `infra/topolvm/vgcreate.sh <device>` before TopoLVM is installed
-  (`infra/topolvm/values.yaml`). How the NVMe disks are combined (RAID 1
-  or not) is decided when the servers are ordered.
+  (`infra/topolvm/values.yaml`). The two NVMe disks are one software
+  RAID 1 (ARCHITECTURE.md, decision 117), so the device is its `/dev/md…`.

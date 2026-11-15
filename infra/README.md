@@ -3,10 +3,6 @@
 The cluster itself. Changes here are deployed together with the control plane,
 which is why it lives in the monorepo.
 
-- `terraform/` — servers at Hetzner (Falkenstein), OVHcloud (Limburg) and
-  netcup (Nuremberg; no official provider, so partly by hand), host
-  firewalls, the Hetzner Object Storage bucket for backups, bunny.net DNS
-  records and health checks.
 - `helm/` — values files for the off-the-shelf components: Traefik,
   cert-manager, CloudNativePG.
 - `monitoring/` — the platform's own monitoring: kube-prometheus-stack,
@@ -37,9 +33,9 @@ which is why it lives in the monorepo.
 - `dev-cluster-hetzner/` — a throwaway three-Site k3s cluster on Hetzner
   Cloud for one working session (ARCHITECTURE.md, decisions 33 and 52).
 
-Bootstrap order: Terraform → k3s install on the nodes → Helm releases → Garage
+Bootstrap order: servers ordered by hand (ARCHITECTURE.md, decision 116) →
+k3s install on the nodes → Helm releases → Garage
 layout → control plane. A runbook lives in `docs/runbooks/bootstrap.md` once
 the first cluster exists.
 
-Nothing in this directory contains secrets. State is kept remotely; tfvars are
-gitignored.
+Nothing in this directory contains secrets.
