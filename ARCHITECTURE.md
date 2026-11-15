@@ -209,7 +209,14 @@ deleted, an Account with a Hold creates no Resource, and usage events are
 append-only. Its tests run against a real
 Postgres in Docker. The API types are in `sdk/src/model.ts`.
 
-The dashboard (`dashboard/`) is a Next.js app on the same API.
+The dashboard (`dashboard/`) is a Next.js app on the same API, built as
+static files (#116): every page renders in the browser, which calls the API
+itself through `@openupstream/sdk`. It signs Members in and up with
+madAuth's dialog (`@madauth/web`, e-mail and password), shows the approval
+dialog of `oup login` when opened with `?madauth_device=<code>`, creates an
+Account on the first visit (#62) and lists, creates and deletes Projects;
+the pages for Resources follow. It finds the API at `api.` in front of its
+own hostname, so one build serves every installation.
 
 Sign-in for Members and API keys for `oup` and the SDK come from
 [madAuth](https://madauth.com), self-hosted on the cluster as its published
@@ -227,7 +234,8 @@ front of each. madAuth needs its Database for every sign-in: while that
 Database fails over, sign-in is unavailable (53 s measured on the dev
 cluster).
 
-The API accepts three kinds of madAuth credentials (#64, #87):
+The API accepts three kinds of madAuth credentials as `Authorization:
+Bearer` (#64, #87), and the session also as madAuth's cookie (#116):
 
 - a session token: a JWT (ES256, `typ: madauth-session+jwt`, issuer
   checked, no audience) verified against madAuth's JWKS, fetched from madAuth
@@ -255,6 +263,18 @@ The API accepts three kinds of madAuth credentials (#64, #87):
   sign-in in CI. An admin registers the CLI once
   (`infra/madauth/register-cli.sh`); the approval page at madAuth's
   `loginUrl` comes with the dashboard's first page.
+
+The dashboard's JavaScript never holds a credential: madAuth keeps the
+session token in an HttpOnly cookie (`madauth_session`, for the Domain
+`COOKIE_DOMAIN` names, the platform domain), which the browser sends to
+`api.<platform domain>` as well. The API reads the cookie only on a request
+whose `Origin` header is one of the dashboard's origins
+(`DASHBOARD_ORIGINS`, by default `https://<platform domain>`), takes it for
+a session token only, never an API key, and answers only those origins
+with CORS headers that allow credentials. A page of another site can make
+the browser send the cookie but cannot set that header, so it is answered
+401 like a request without a credential (CSRF); a Project's site cannot
+either, since customer hostnames are on another registrable domain (#31).
 
 The subject is a madAuth user, which can be a Member of several Accounts.
 A signed-in user creates an Account with `POST /v1/accounts` and becomes its
@@ -1122,6 +1142,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 113 | On nodes with AppArmor, containers run under our copy of containerd's profile `cri-containerd.apparmor.d` (`infra/apparmor`), containerd 2.3's own plus signal and ptrace rules for the stacked label `cri-containerd.apparmor.d//&unconfined`; installed into `/etc/apparmor.d` and loaded before k3s by `k3s-single-node.sh`, on every run. Delete it once k3s ships containerd's fix (containerd #14487) | `kernel.apparmor_restrict_unprivileged_unconfined=0`; the Databases' pods `Unconfined`; staying on Ubuntu 24.04 | Ubuntu 26.04 stacks every container's profile on `unconfined`, and containerd's rules name only the unstacked label, so a container's processes cannot signal each other: on the Minisforum (2026-11-15) every Postgres failed with `could not signal for checkpoint: Permission denied` and stayed in recovery. The copy fixes exactly that rule, as upstream does, and keeps the containers confined; the sysctl would switch off Ubuntu's restriction on unprivileged user namespaces for every program on the machine, and `Unconfined` drops AppArmor from the Databases. Costs: our copy lags behind changes to containerd's profile until it is deleted, and it must be in place before k3s first starts. The Hetzner dev cluster runs Ubuntu 24.04 and does not need it yet; production nodes on 26.04 will |
 | 114 | Metering: a control-plane pass turns every completed hour into one usage event per Resource and unit. CPU seconds of all Resources come from the CPU agent through Prometheus (decision 115), memory of Services from running pods' requests and of Jobs from each run's request × run time (kube-state-metrics); egress from Traefik's per-rule response bytes, with an IngressRoute per Domain and Resource so each rule's metric names its Resource; Databases' memory and storage from their rows; Buckets' storage from Garage. Jobs are Resources of their own. Metered hours are listed; the billing service reads monthly sums per Project, Resource and unit | the Kubernetes metrics API (a sampled rate, not a counter); daily events; raw events to the billing service; one IngressRoute per Domain and the rules' hashes recomputed by metering (reproduces Traefik's internal naming; a Route deleted before its hour is metered is lost) | the counters are already scraped and exact over an hour; hourly events bill a Resource for the part of an hour it lived. Costs: billing depends on Prometheus (an outage longer than 14 days loses revenue, never overcharges); a Bucket's bytes are those at metering time, not the hour's average; a Project purged before its last hours are metered is not billed for them |
 | 115 | CPU seconds come from our own CPU agent, a DaemonSet on the compute nodes that reads each pod's total from its cgroup every second and when its last process exits (`cgroup.events`), and serves it to Prometheus, kept 15 minutes after the pod ended; metering bills a pod's total at the hour's end less at the previous hour's end | cAdvisor's counter (misses up to 30 s at each end of a pod's life and all of a run shorter than a scrape); Jobs' CPU as reservation × run time (Fargate, Cloud Run, Fly.io bill containers that way); measured CPU with short runs free | the kernel counts every pod's CPU exactly, but the count goes with the cgroup half a second after the pod ends; reading it then makes measured CPU exact for every Resource, short Job runs included, with one meaning for all. Costs: a component of our own on every compute node (read-only cgroup mount, listing its node's pods), and it races the cgroup's removal: if it loses, at most about a second of CPU is missing |
+| 116 | The dashboard is static files that call the API from the browser, authenticated by madAuth's session cookie: the API reads `madauth_session` (madAuth's `COOKIE_DOMAIN` = the platform domain) on requests whose `Origin` is one of `DASHBOARD_ORIGINS` (default `https://<platform domain>`), as a session token only, and answers those origins with CORS headers that allow credentials; the SDK takes `session: 'cookie'` in place of a token | the dashboard's server reading the cookie and calling the API with it as Bearer (a backend-for-frontend); an OIDC access token held by the page's JavaScript, like `oup`'s | madAuth's session cookie is HttpOnly, so a page cannot send it as Bearer, and decision 67 already put the API where the cookie reaches it. No Node server to run for the dashboard: it can be served like any static site, and log streams (#103) go straight to the API. No token a script could read (XSS), and a session carries the e-mail address that creating an Account needs, which an access token does not. Costs: the API has a CORS and CSRF surface of its own, held by the `Origin` check, which every browser sets and no page can forge; a browser extension or a script injected into the dashboard itself can still call the API as the Member |
 
 ## Open questions
 
@@ -1248,6 +1269,15 @@ Decisions table once it is settled.
 21. ~~**Capacity beyond storage.**~~ Settled with decision 111: the API
     also checks memory before accepting a size, and a volume grow that
     fails anyway fires `DatabaseVolumeResizeFailed`.
+22. **Where the dashboard is served from.** It is static files (decision
+    116) and runs in development (`npm run dev -w dashboard`), but nothing
+    serves it on a cluster yet; while sign-up is closed the waitlist has
+    its paths at the platform domain (decision 86). Options: a Bucket of
+    the platform Project behind a Domain at the platform domain, deployed
+    with `oup site deploy` (our own product; the routing table then has to
+    leave `/auth/*` and `/.well-known/*` to madAuth), or an nginx container
+    with the files. Until it is served, `oup login` has no approval page
+    at madAuth's `loginUrl`.
 
 ## Build order
 
@@ -1334,7 +1364,12 @@ Decisions table once it is settled.
    deploy uploaded nothing, a new build only its changed files with the
    index last and deleted the old bundle, and the served headers matched.
    Left: the approval page
-   for `oup login` at madAuth's `loginUrl`, the production DNS zones.
+   for `oup login` at madAuth's `loginUrl`, which the dashboard has
+   (decision 116; run locally 2026-11-15 against madAuth 0.7.0 and the
+   control plane: sign-up with the code from the e-mail, the session
+   cookie accepted by the API from the dashboard's origin, an Account,
+   Projects created and deleted) but nothing serves on a cluster yet
+   (Open question 22); the production DNS zones.
 3. Containers, Service mode. Done on the dev cluster (2026-10-31): the
    NetworkPolicy `project-isolation` in every Project namespace (#89),
    gVisor on the compute nodes and the RuntimeClass `gvisor` (#90),
