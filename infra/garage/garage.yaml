@@ -5,10 +5,11 @@
 # is, is assigned once by infra/dev-cluster/garage.sh.
 #
 # Filled in when applied: CUSTOMER_DOMAIN (`openupstream.app` in
-# production, `dev.openupstream.app` on a dev cluster) and GARAGE_DATA_SIZE,
-# each node's data volume (e.g. `20Gi`). Needs the Secret
-# garage with GARAGE_RPC_SECRET and GARAGE_ADMIN_TOKEN, which Garage reads
-# from its environment.
+# production, `dev.openupstream.app` on a dev cluster), GARAGE_DATA_SIZE,
+# each node's data volume (e.g. `20Gi`), and GARAGE_NODES, the number of
+# nodes and copies (3; 1 on a single-node dev cluster, decision 109). Needs
+# the Secret garage with GARAGE_RPC_SECRET and GARAGE_ADMIN_TOKEN, which
+# Garage reads from its environment.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -57,8 +58,9 @@ data:
     metadata_auto_snapshot_interval = "6h"
 
     # One copy per Site; reads and writes need two of three (quorum), so
-    # they keep working while any one Site is down.
-    replication_factor = 3
+    # they keep working while any one Site is down. garage.sh sets it: 3, or
+    # 1 on a single-node dev cluster (decision 109).
+    replication_factor = GARAGE_NODES
     consistency_mode = "consistent"
     compression_level = 1
 
@@ -119,7 +121,7 @@ metadata:
   namespace: garage
   labels: {app.kubernetes.io/name: garage}
 spec:
-  replicas: 3
+  replicas: GARAGE_NODES
   serviceName: garage-headless
   # The nodes start together; Garage waits for its peers on its own.
   podManagementPolicy: Parallel

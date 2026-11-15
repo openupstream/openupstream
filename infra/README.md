@@ -18,14 +18,17 @@ which is why it lives in the monorepo.
   on nodes labelled `openupstream.io/gvisor=true` (ARCHITECTURE.md,
   decision 90).
 - `garage/` — Garage cluster layout and configuration: replication factor 3,
-  one zone per site.
+  one zone per site (1 on a single-node dev cluster).
 - `ingress/` — Traefik's values, cert-manager's DNS-01 webhook for bunny.net
   and its issuers, and the platform's public routes (ARCHITECTURE.md,
   "Ingress and failover"; decisions 69, 72, 73).
 - `madauth/` — madAuth, sign-in and API keys, as its published image with the
   control plane's sidecar (ARCHITECTURE.md, decision 63).
-- `dev-cluster/` — a throwaway three-Site k3s cluster on Hetzner Cloud for
-  one working session (ARCHITECTURE.md, decisions 33 and 52).
+- `dev-cluster/` — installs the platform onto a k3s cluster for
+  development, with one node per Site or on a single node, and sets up one
+  Linux machine as such a node (ARCHITECTURE.md, decision 109).
+- `dev-cluster-hetzner/` — a throwaway three-Site k3s cluster on Hetzner
+  Cloud for one working session (ARCHITECTURE.md, decisions 33 and 52).
 
 Bootstrap order: Terraform → k3s install on the nodes → Helm releases → Garage
 layout → control plane. A runbook lives in `docs/runbooks/bootstrap.md` once

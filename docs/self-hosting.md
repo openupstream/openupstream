@@ -20,13 +20,14 @@ context) and put them into the cluster as Kubernetes Secrets.
 | --- | --- |
 | Node.js 24 and npm (`nvm use` reads `.nvmrc`) | building and testing, the scripts in `operators/scripts` |
 | Docker (Docker Desktop or Colima) | the control plane's tests, building images locally |
-| `hcloud` | creating and deleting the development cluster's VMs |
+| `hcloud` | creating and deleting the Hetzner dev cluster's VMs (not needed for a single node) |
 | `kubectl` | everything on the cluster |
 | AWS CLI (`aws`) | the backup bucket (it speaks S3), and SES later |
-| `jq`, `curl`, `ssh`, `openssl` | the scripts in `infra/dev-cluster` |
+| `helm` | the Helm releases on the cluster (Traefik, monitoring) |
+| `jq`, `curl`, `ssh`, `openssl` | the scripts in `infra/dev-cluster` and `infra/dev-cluster-hetzner` |
 | `dig` | checking DNS delegations (section 5) |
 
-On macOS: `brew install hcloud kubectl awscli jq`.
+On macOS: `brew install hcloud kubectl helm awscli jq`.
 
 Then install and build the repository once; the dev-cluster scripts run
 code from it (`operators/scripts`, and libraries from `node_modules`):
@@ -72,13 +73,21 @@ Other names that are ours today and need yours:
 | --- | --- |
 | The backup bucket | `infra/dev-cluster/database-config.json` (section 4) |
 | madAuth's public URL | `MADAUTH_ISSUER` in `infra/dev-cluster/platform.sh` (on the dev cluster `http://localhost:8787`) |
-| Our hostnames (`openupstream.com`, `api.`) | decision 67; `PLATFORM_DOMAIN` in `infra/dev-cluster/platform.sh` |
-| The customer domain (`openupstream.app`), under which Buckets are reached | decision 68; `CUSTOMER_DOMAIN` in `infra/dev-cluster/garage.sh` and `platform.sh` |
+| Our hostnames (`openupstream.com`, `api.`) | decision 67; `PLATFORM_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
+| The customer domain (`openupstream.app`), under which Buckets are reached | decision 68; `CUSTOMER_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
 
-## 3. Hetzner Cloud: the development cluster
+## 3. Development clusters
 
-The development cluster is three Hetzner Cloud VMs created and deleted per
-working session (#33, #52); see [infra/dev-cluster](../infra/dev-cluster/README.md).
+[infra/dev-cluster](../infra/dev-cluster/README.md) installs the platform
+onto a k3s cluster with one node per Site, or onto a single node (#109,
+[ADR-0004](adr/0004-single-node-dev-cluster.md)). Either needs sections 4
+to 6 (backups, DNS, e-mail, or `MAIL=log` instead of 6).
+
+### Hetzner Cloud: one node per Site
+
+The Hetzner dev cluster is three Hetzner Cloud VMs created and deleted per
+working session (#33, #52); see
+[infra/dev-cluster-hetzner](../infra/dev-cluster-hetzner/README.md).
 
 1. In the [Hetzner Cloud Console](https://console.hetzner.cloud), create a
    project for it, e.g. `openupstream-dev`.
@@ -90,8 +99,37 @@ working session (#33, #52); see [infra/dev-cluster](../infra/dev-cluster/README.
    hcloud context create openupstream-dev
    ```
 
-Three `cpx32` VMs cost about €0.20 an hour together; `infra/dev-cluster/down.sh`
-deletes everything `up.sh` created.
+Three `cpx32` VMs cost about €0.20 an hour together;
+`infra/dev-cluster-hetzner/down.sh` deletes everything `up.sh` created.
+
+### A single-node dev cluster
+
+One x86_64 Linux machine (Debian or Ubuntu; about 8 to 12 GB of RAM for the
+platform alone) runs the whole platform with one copy of everything, for
+development only: losing it loses everything but the Databases' backups.
+Nothing needs to be reachable from the internet.
+
+1. Give the machine a fixed address in your router (a DHCP reservation):
+   its DNS records point at that address.
+2. Make sure you can log in over SSH as root, or as a user with
+   passwordless sudo, and that ports 80, 443 and 6443 are free on it.
+3. Pick two domains, one for the platform's hostnames and one for the
+   customer domain, each a bunny.net zone (section 5) or a name inside
+   one: `home.dev.example.com` in the zone `dev.example.com` needs no new
+   zone and no delegation. The scripts create the records in the zone.
+4. If your router has DNS rebinding protection, which drops public
+   answers that contain a private address, add both domains as exceptions.
+   On a Fritz!Box: **Home Network → Network → Network Settings → DNS
+   Rebind Protection**, one domain per line.
+5. Run `k3s-single-node.sh` and then `install-single-node.sh` with both
+   domains, as the [infra/dev-cluster](../infra/dev-cluster/README.md)
+   README shows.
+
+Check from inside the network that the names resolve to the machine:
+
+```bash
+dig +short api.home.dev.example.com
+```
 
 ## 4. Hetzner Object Storage: backups
 

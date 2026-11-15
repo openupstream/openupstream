@@ -4,7 +4,8 @@
 # operators/crds, and makes the cluster survive a dark Site (ARCHITECTURE.md,
 # "Sites and failure handling"):
 #
-# - CoreDNS and the CloudNativePG operator run twice, one per compute Site;
+# - CoreDNS and the CloudNativePG operator run twice, one per compute Site
+#   (once on a single node, ARCHITECTURE.md, decision 109);
 #   the Barman Cloud Plugin stays at one replica (only archiving waits for it).
 #   With one replica each, a Site failure took DNS and failover down until
 #   the pod was evicted (measured 2026-10-17).
@@ -14,6 +15,10 @@
 #
 # Needs: KUBECONFIG pointing at the cluster, kubectl, aws.
 set -euo pipefail
+
+cd "$(dirname "$0")"
+source ./lib.sh
+load_layout
 
 CERT_MANAGER=v1.21.2
 CNPG=1.30.1
@@ -40,7 +45,7 @@ apply "https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/$
 # matchLabelKeys counts only the new revision's pods during a rollout. The
 # operator elects a leader (--leader-elect is in its default args).
 spread() { # namespace, deployment, pod label
-  kubectl -n "$1" patch deployment "$2" --type merge -p "{\"spec\": {\"replicas\": 2, \"template\": {\"spec\": {
+  kubectl -n "$1" patch deployment "$2" --type merge -p "{\"spec\": {\"replicas\": $SITE_REPLICAS, \"template\": {\"spec\": {
     \"topologySpreadConstraints\": [{\"maxSkew\": 1, \"topologyKey\": \"topology.kubernetes.io/zone\",
       \"whenUnsatisfiable\": \"DoNotSchedule\", \"nodeTaintsPolicy\": \"Honor\", \"matchLabelKeys\": [\"pod-template-hash\"], \"labelSelector\": {\"matchLabels\": $3}}]}}}}" >/dev/null
   kubectl -n "$1" rollout status deployment "$2" --timeout=5m
@@ -48,7 +53,7 @@ spread() { # namespace, deployment, pod label
 spread cnpg-system cnpg-controller-manager '{"app.kubernetes.io/name": "cloudnative-pg"}'
 # k3s's CoreDNS manifest already spreads by zone and leaves replicas unset,
 # so the scale survives k3s re-applying it.
-kubectl -n kube-system scale deployment coredns --replicas=2 >/dev/null
+kubectl -n kube-system scale deployment coredns --replicas="$SITE_REPLICAS" >/dev/null
 kubectl -n kube-system rollout status deployment coredns --timeout=5m
 
 # set -e does not see a failure inside $(…) in an argument; read first.

@@ -73,8 +73,9 @@ Each workspace has its own README with the parts that are specific to it.
 
 [docs/self-hosting.md](docs/self-hosting.md) lists the tools, accounts,
 credentials and domains the platform needs, and how we set them up for the
-hosted service; [infra/dev-cluster](infra/dev-cluster/README.md) brings up a
-development cluster with them.
+hosted service; [infra/dev-cluster](infra/dev-cluster/README.md) installs
+the platform for development, on three Hetzner Cloud VMs or on a single
+machine of your own.
 
 ---
 

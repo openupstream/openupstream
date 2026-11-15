@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Creates a throwaway three-Site k3s cluster on Hetzner Cloud for one working
-# session (ARCHITECTURE.md decision #33). Destroy it with down.sh.
+# session (ARCHITECTURE.md decisions 33 and 52). Install the platform on it
+# with ../dev-cluster/install-multi-node.sh; destroy it with down.sh.
 #
 # Cloud locations stand in for the Sites; nodes carry the real Site names, so
 # the operators' manifests apply unchanged:
@@ -119,5 +120,6 @@ chmod 600 "$STATE/kubeconfig"
 KUBECONFIG=$STATE/kubeconfig kubectl wait --for=condition=Ready node --all --timeout=5m
 KUBECONFIG=$STATE/kubeconfig kubectl apply -f ../gvisor/runtimeclass.yaml >/dev/null
 echo "export KUBECONFIG=$PWD/$STATE/kubeconfig"
+echo "then: ../dev-cluster/install-multi-node.sh"
 echo "The API server is on $FIRST (hetzner-fsn1); switch the kubeconfig to"
 echo "another node's IP before switching that Site off."
