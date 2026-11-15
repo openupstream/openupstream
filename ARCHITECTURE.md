@@ -1312,7 +1312,9 @@ Decisions table once it is settled.
       means evictions and OOM kills, on nodes that also run Databases;
       metering reads memory from the pods' requests (decision 114) and
       would have to read the limit.
-    - The same with swap on the nodes' NVMe disks, so the kernel moves
+    - The same with swap on the nodes' disks (NVMe on the OVHcloud
+      server, decision 119; the Hetzner server is not chosen yet), so the
+      kernel moves
       pages an idle Service has not touched to disk and a full node gets
       slow instead of killing pods. The first request after a pause pages
       them back in, without an activator in the request path. Databases
