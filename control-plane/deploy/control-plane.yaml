@@ -9,7 +9,8 @@
 # The image is pinned by digest when applied (infra/dev-cluster/platform.sh).
 # Needs the ConfigMap control-plane-config (AUTH_ISSUER,
 # MADAUTH_URL, BACKUP_BUCKET, BACKUP_RETENTION, GARAGE_ADMIN_URL,
-# GARAGE_S3_URL, CUSTOMER_DOMAIN, PLATFORM_DOMAIN; optionally NEW_ACCOUNT_HOLDS and
+# GARAGE_S3_URL, CUSTOMER_DOMAIN, PLATFORM_DOMAIN; optionally PROMETHEUS_URL,
+# DATABASE_VOLUMES, NEW_ACCOUNT_HOLDS and
 # BILLING_CALLERS, and for the waitlist WAITLIST_URL, WAITLIST_IMPRINT,
 # WAITLIST_MAIL, MAIL_FROM and SES_REGION), the backup credentials Secret
 # backup-s3, which the Databases operator copies into this namespace, the

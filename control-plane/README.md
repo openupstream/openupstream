@@ -91,6 +91,7 @@ what the control plane sees.
 | `GET /v1/projects` | the Projects of the caller's Accounts |
 | `POST /v1/projects` | `{accountId, name}` → 201, with its default Domain `<name>-<random>.<CUSTOMER_DOMAIN>`; 409 if the name is taken in the Account |
 | `GET /v1/projects/{id}` | |
+| `GET /v1/projects/{id}/usage` | what each Resource uses now: `{measuredAt, measured, resources: [{kind, id, name, cpuMillicores, memoryBytes, storageBytes: {used, allocated}, instances: [{name, role, site, state, restarts, startedAt, cpuMillicores, memoryBytes, storageBytes}]}]}`; `used` is null where nothing was measured. 503 when the cluster does not answer |
 | `DELETE /v1/projects/{id}` | 202: the Project and its Databases and Buckets are deleted, see Cleanup; its Domains and Routes at once |
 | `GET /v1/projects/{id}/databases` | with each Database's `state` and in-cluster `connection` (no password: the Project's Services and Jobs get the URL as `DATABASE_URL_<NAME>`, the oldest's as `DATABASE_URL`) |
 | `POST /v1/projects/{id}/databases` | `{name, homeSite?, memoryMb, storageGb, autoGrow?, maxStorageGb?, restoreFrom?}` → 201, `state: provisioning`; 402 if the Account has a Hold, 507 when no node in one of the compute Sites has room for `storageGb` or `memoryMb`. Storage grows by itself unless `autoGrow` is false, up to `maxStorageGb` if set (decision 111). `restoreFrom: {databaseId, targetTime?}` makes it a copy of another Database of the Project, live or deleted within the retention window, at that time (RFC 3339 with its zone) or the latest point its backups reach (decision 108): 400 for a time before its oldest base backup or less than 5 minutes before now (or its deletion), 409 before its first base backup has finished |
@@ -280,7 +281,10 @@ except while the Account has a Hold. A Cluster CloudNativePG stopped for a
 full disk (phase `Not enough disk space`) gets its PVCs grown to the row's
 size once its spec has it, as CloudNativePG waits for that without doing
 it. Each decision is logged (`growth:`).
-Without `PROMETHEUS_URL` the pass does not run.
+Without `PROMETHEUS_URL` the pass does not run, and neither with
+`DATABASE_VOLUMES=shared`: there the volumes are directories of the node's
+disk (a single node's local-path), which report that disk's use and cannot
+grow.
 
 `src/usage/meter.ts` is metering (decision 114): every
 `CLEANUP_INTERVAL_SECONDS`, on one replica at a time, it turns each
@@ -288,6 +292,15 @@ completed and settled hour into usage events, CPU and egress from
 Prometheus, Databases' sizes from their rows, Buckets' bytes from Garage,
 and lists the hour in `metered_hours`; an hour whose figures cannot all be
 read waits for the next pass. It also needs `PROMETHEUS_URL`.
+
+`src/usage/live.ts` is what the API's `/usage` answers (decision 124): the
+Project's pods from Kubernetes as instances of its Resources, with three
+Prometheus queries for their CPU (the CPU agent's counter as a two-minute
+rate), memory (the pod cgroup's working set) and, for Database instances,
+disk: the volume's used bytes, or with `DATABASE_VOLUMES=shared`
+Postgres's databases plus WAL. Without `PROMETHEUS_URL`, or when
+Prometheus does not answer, `measured` is false and only Buckets, sized by
+Garage, have a `used`.
 
 ## Tests
 

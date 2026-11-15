@@ -12,6 +12,7 @@ import {
     type JobRun,
     type LogEntry,
     type Project,
+    type ProjectUsage,
     type Route,
     type Secret,
     type ServiceDetails,
@@ -28,7 +29,9 @@ import type { RegistryDeps } from '../registry.js';
 import { listServiceRows } from '../services/store.js';
 import { listJobRows } from '../jobs/store.js';
 import { parseKeyEncryptionKey } from '../secrets/envelope.js';
+import type { PrometheusQuery } from '../prometheus.js';
 import { err, ok } from '../result.js';
+import { cpuQuery, diskQuery, memoryQuery } from '../usage/live.js';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
 import { fakeStorage } from '../testing/storage.js';
 import { createApi } from './app.js';
@@ -56,6 +59,8 @@ let accountB: string;
 /** Published TXT records by name, as the fake resolver answers them; `dnsDown` makes it fail. */
 const txt = new Map<string, string[]>();
 let dnsDown = false;
+/** What the fake Prometheus answers, per query. */
+let prometheusAnswers: PrometheusQuery = async () => ok([]);
 const domainDeps = {
     customerDomain: 'openupstream.test',
     platformDomain: 'platform.test',
@@ -216,6 +221,8 @@ before(async () => {
         authenticate: madauthAuthenticator(sessionVerifier({ issuer: ISSUER, keys: jwks }), apiKeys),
         cookieSessions: sessionVerifier({ issuer: ISSUER, keys: jwks }),
         logStream: { pollMs: 20, maxMs: 2_000 },
+        prometheus: (query) => prometheusAnswers(query),
+        databaseVolumes: 'shared',
     });
     const accounts = await db.pool.query<{ id: string }>(`insert into accounts (name) values ('A'), ('B') returning id`);
     [accountA, accountB] = accounts.rows.map((row) => row.id) as [string, string];
@@ -1711,5 +1718,65 @@ describe('Holds', () => {
         assert.equal(await getAccountRecord(db.pool, unknown), undefined);
         assert.equal(await placeHold(db.pool, unknown, 'unpaid'), false);
         assert.equal(await liftHold(db.pool, unknown, 'unpaid'), false);
+    });
+});
+
+describe("Usage: what a Project's Resources use now", () => {
+    let projectId: string;
+    let database: DatabaseDetails;
+    let namespace: string;
+
+    before(async () => {
+        const response = await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'usage-tests' });
+        projectId = ((await response.json()) as Project).id;
+        namespace = `project-${projectId}`;
+        const created = await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name: 'main', memoryMb: 512, storageGb: 10 });
+        assert.equal(created.status, 201);
+        database = (await created.json()) as DatabaseDetails;
+        pods.set(`${namespace} openupstream.io/project-id=${projectId}`, [
+            { name: `db-${database.id}-1`, nodeName: 'node-lim', containers: [{ name: 'postgres', restartCount: 1, state: 'running' }], phase: 'Running', startedAt: new Date('2026-11-15T10:00:00Z'), terminating: false },
+        ]);
+    });
+
+    test('each Resource with its instances and what Prometheus measured, for Members only', async () => {
+        prometheusAnswers = async (query) =>
+            ok([{ labels: { pod: `db-${database.id}-1` }, value: query === cpuQuery(namespace) ? 0.25 : query === memoryQuery(namespace) ? 1000 : query === diskQuery(namespace, 'shared') ? 2000 : -1 }]);
+        const response = await call('GET', `/v1/projects/${projectId}/usage`, 'alice');
+        assert.equal(response.status, 200);
+        const usage = (await response.json()) as ProjectUsage;
+        assert.equal(usage.measured, true);
+        assert.ok(Math.abs(Date.parse(usage.measuredAt) - Date.now()) < 60_000);
+        assert.deepEqual(usage.resources, [
+            {
+                kind: 'database',
+                id: database.id,
+                name: 'main',
+                cpuMillicores: { used: 250, allocated: null },
+                memoryBytes: { used: 1000, allocated: 512 * 2 ** 20 },
+                storageBytes: { used: 2000, allocated: 10 * 2 ** 30 },
+                instances: [
+                    { name: '1', role: 'database', site: 'ovh-lim', state: 'running', restarts: 1, startedAt: '2026-11-15T10:00:00.000Z', cpuMillicores: 250, memoryBytes: 1000, storageBytes: 2000 },
+                ],
+            },
+        ]);
+        assert.equal((await call('GET', `/v1/projects/${projectId}/usage`, 'bob')).status, 404);
+        assert.equal((await call('GET', `/v1/projects/${projectId}/usage`)).status, 401);
+    });
+
+    test('Prometheus down: the instances are listed, nothing is measured', async () => {
+        prometheusAnswers = async () => err('connect ECONNREFUSED');
+        const usage = (await (await call('GET', `/v1/projects/${projectId}/usage`, 'alice')).json()) as ProjectUsage;
+        assert.equal(usage.measured, false);
+        assert.deepEqual(usage.resources[0]?.memoryBytes, { used: null, allocated: 512 * 2 ** 20 });
+        assert.deepEqual(usage.resources[0]?.instances.map((instance) => [instance.name, instance.state, instance.cpuMillicores]), [['1', 'running', null]]);
+    });
+
+    test('the cluster not answering is a 503', async () => {
+        kubeDown = true;
+        try {
+            assert.equal((await call('GET', `/v1/projects/${projectId}/usage`, 'alice')).status, 503);
+        } finally {
+            kubeDown = false;
+        }
     });
 });

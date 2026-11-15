@@ -616,6 +616,70 @@ export type RouteInput =
 export const RESOURCE_KINDS = ['database', 'bucket', 'service', 'job'] as const;
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
 
+/**
+ * One running copy of a Resource: an instance or a PgBouncer of a Database,
+ * a replica of a Service, a run of a Job.
+ */
+export type InstanceRole = 'database' | 'pooler' | 'replica' | 'run';
+
+/**
+ * - `starting`: scheduled or being scheduled, not all containers up yet
+ * - `running`: up
+ * - `restarting`: a container exited and is being started again
+ * - `stopping`: being removed
+ * - `succeeded`, `failed`: a Job run that ended
+ */
+export type InstanceState = 'starting' | 'running' | 'restarting' | 'stopping' | 'succeeded' | 'failed';
+
+export interface Instance {
+    /** Unique within its Resource: `1`, `pooler-…`, a replica's suffix, a run's id. */
+    name: string;
+    role: InstanceRole;
+    /** null: not placed yet. */
+    site: Site | null;
+    state: InstanceState;
+    /** How often its containers were started again. */
+    restarts: number;
+    startedAt: Timestamp | null;
+    /** The last two minutes' average; null: not measured. */
+    cpuMillicores: number | null;
+    /** Memory in use now; null: not measured. */
+    memoryBytes: number | null;
+    /** A Database instance's disk in use; null: not measured or not a Database instance. */
+    storageBytes: number | null;
+}
+
+/** What a Resource uses now of what it was given; null: not measured, or nothing was set. */
+export interface Measured {
+    used: number | null;
+    allocated: number | null;
+}
+
+/**
+ * A Resource's current use (ARCHITECTURE.md, decision 124): the sum over
+ * its instances for CPU and memory (a Database's memory: its Postgres
+ * instances only, as only they have its size); for a Database's storage
+ * its fullest instance, since each holds the same data; for a Bucket its
+ * objects' bytes.
+ * Not what is billed: usage events are (`UsageEvent`).
+ */
+export interface ResourceUsage {
+    kind: ResourceKind;
+    id: Id;
+    name: string;
+    cpuMillicores: Measured;
+    memoryBytes: Measured;
+    storageBytes: Measured;
+    instances: Instance[];
+}
+
+export interface ProjectUsage {
+    measuredAt: Timestamp;
+    /** false: the installation has no Prometheus, or it did not answer; then only Buckets have `used`. */
+    measured: boolean;
+    resources: ResourceUsage[];
+}
+
 export const USAGE_UNITS = ['cpu_seconds', 'memory_gb_hours', 'storage_gb_hours', 'egress_gb'] as const;
 export type UsageUnit = (typeof USAGE_UNITS)[number];
 

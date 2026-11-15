@@ -1,0 +1,20 @@
+# Laid over kube-prometheus-stack-values.yaml by infra/dev-cluster/monitoring.sh
+# when no ALERT_EMAIL is set: the metrics are collected and the rules
+# evaluated, but Alertmanager sends nothing and needs no SES key and no
+# healthchecks.io URL (ARCHITECTURE.md, decision 124). Lists replace the ones
+# they are laid over; `null` removes a key.
+alertmanager:
+  config:
+    global:
+      smtp_smarthost: null
+      smtp_from: null
+      smtp_auth_username: null
+      smtp_auth_password_file: null
+      smtp_require_tls: null
+    route:
+      receiver: "null"
+      routes: []
+    receivers:
+      - name: "null"
+  alertmanagerSpec:
+    secrets: []

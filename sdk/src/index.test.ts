@@ -26,6 +26,15 @@ test("with the session cookie, the browser sends the credential: no authorizatio
     );
 });
 
+test("a Project's usage is read from its own path", async (t) => {
+    const usage = { measuredAt: '2026-11-15T10:00:00.000Z', measured: false, resources: [] };
+    const fetched = mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify(usage), { headers: { 'content-type': 'application/json' } }));
+    t.after(() => fetched.mock.restore());
+    const client = new OpenUpstreamClient({ baseUrl: 'https://api.test', token: 'x' });
+    assert.deepEqual(await client.getUsage('p 1'), { ok: true, value: usage });
+    assert.equal(fetched.mock.calls[0]?.arguments[0], 'https://api.test/v1/projects/p%201/usage');
+});
+
 test('the TXT ownership proof lives under _openupstream', () => {
     assert.equal(txtRecordName('shop.example.com'), '_openupstream.shop.example.com');
 });

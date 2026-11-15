@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Installs the platform on a single-node dev cluster (ARCHITECTURE.md,
 # decision 112): records the layout, then runs operators.sh, ingress.sh,
-# garage.sh and platform.sh. monitoring.sh is a separate step (README).
+# garage.sh, monitoring.sh and platform.sh. With ALERT_EMAIL set,
+# monitoring.sh also sends alerts (README).
 #
 # For development only: one copy of everything, no failover. Losing the
 # node loses every Database, Bucket and Service on it; only the Databases'
@@ -43,4 +44,5 @@ record_layout single-node
 ./operators.sh
 ./ingress.sh
 ./garage.sh
+./monitoring.sh
 ./platform.sh

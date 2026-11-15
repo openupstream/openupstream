@@ -429,7 +429,11 @@ once, then delete them, as the privacy notice promises.
 
 The platform watches itself with Prometheus, Alertmanager, Grafana and Loki
 (ARCHITECTURE.md, "Observability and customer logs"; decisions 106 and 107),
-installed by `infra/dev-cluster/monitoring.sh`. Alerts go by e-mail through
+installed by `infra/dev-cluster/monitoring.sh` as a step of every install:
+the control plane reads its Prometheus for what Resources use, for
+metering and for storage auto-grow (decision 124). Without `ALERT_EMAIL` it
+collects and evaluates but sends nothing, and the steps below are not
+needed. With it, alerts go by e-mail through
 SES; a dead man's switch at healthchecks.io notices when no alert can be
 sent at all.
 
@@ -456,7 +460,7 @@ sent at all.
    pbpaste > ~/.config/openupstream/healthchecks-ping-url-dev
    ```
 
-3. **Install**, with the address alerts go to:
+3. **Install** again, with the address alerts go to:
 
    ```bash
    ALERT_EMAIL=you@example.com ./monitoring.sh
