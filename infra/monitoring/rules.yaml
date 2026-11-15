@@ -66,14 +66,20 @@ spec:
             description: It did not grow by itself; check its auto-grow setting and maximum, the Account's Holds and the node's free space (the control plane logs `growth:`).
         - alert: DatabaseVolumeResizeFailed
           # A grow the API or the growth pass accepted that TopoLVM could not
-          # carry out (two requests took the same room): the Database reads
-          # `resizing` and keeps its old size.
-          expr: max by (namespace, persistentvolumeclaim) (kube_persistentvolumeclaim_status_condition{namespace=~"project-.*", condition=~"ControllerResizeError|NodeResizeError", status="true"}) == 1
-          for: 10m
+          # carry out (two requests took the same room): the PVC asks for
+          # more than its filesystem has (normally within 1%), and the
+          # Database reads `resizing`. kube-state-metrics has no PVC
+          # condition metric here, so the sizes are compared.
+          expr: |
+            max by (namespace, persistentvolumeclaim) (
+              kube_persistentvolumeclaim_resource_requests_storage_bytes{namespace=~"project-.*", persistentvolumeclaim=~"db-.*"}
+              / on (namespace, persistentvolumeclaim) kubelet_volume_stats_capacity_bytes
+            ) > 1.05
+          for: 15m
           labels: {severity: warning}
           annotations:
-            summary: Database volume {{ $labels.persistentvolumeclaim }} in {{ $labels.namespace }} cannot grow
-            description: TopoLVM refused the resize, most likely for lack of room on the node; it retries and completes once there is room.
+            summary: Database volume {{ $labels.persistentvolumeclaim }} in {{ $labels.namespace }} has not grown to its size
+            description: The PVC asks for {{ $value | humanizePercentage }} of what its filesystem has; TopoLVM most likely lacks room on the node and retries once there is.
     - name: object-storage
       rules:
         - alert: GarageUnhealthy
