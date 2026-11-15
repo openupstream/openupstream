@@ -119,6 +119,18 @@ install_k3s() { # site, ip, extra args...
     $*"
 }
 
+# Our AppArmor profile for containers on every node with AppArmor, before
+# containerd loads its own: without it Ubuntu 26.04 (IMAGE=ubuntu-26.04)
+# keeps a container's processes from signalling each other and Postgres
+# never starts (ARCHITECTURE.md, decision 113).
+for node_ip in "${IPS[@]}"; do
+  if "${SSH[@]}" "root@$node_ip" test -d /sys/kernel/security/apparmor; then
+    echo "installing the AppArmor profile cri-containerd.apparmor.d on $node_ip"
+    "${SSH[@]}" "root@$node_ip" "tee /etc/apparmor.d/cri-containerd.apparmor.d >/dev/null && apparmor_parser -r /etc/apparmor.d/cri-containerd.apparmor.d" \
+      <../apparmor/cri-containerd.apparmor.d
+  fi
+done
+
 # gVisor on the compute nodes, before k3s renders containerd's config at its
 # first start; the label lets the RuntimeClass gvisor schedule only there.
 for node_ip in "${IPS[0]}" "${IPS[1]}"; do

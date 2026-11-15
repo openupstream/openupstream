@@ -73,6 +73,7 @@ case $args in
   *"test -d /sys/kernel/security/apparmor"*) [[ \${APPARMOR_STUB:-1} == 1 ]] ;;
   *"apparmor_parser"*) echo "profile: $(grep -c '^profile cri-containerd.apparmor.d ')" >>"$STUB_LOG" ;;
   *"bash -s"*) cat >/dev/null ;;
+  *"k3s kubectl get nodes"*) printf '%s' "\${EXTERNAL_IP_STUB:-}" ;;
   *"k3s.yaml"*) printf 'clusters:\n- cluster:\n    server: https://127.0.0.1:6443\n  name: default\n' ;;
 esac
 `,
@@ -302,4 +303,18 @@ test('the DatabaseConfig carries the layout, and a single node stores Databases 
     const original = JSON.parse(readFileSync(join(here, 'database-config.json'), 'utf8'));
     assert.deepEqual(config('multi-node'), { ...original, layout: 'multi-node' });
     assert.deepEqual(config('single-node'), { ...original, layout: 'single-node', storageClass: 'local-path' });
+});
+
+test('k3s-single-node.sh refuses a NODE_ADDRESS that an installed k3s does not have, unless REINSTALL=1', () => {
+    const state = mkdtempSync(join(tmpdir(), 'dev-cluster-state-'));
+    const other = run('./k3s-single-node.sh root@mini', {
+        STATE: state, K3S_INSTALLED_STUB: '1', EXTERNAL_IP_STUB: '192.168.1.50', NODE_ADDRESS: '100.101.102.103',
+    });
+    assert.notEqual(other.status, 0);
+    assert.match(other.stderr, /ExternalIP is '192\.168\.1\.50', not 100\.101\.102\.103/);
+    assert.doesNotMatch(other.log, /get\.k3s\.io/);
+    const same = k3s({ K3S_INSTALLED_STUB: '1', EXTERNAL_IP_STUB: '100.101.102.103', NODE_ADDRESS: '100.101.102.103' });
+    assert.equal(same.status, 0);
+    const reinstall = k3s({ K3S_INSTALLED_STUB: '1', EXTERNAL_IP_STUB: '192.168.1.50', NODE_ADDRESS: '100.101.102.103', REINSTALL: '1' });
+    assert.match(reinstall.log, /get\.k3s\.io.*--node-external-ip 100\.101\.102\.103/s);
 });

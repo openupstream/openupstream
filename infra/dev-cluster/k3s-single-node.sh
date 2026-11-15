@@ -27,7 +27,10 @@
 #
 # NODE_ADDRESS, if set, becomes the node's ExternalIP, the address dns.sh
 # puts into DNS instead of the one k3s picks (the default route's, usually
-# the home network's). For a machine reached over Tailscale only:
+# the home network's); on a machine that already has k3s with another
+# ExternalIP the script refuses it unless REINSTALL=1. Not yet tested
+# across a reboot that starts k3s before Tailscale. For a machine reached
+# over Tailscale only:
 #
 #   NODE_ADDRESS=$(ssh root@minisforum tailscale ip -4) ./k3s-single-node.sh root@minisforum
 #
@@ -59,6 +62,15 @@ fi
 
 if [[ ${REINSTALL:-} != 1 ]] && "${SSH[@]}" test -x /usr/local/bin/k3s; then
   echo "k3s is already installed on $HOST; installing nothing (REINSTALL=1 to install again)"
+  # k3s takes NODE_ADDRESS only when installed; refuse to ignore it.
+  if [[ -n ${NODE_ADDRESS:-} ]]; then
+    current=$("${SSH[@]}" "$SUDO k3s kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type==\"ExternalIP\")].address}'")
+    if [[ " $current " != *" $NODE_ADDRESS "* ]]; then
+      echo "the node's ExternalIP is '${current:-none}', not $NODE_ADDRESS;" \
+        "REINSTALL=1 NODE_ADDRESS=$NODE_ADDRESS installs k3s again with it (restarts k3s)" >&2
+      exit 1
+    fi
+  fi
 else
   echo "installing gVisor on $HOST"
   "${SSH[@]}" $SUDO bash -s <../gvisor/install.sh
