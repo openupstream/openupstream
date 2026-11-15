@@ -395,7 +395,8 @@ digest (#55).
   Cluster asks for the row's sizes and no volume is still growing.
   Growing is refused while the Account has a Hold, and with 507 when the
   nodes lack room: a new Database needs its storage (TopoLVM's free space)
-  and its memory (a node's allocatable memory less what its pods request)
+  and its memory (a node's allocatable memory less what its pods request,
+  RuntimeClass overhead included)
   on a node in each compute Site, a grow the extra on the nodes holding
   its instances. Without the check the row (and the bill) took a size the
   volume never reached, and a Database too large for any node stayed
@@ -416,7 +417,8 @@ digest (#55).
   for its PVCs to grow but does not grow them when the Cluster's size
   rises (dev cluster, 2026-11-15), so the pass grows the PVCs of such a
   Cluster once it has its row's size, whether grown by itself or by a
-  resize. Without Prometheus nothing grows by itself; `DatabaseVolumeFull`
+  resize. The primary then waits out Kubernetes' crash-loop back-off
+  (up to 5 minutes) before it starts again. Without Prometheus nothing grows by itself; `DatabaseVolumeFull`
   (over 95% for 10 minutes) catches every Database that did not grow:
   auto-grow off or at its maximum, a held Account, a full node, or a
   runaway writer that growth keeps up with until the node is full.

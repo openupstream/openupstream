@@ -269,13 +269,32 @@ interface CronJobObject {
 
 interface PodObject {
     metadata: { name: string; deletionTimestamp?: Date };
-    spec?: { nodeName?: string; containers?: { name: string; resources?: { requests?: Record<string, string> } }[] };
+    spec?: {
+        nodeName?: string;
+        containers?: { name: string; resources?: { requests?: Record<string, string> } }[];
+        initContainers?: { name: string; resources?: { requests?: Record<string, string> } }[];
+        /** Set from the RuntimeClass (gVisor's) and counted by the scheduler. */
+        overhead?: Record<string, string>;
+    };
     status?: {
         containerStatuses?: { name: string; restartCount?: number; state?: { running?: unknown; terminated?: unknown; waiting?: unknown } }[];
     };
 }
 
 const ZONE_LABEL = 'topology.kubernetes.io/zone';
+
+const memoryOf = (requests: Record<string, string> | undefined): number => bytesOf(requests?.['memory'] ?? '0') ?? 0;
+
+/**
+ * Memory the scheduler reserves for a pod: its containers' requests, or
+ * its largest init container's if that is more, plus the RuntimeClass's
+ * overhead.
+ */
+export const podMemoryRequest = (pod: Pick<PodObject, 'spec'>): number => {
+    const containers = (pod.spec?.containers ?? []).reduce((sum, container) => sum + memoryOf(container.resources?.requests), 0);
+    const init = Math.max(0, ...(pod.spec?.initContainers ?? []).map((container) => memoryOf(container.resources?.requests)));
+    return Math.max(containers, init) + memoryOf(pod.spec?.overhead);
+};
 
 const podInfoOf = (pod: PodObject): PodInfo => ({
     name: pod.metadata.name,
@@ -452,9 +471,7 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
             if (!pods.ok) {
                 return err(pods.error.message);
             }
-            const requested = pods.value.items
-                .flatMap((pod) => pod.spec?.containers ?? [])
-                .reduce((sum, container) => sum + (bytesOf(container.resources?.requests?.['memory'] ?? '0') ?? 0), 0);
+            const requested = pods.value.items.reduce((sum, pod) => sum + podMemoryRequest(pod), 0);
             return ok(allocatable - requested);
         },
         growVolumes: async (namespace, name, storageGb) => {
