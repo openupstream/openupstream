@@ -26,6 +26,8 @@ const database: Database = {
     homeSite: 'hetzner-fsn1',
     memoryMb: 512,
     storageGb: 10,
+    autoGrow: true,
+    maxStorageGb: null,
     createdAt: '2026-10-17T00:00:00Z',
 };
 

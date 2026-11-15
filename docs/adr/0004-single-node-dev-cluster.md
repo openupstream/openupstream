@@ -43,8 +43,9 @@ of that.
    PgBouncer (`layout` in the DatabaseConfig), stored with k3s's
    local-path provisioner instead of TopoLVM (decision 109): no disk to
    prepare, but sizes are neither reserved nor checked (the API's room
-   check finds no TopoLVM capacity and accepts any size), and growing
-   storage never completes. madAuth, the control
+   check finds no TopoLVM capacity and accepts any size), growing
+   storage never completes, and storage does not grow by itself
+   (decision 111: the control plane gets no Prometheus there). madAuth, the control
    plane, CoreDNS, the CloudNativePG operator, Prometheus and
    Alertmanager run once instead of once per compute Site. The alert
    for a Database without a standby cannot fire.

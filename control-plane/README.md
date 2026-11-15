@@ -85,9 +85,9 @@ gets 402 when it creates a Resource, with `{error, holds}`.
 | `GET /v1/projects/{id}` | |
 | `DELETE /v1/projects/{id}` | 202: the Project and its Databases and Buckets are deleted, see Cleanup; its Domains and Routes at once |
 | `GET /v1/projects/{id}/databases` | with each Database's `state` and in-cluster `connection` (no password: the Project's Services and Jobs get the URL as `DATABASE_URL_<NAME>`, the oldest's as `DATABASE_URL`) |
-| `POST /v1/projects/{id}/databases` | `{name, homeSite?, memoryMb, storageGb, restoreFrom?}` → 201, `state: provisioning`; 402 if the Account has a Hold, 507 when no node in one of the compute Sites has room for `storageGb`. `restoreFrom: {databaseId, targetTime?}` makes it a copy of another Database of the Project, live or deleted within the retention window, at that time (RFC 3339 with its zone) or the latest point its backups reach (decision 108): 400 for a time before its oldest base backup or less than 5 minutes before now (or its deletion), 409 before its first base backup has finished |
+| `POST /v1/projects/{id}/databases` | `{name, homeSite?, memoryMb, storageGb, autoGrow?, maxStorageGb?, restoreFrom?}` → 201, `state: provisioning`; 402 if the Account has a Hold, 507 when no node in one of the compute Sites has room for `storageGb` or `memoryMb`. Storage grows by itself unless `autoGrow` is false, up to `maxStorageGb` if set (decision 111). `restoreFrom: {databaseId, targetTime?}` makes it a copy of another Database of the Project, live or deleted within the retention window, at that time (RFC 3339 with its zone) or the latest point its backups reach (decision 108): 400 for a time before its oldest base backup or less than 5 minutes before now (or its deletion), 409 before its first base backup has finished |
 | `GET /v1/projects/{id}/databases/{id}` | `state` read live from the Cluster |
-| `PATCH /v1/projects/{id}/databases/{id}` | `{memoryMb?, storageGb?}` → 200 with `state: resizing` until the Cluster has the new sizes (decision 110); 400 for a smaller `storageGb` (a volume cannot shrink), 402 for growing while the Account has a Hold, 507 when the nodes holding its volumes lack the extra space (TopoLVM's CSIStorageCapacity) |
+| `PATCH /v1/projects/{id}/databases/{id}` | `{memoryMb?, storageGb?, autoGrow?, maxStorageGb?}` → 200 with `state: resizing` until the Cluster has the new sizes (decision 110); 400 for a smaller `storageGb` (a volume cannot shrink), 402 for growing while the Account has a Hold, 507 when the nodes holding its instances lack the extra disk (TopoLVM's CSIStorageCapacity) or memory (allocatable less requests); 400 for a `maxStorageGb` below the storage (`null` removes the limit) |
 | `DELETE /v1/projects/{id}/databases/{id}` | 202 |
 | `GET /v1/projects/{id}/buckets` | the Buckets, without their keys |
 | `POST /v1/projects/{id}/buckets` | `{name}` → 201 with `access`: the Bucket's `endpoint`, `region` and its own key; 409 if the name is taken in any Project, also by a Bucket still being deleted; 402 if the Account has a Hold; 503 if Garage cannot be reached |
@@ -257,6 +257,17 @@ not queued with them and the next pass repairs a crossing), and the secrets pass
 live Project that has a data key, a Service or a Job, on one replica at a time (its own
 advisory lock). A Project without a namespace yet is skipped until an
 operator has created it.
+
+`src/databases/growth.ts` is storage auto-grow (decision 111): every
+`CLEANUP_INTERVAL_SECONDS`, on one replica at a time, it asks Prometheus at
+`PROMETHEUS_URL` for each Database volume's use (`kubelet_volume_stats_*`)
+and raises `storageGb` by half for every Database with `autoGrow` whose
+fullest volume is 90% used, up to `maxStorageGb` and the room on its nodes,
+except while the Account has a Hold. A Cluster CloudNativePG stopped for a
+full disk (phase `Not enough disk space`) gets its PVCs grown to the row's
+size once its spec has it, as CloudNativePG waits for that without doing
+it. Each decision is logged (`growth:`).
+Without `PROMETHEUS_URL` the pass does not run.
 
 ## Tests
 

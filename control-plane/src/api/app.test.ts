@@ -117,6 +117,8 @@ const nodeSites = new Map([
     ['node-lim', 'ovh-lim'],
 ]);
 const volumeNodes = new Map<string, string[]>();
+/** What a new pod could still request per node, in bytes. */
+const memoryFree = new Map<string, number>();
 
 /** The recovery windows of the fake Kubernetes' ObjectStores, by name; a string is an error. */
 const recoveryWindows = new Map<string, RecoveryWindow | string>();
@@ -134,6 +136,8 @@ const kube: ControlPlaneKube = {
     },
     storageCapacity: async () => ok(storageCapacity),
     volumeNodes: async (_namespace, name) => ok(volumeNodes.get(name) ?? []),
+    memoryFree: async (node) => ok(memoryFree.get(node)),
+    growVolumes: async () => ok([]),
     readRecoveryWindow: async (_namespace, name) => {
         const window = recoveryWindows.get(name);
         return typeof window === 'string' ? err(window) : ok(window);
@@ -472,6 +476,25 @@ describe('Databases', () => {
         assert.equal(again.status, 201);
     });
 
+    test('storage grows by itself by default, without a limit; the customer may set one or turn it off', async () => {
+        const post = (body: unknown) => call('POST', `/v1/projects/${projectId}/databases`, 'alice', body);
+        const plain = (await (await post({ name: 'grows', memoryMb: 256, storageGb: 2 })).json()) as DatabaseDetails;
+        assert.deepEqual([plain.autoGrow, plain.maxStorageGb], [true, null]);
+        assert.equal((await post({ name: 'capped', memoryMb: 256, storageGb: 5, maxStorageGb: 4 })).status, 400, 'a maximum below the size');
+        const capped = (await (await post({ name: 'capped', memoryMb: 256, storageGb: 5, maxStorageGb: 10, autoGrow: true })).json()) as DatabaseDetails;
+        assert.equal(capped.maxStorageGb, 10);
+
+        const patch = (body: unknown) => call('PATCH', `/v1/projects/${projectId}/databases/${capped.id}`, 'alice', body);
+        assert.equal((await patch({ maxStorageGb: 4 })).status, 400);
+        assert.equal((await patch({ storageGb: 12 })).status, 400, 'storage past the maximum');
+        const manual = (await (await patch({ autoGrow: false })).json()) as DatabaseDetails;
+        assert.deepEqual([manual.autoGrow, manual.maxStorageGb], [false, 10], 'the maximum stays');
+        const unlimited = (await (await patch({ maxStorageGb: null, autoGrow: true })).json()) as DatabaseDetails;
+        assert.deepEqual([unlimited.autoGrow, unlimited.maxStorageGb], [true, null]);
+        const row = (await listDatabaseRows(db.pool)).find((r) => r.database.id === capped.id);
+        assert.deepEqual([row?.database.autoGrow, row?.database.maxStorageGb], [true, null]);
+    });
+
     test('resized: storage only grows, memory either way; resizing until the Cluster has the new sizes', async () => {
         const created = (await (
             await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name: 'sized', memoryMb: 512, storageGb: 5 })
@@ -497,6 +520,11 @@ describe('Databases', () => {
             ['node-lim', 14.5 * GiB],
         ]);
         volumeNodes.set(`db-${created.id}`, ['node-fsn', 'node-lim']);
+        const MiB = 1024 ** 2;
+        memoryFree.set('node-fsn', 4096 * MiB).set('node-lim', 1500 * MiB);
+        const tooMuchMemory = await patch({ memoryMb: 2560 });
+        assert.equal(tooMuchMemory.status, 507, 'ovh-lim has 1500 MB free, the instance needs 1536 MB more');
+        assert.match(((await tooMuchMemory.json()) as { error: string }).error, /at most 1500 MB more/);
         const tooBig = await patch({ storageGb: 25 });
         assert.equal(tooBig.status, 507, 'ovh-lim has room for 14 GB more, not 15');
         assert.match(((await tooBig.json()) as { error: string }).error, /at most 14 GB more/);
@@ -505,10 +533,16 @@ describe('Databases', () => {
             507,
             'a new one needs room in both Sites',
         );
+        assert.equal(
+            (await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name: 'hungry', memoryMb: 2048, storageGb: 1 })).status,
+            507,
+            'and memory in both Sites',
+        );
         volumeNodes.delete(`db-${created.id}`);
         assert.equal((await patch({ storageGb: 14 })).status, 200, 'no volumes yet: room in both Sites as for a new one');
         assert.equal((await patch({ storageGb: 15 })).status, 507);
         storageCapacity = undefined;
+        memoryFree.clear();
 
         clusters.set(`db-${created.id}`, { instances: 2, readyInstances: 2, ready: true, memoryMb: 1024, storageGb: 14 });
         const state = async () =>

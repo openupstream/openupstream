@@ -411,16 +411,35 @@ digest (#55).
   16 s and 4 minutes with the defaults; a switchover paused 8 s but left
   the primary in the other Site. The API reports `resizing` until the
   Cluster asks for the row's sizes and no volume is still growing.
-  Growing is refused while the Account has a Hold, and with 507 when
-  TopoLVM reports too little free space: a new Database needs its size on
-  a node in each compute Site, a grow the extra size on the nodes holding
-  its volumes. Without the check the row (and the bill) took a size the
+  Growing is refused while the Account has a Hold, and with 507 when the
+  nodes lack room: a new Database needs its storage (TopoLVM's free space)
+  and its memory (a node's allocatable memory less what its pods request,
+  RuntimeClass overhead included)
+  on a node in each compute Site, a grow the extra on the nodes holding
+  its instances. Without the check the row (and the bill) took a size the
   volume never reached, and a Database too large for any node stayed
   `provisioning`. When Kubernetes cannot be asked, the size is accepted
-  unchecked rather than refusing every create. Memory has no such check
-  yet, and a grow that fails anyway (two requests taking the same space)
-  reads `resizing` without a reason (Open question 21). Storage that grows by itself up
-  to a customer-set maximum is decided and comes next (decision 111).
+  unchecked rather than refusing every create. A grow that fails anyway
+  (two requests taking the same room) reads `resizing` and fires the alert
+  `DatabaseVolumeResizeFailed`; it completes by itself once there is room.
+- Storage grows by itself (decision 111): on by default, without a limit
+  unless the customer sets `maxStorageGb`; `autoGrow: false` leaves it to
+  resizing. A pass of the control plane every 30 s reads each volume's use
+  from the platform's Prometheus (`kubelet_volume_stats_*`, `PROMETHEUS_URL`)
+  and, once a Database's fullest volume is 90% used, raises `storageGb` by
+  half (at least 1 GB), never past the maximum, by less if the nodes have
+  less room, through the same row change as a resize. It skips a Database
+  whose volume has not reached its last size yet, and one whose Account
+  has a Hold. A volume that fills up anyway, faster than a pass, stops
+  Postgres; CloudNativePG then waits in the phase `Not enough disk space`
+  for its PVCs to grow but does not grow them when the Cluster's size
+  rises (dev cluster, 2026-11-15), so the pass grows the PVCs of such a
+  Cluster once it has its row's size, whether grown by itself or by a
+  resize. The primary then waits out Kubernetes' crash-loop back-off
+  (up to 5 minutes) before it starts again. Without Prometheus nothing grows by itself; `DatabaseVolumeFull`
+  (over 95% for 10 minutes) catches every Database that did not grow:
+  auto-grow off or at its maximum, a held Account, a full node, or a
+  runaway writer that growth keeps up with until the node is full.
 - PgBouncer through a CloudNativePG `Pooler` of type `rw`, so it follows the
   primary: `db-<database id>-pooler`, two instances with one per compute
   Site, transaction pooling with `max_prepared_statements` so drivers'
@@ -872,7 +891,8 @@ digest (#55).
   (`rules.yaml`): a Database instance down, a Database without its
   standby, replication lag over a minute, WAL archiving failing for 15
   minutes with nothing archived (counted by failures, as a quiet Database
-  piles up few WAL files), Garage
+  piles up few WAL files), a Database volume over 95% full or failing to
+  grow (decision 111), Garage
   unhealthy or a storage node down, a certificate expiring within 14 days
   or not ready, a Traefik pod down. A customer's crashing Service is not
   ours to be woken for; their Databases are. Alertmanager mails them
@@ -1060,8 +1080,8 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 108 | A restore is a field of creating a Database, `restoreFrom: {databaseId, targetTime?}`, for any Database of the same Project, live or deleted within the retention window; without a target time, the latest point the archive reaches. Memory, storage and Home site are given as for any Database (`oup pg restore` defaults them to a live source's). The API refuses a time before the source's oldest base backup (its ObjectStore's recovery window) or less than 5 minutes before now or the source's deletion. Once the restored Cluster has a ready instance, the restore is recorded as finished and the Cluster is rendered without the recovery bootstrap | a route on the source, `POST …/databases/{id}/restore` (cannot address a deleted source); letting CloudNativePG fail an unreachable time | DigitalOcean's `backup_restore` on create, Fly's `--fork-from`: one route, the same checks and Holds as any create, and decision 60's promise that a deleted Database can be restored is reachable through the API. A restore that could only fail would leave a Database stuck in `provisioning`. Costs: the API reads the ObjectStore (`get` on `objectstores` for the control plane); a deleted source is restored by its id, which only `oup pg delete` prints, since deleted Databases are not listed |
 | 109 | Databases' volumes are thick logical volumes from TopoLVM in the volume group `openupstream` on each compute Site, placed through Kubernetes' storage capacity tracking (no scheduler extender), 10 GB of each group spare; on the dev cluster the group is a Hetzner Cloud Volume per compute VM | thin provisioning with an overprovision ratio; local-path on the dev cluster; a loop device on the VM's disk | one Database filling its volume never stops another, and nothing new needs watching; RAM, not disk, fills a node first (decision 1), so thin's density buys little while its full pool would stop every Database on the node. A cloud volume is a real block device, so the dev cluster sets up storage as the servers do. Costs: storage billed but unused still takes disk; about €0.005 an hour per dev session for two volumes. Replaces decision 52's local-path storage |
 | 110 | `PATCH …/databases/{id}` takes `memoryMb` (up or down) and `storageGb` (up only); growing either is refused while the Account has a Hold, and with 507 when TopoLVM reports no room; the API reports `resizing` until the Cluster's spec has the row's sizes and no volume is growing. A rolling restart restarts the primary in place after the standby, with a 30 s smart shutdown and PgBouncer's `server_login_retry` at 1 s | storage only; resizing by recreating the Database; switchover (8 s pause, but the primary leaves its Home site); switchover and back; a temporary third instance in the Home site (a full copy per resize) | a volume cannot shrink, and TopoLVM grows one online; memory changes are CloudNativePG's rolling restart; in place keeps the primary where Services expect it, and the shorter shutdown wait cut a resize from 4 to 1.5 minutes with one 12 s write pause (dev cluster, 2026-11-15). The state comes from comparing sizes, so no spec version is needed. Costs: the control plane lists CSIStorageCapacity and PVCs; the room check is racy (two requests can take the same space); a shrunk Database's data must fit its memory's working set; a smaller disk means restoring into a new Database |
-| 111 | Storage grows by itself: the customer sets a maximum (`maxStorageGb`), a pass grows `storageGb` when a volume's free space falls below a threshold, up to that maximum, through the same path as decision 110 | thin provisioning (decision 109); manual resizing only | AWS RDS, Supabase and DigitalOcean pair fixed-size disks with growth up to a customer-set ceiling: a full disk does not stop writes, and the bill cannot run away. Postgres does not notice the filesystem growing. Costs: growth is a ratchet (no shrinking); a node without free space fails the grow, which needs an alert. Not built yet: the next item of build step 1 |
-| 112 | A single-node dev cluster ([ADR-0004](docs/adr/0004-single-node-dev-cluster.md)): two layouts, `multi-node` (one node per Site) and `single-node` (one node standing in for every Site, development only), recorded once in the ConfigMap `openupstream-system/cluster-layout` by `install-multi-node.sh` or `install-single-node.sh`, which refuse a cluster without a node in each Site or with more than one node; every install step reads the layout. In single-node Garage and Loki keep one copy, a Database runs one instance and one PgBouncer (`layout` in the DatabaseConfig) on k3s's local-path storage instead of TopoLVM, so the API's room check finds no capacity and accepts sizes unchecked, the platform's per-Site components run once, and the node carries the label of `hetzner-fsn1`, so the API and placement stay unchanged. `infra/dev-cluster` installs onto any k3s cluster (`k3s-single-node.sh` sets one machine up over SSH); the Hetzner VM scripts move to `infra/dev-cluster-hetzner`. `dns.sh` reads the compute nodes' addresses from Kubernetes (ExternalIP first), so a home node's private or Tailscale address (`NODE_ADDRESS` in `k3s-single-node.sh`) goes into public DNS; the domains are required in single-node and may be names inside a bunny.net zone, certificates come from Let's Encrypt through DNS-01, by default from the production issuer, an exception to decision 70 | three VMs on one machine (manifests unchanged); TopoLVM on a single node from the free space of the OS's volume group (needs a room check per existing Site, and Database volumes next to the root volume); k3d (three k3s nodes as containers); detecting the layout from the node count; a local CA with sslip.io or a home DNS name; the API refusing `ovh-lim` in single-node | the three-node rules only protect against a machine failing when the nodes are different machines: three VMs on one box need about 24 GB of RAM and two or three copies of every byte for redundancy that is not there, while one node with one copy needs about a third of that. k3d shares that cost and may not run gVisor inside a container. A recorded layout cannot flip when a three-node cluster has temporarily lost two nodes, and a step run again on its own (e.g. `platform.sh` for `CLI_CLIENT_ID`) installs the same way. Public DNS pointing at a private address and DNS-01 give real certificates with no inbound connection and no CA to trust. Costs: no failover and no test of placement or the third Site on such a cluster, Database sizes neither reserved nor checked and storage growth (decision 110) never completing there, downtime when its only Database instance restarts, no certificates for custom domains (HTTP-01 cannot reach it), and routers with DNS rebinding protection need an exception for the domain. Tested on a Minisforum mini PC on Ubuntu 26.04 reached over Tailscale (2026-11-15, k3s 1.36): 21 pods running, one instance per platform Database, DNS pointing at the Tailscale address, the API and madAuth answering with Let's Encrypt certificates (after decision 113) |
+| 111 | Storage grows by itself, on by default and without a limit unless the customer sets `maxStorageGb` (`autoGrow: false` turns it off): once a Database's fullest volume is 90% used, a control-plane pass raises `storageGb` by half (at least 1 GB), never past the maximum and by less if the nodes have less room, through the same path as decision 110; not while the Account has a Hold. Usage comes from the platform's Prometheus (`kubelet_volume_stats_*`). The API also checks memory room before accepting a size | off unless set, with a maximum (RDS); +max(10%, 1 GB) at 10% free (RDS's step, scaled down); TopoLVM's pvc-autoresizer (grows PVCs behind CloudNativePG's and the row's back); the kubelet's stats API (needs `nodes/proxy`, which reaches every pod); Postgres sizes over SQL (misses WAL and temp files) | a full disk stops every write, and most customers never set a limit; Supabase grows by half at 90% too, fewer and larger steps than RDS. TopoLVM grows in seconds, so no cooldown is needed. Prometheus already scrapes every volume. The pass also grows the PVCs of a Cluster CloudNativePG stopped for a full disk (it waits for them without growing them), so the control plane may patch PVCs. Costs: storage is a ratchet and, without a limit, a runaway writer grows the bill until the node is full (`DatabaseVolumeFull` alerts); without Prometheus nothing grows; a held Account's Database fills up |
+| 112 | A single-node dev cluster ([ADR-0004](docs/adr/0004-single-node-dev-cluster.md)): two layouts, `multi-node` (one node per Site) and `single-node` (one node standing in for every Site, development only), recorded once in the ConfigMap `openupstream-system/cluster-layout` by `install-multi-node.sh` or `install-single-node.sh`, which refuse a cluster without a node in each Site or with more than one node; every install step reads the layout. In single-node Garage and Loki keep one copy, a Database runs one instance and one PgBouncer (`layout` in the DatabaseConfig) on k3s's local-path storage instead of TopoLVM, so the API's room check finds no capacity and accepts sizes unchecked, the platform's per-Site components run once, and the node carries the label of `hetzner-fsn1`, so the API and placement stay unchanged. `infra/dev-cluster` installs onto any k3s cluster (`k3s-single-node.sh` sets one machine up over SSH); the Hetzner VM scripts move to `infra/dev-cluster-hetzner`. `dns.sh` reads the compute nodes' addresses from Kubernetes (ExternalIP first), so a home node's private or Tailscale address (`NODE_ADDRESS` in `k3s-single-node.sh`) goes into public DNS; the domains are required in single-node and may be names inside a bunny.net zone, certificates come from Let's Encrypt through DNS-01, by default from the production issuer, an exception to decision 70 | three VMs on one machine (manifests unchanged); TopoLVM on a single node from the free space of the OS's volume group (needs a room check per existing Site, and Database volumes next to the root volume); k3d (three k3s nodes as containers); detecting the layout from the node count; a local CA with sslip.io or a home DNS name; the API refusing `ovh-lim` in single-node | the three-node rules only protect against a machine failing when the nodes are different machines: three VMs on one box need about 24 GB of RAM and two or three copies of every byte for redundancy that is not there, while one node with one copy needs about a third of that. k3d shares that cost and may not run gVisor inside a container. A recorded layout cannot flip when a three-node cluster has temporarily lost two nodes, and a step run again on its own (e.g. `platform.sh` for `CLI_CLIENT_ID`) installs the same way. Public DNS pointing at a private address and DNS-01 give real certificates with no inbound connection and no CA to trust. Costs: no failover and no test of placement or the third Site on such a cluster, Database sizes neither reserved nor checked, storage growth (decision 110) never completing and automatic growth (decision 111) off there, downtime when its only Database instance restarts, no certificates for custom domains (HTTP-01 cannot reach it), and routers with DNS rebinding protection need an exception for the domain. Tested on a Minisforum mini PC on Ubuntu 26.04 reached over Tailscale (2026-11-15, k3s 1.36): 21 pods running, one instance per platform Database, DNS pointing at the Tailscale address, the API and madAuth answering with Let's Encrypt certificates (after decision 113) |
 | 113 | On nodes with AppArmor, containers run under our copy of containerd's profile `cri-containerd.apparmor.d` (`infra/apparmor`), containerd 2.3's own plus signal and ptrace rules for the stacked label `cri-containerd.apparmor.d//&unconfined`; installed into `/etc/apparmor.d` and loaded before k3s by `k3s-single-node.sh`, on every run. Delete it once k3s ships containerd's fix (containerd #14487) | `kernel.apparmor_restrict_unprivileged_unconfined=0`; the Databases' pods `Unconfined`; staying on Ubuntu 24.04 | Ubuntu 26.04 stacks every container's profile on `unconfined`, and containerd's rules name only the unstacked label, so a container's processes cannot signal each other: on the Minisforum (2026-11-15) every Postgres failed with `could not signal for checkpoint: Permission denied` and stayed in recovery. The copy fixes exactly that rule, as upstream does, and keeps the containers confined; the sysctl would switch off Ubuntu's restriction on unprivileged user namespaces for every program on the machine, and `Unconfined` drops AppArmor from the Databases. Costs: our copy lags behind changes to containerd's profile until it is deleted, and it must be in place before k3s first starts. The Hetzner dev cluster runs Ubuntu 24.04 and does not need it yet; production nodes on 26.04 will |
 
 ## Open questions
@@ -1186,14 +1206,9 @@ Decisions table once it is settled.
 20. ~~**Customer pods reach the nodes' own ports.**~~ Settled by decision
     105: the egress policies leave the nodes' addresses out but for 80 and
     443.
-21. **Capacity beyond storage.** The API checks TopoLVM's free space before
-    accepting a size (decision 110), but not memory: a `memoryMb` no node
-    can schedule is accepted, and the restarted standby stays Pending while
-    the Database runs on one instance. Checking needs each node's
-    allocatable memory less what its pods request (listing pods across
-    namespaces). A volume grow that fails after the check (TopoLVM's
-    `ControllerResizeError`) keeps the Database `resizing` with no reason
-    shown. Both belong with decision 111's alert for a node without room.
+21. ~~**Capacity beyond storage.**~~ Settled with decision 111: the API
+    also checks memory before accepting a size, and a volume grow that
+    fails anyway fires `DatabaseVolumeResizeFailed`.
 
 ## Build order
 
@@ -1210,8 +1225,19 @@ Decisions table once it is settled.
    the Databases operator running in the cluster on it, both from GHCR
    images; creating and deleting Projects and Databases through the
    public API, with the cleanup; madAuth with sign-up, API keys and
-   Accounts created through the API (2026-10-17). Left: storage that grows
-   by itself (decision 111). TopoLVM and resizing (decisions 109 and 110),
+   Accounts created through the API (2026-10-17). Storage that grows by
+   itself (decision 111), tested on the dev cluster (2026-11-15) with
+   Prometheus and the alerts installed: a 1 GB Database filled to 93% was
+   raised to 2 GB within one pass; one with auto-grow off and one at its
+   maximum stayed and fired `DatabaseVolumeFull`; a create larger than a
+   node's free memory was refused with 507. The run found that a volume
+   that filled up faster than a pass stops Postgres and CloudNativePG
+   never grows its PVCs (fixed: the pass does); with that, a full
+   Database resized through the API was back in a minute, one whose
+   maximum was raised in five (Kubernetes' crash-loop back-off). A grow
+   TopoLVM could not carry out fired `DatabaseVolumeResizeFailed`, which
+   first used a PVC condition metric kube-state-metrics does not have
+   (fixed: it compares the sizes). TopoLVM and resizing (decisions 109 and 110),
    tested on the dev cluster (2026-11-15): every Database instance got a
    logical volume of its size in its node's volume group, the third Site
    none; `oup pg resize` grew 2 to 5 to 8 GB online without restarting

@@ -177,6 +177,14 @@ if [[ $SIGNUP == closed ]]; then
     --from-file=WAITLIST_IMPRINT="$IMPRINT_FILE"
   )
 fi
+# Storage auto-grow reads volume usage from the platform's Prometheus
+# (decision 111), once monitoring.sh has installed it; run this again after.
+# Not on a single node: its local-path volumes cannot grow, so a grown size
+# would never be reached (decision 112).
+PROMETHEUS_URL=""
+if [[ $LAYOUT == multi-node ]] && kubectl -n monitoring get service kube-prometheus-stack-prometheus >/dev/null 2>&1; then
+  PROMETHEUS_URL=http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+fi
 kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client -o yaml \
   --from-literal=AUTH_ISSUER="$MADAUTH_ISSUER" \
   --from-literal=MADAUTH_URL="http://madauth.$PLATFORM_NS.svc:8787" \
@@ -189,6 +197,7 @@ kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client
   --from-literal=CUSTOMER_DOMAIN="$CUSTOMER_DOMAIN" \
   --from-literal=PLATFORM_DOMAIN="$PLATFORM_DOMAIN" \
   --from-literal=CLI_CLIENT_ID="${CLI_CLIENT_ID:-}" \
+  --from-literal=PROMETHEUS_URL="$PROMETHEUS_URL" \
   ${WAITLIST_CONFIG[@]+"${WAITLIST_CONFIG[@]}"} | kubectl apply -f - >/dev/null
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/control-plane/deploy/control-plane.yaml" | replicas |
   kubectl apply -f - >/dev/null

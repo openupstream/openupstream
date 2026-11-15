@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { quantityIn, stateOf } from './kube.js';
+import { podMemoryRequest, quantityIn, stateOf } from './kube.js';
 
 const healthy = { instances: 2, readyInstances: 2, ready: true, memoryMb: 512, storageGb: 5 };
 const wanted = { memoryMb: 512, storageGb: 5 };
@@ -26,4 +26,13 @@ test('quantities in the form the operator writes', () => {
     assert.equal(quantityIn('10Gi', 'Mi'), undefined);
     assert.equal(quantityIn('1.5Gi', 'Gi'), undefined);
     assert.equal(quantityIn(undefined, 'Gi'), undefined);
+});
+
+test("a pod's memory request as the scheduler counts it: containers or the largest init container, plus overhead", () => {
+    const Mi = 1024 ** 2;
+    const container = (memory: string) => ({ name: 'c', resources: { requests: { memory } } });
+    assert.equal(podMemoryRequest({ spec: { containers: [container('256Mi'), container('64Mi')] } }), 320 * Mi);
+    assert.equal(podMemoryRequest({ spec: { containers: [container('256Mi')], initContainers: [container('512Mi')] } }), 512 * Mi);
+    assert.equal(podMemoryRequest({ spec: { containers: [container('256Mi')], overhead: { memory: '64Mi' } } }), 320 * Mi, "gVisor's overhead");
+    assert.equal(podMemoryRequest({ spec: { containers: [{ name: 'c' }] } }), 0);
 });
