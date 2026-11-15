@@ -57,6 +57,14 @@ export interface Config {
     readonly cleanupIntervalMs: number;
     /** The platform's Prometheus, where storage auto-grow reads volume usage (decision 111); without it, nothing grows by itself. */
     readonly prometheusUrl: string | undefined;
+    /**
+     * `dedicated`: each Database instance has a volume of its own size
+     * (TopoLVM). `shared`: the volumes are directories of the node's disk
+     * (a single node's local-path, decision 112), whose usage is the whole
+     * disk's: then storage does not grow by itself, and the API takes a
+     * Database's disk use from Postgres (decision 124).
+     */
+    readonly databaseVolumes: 'dedicated' | 'shared';
     /** The waitlist page while hosted sign-up is closed (decision 86); undefined: not served. */
     readonly waitlist?: WaitlistConfig;
 }
@@ -146,6 +154,10 @@ export function configFrom(env: Env): Result<Config, string[]> {
     if (customerDomain !== '' && !domainName.test(customerDomain)) {
         problems.push('CUSTOMER_DOMAIN must be a domain name, e.g. openupstream.app');
     }
+    const databaseVolumes = env['DATABASE_VOLUMES'] || 'dedicated';
+    if (databaseVolumes !== 'dedicated' && databaseVolumes !== 'shared') {
+        problems.push('DATABASE_VOLUMES must be dedicated or shared');
+    }
     const platformDomain = required('PLATFORM_DOMAIN');
     if (platformDomain !== '' && !domainName.test(platformDomain)) {
         problems.push('PLATFORM_DOMAIN must be a domain name, e.g. console.openupstream.com');
@@ -199,6 +211,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
         platformDomain,
         cleanupIntervalMs: cleanupSeconds * 1000,
         prometheusUrl: env['PROMETHEUS_URL'] || undefined,
+        databaseVolumes: databaseVolumes === 'shared' ? 'shared' : 'dedicated',
         ...(waitlist === undefined ? {} : { waitlist }),
     });
 }

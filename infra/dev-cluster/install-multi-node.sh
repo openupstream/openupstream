@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Installs the platform on a cluster with one node per Site, the layout of
 # production (ARCHITECTURE.md, "Sites and failure handling"; decision 112):
-# records the layout, then runs operators.sh, ingress.sh, garage.sh and
-# platform.sh. monitoring.sh is a separate step (README).
+# records the layout, then runs operators.sh, ingress.sh, garage.sh,
+# monitoring.sh and platform.sh. With ALERT_EMAIL set, monitoring.sh also
+# sends alerts (README).
 #
 # Refuses a cluster without a node in each of the three Sites
 # (topology.kubernetes.io/zone hetzner-fsn1, ovh-lim, netcup-nbg): with
@@ -30,4 +31,5 @@ record_layout multi-node
 ./operators.sh
 ./ingress.sh
 ./garage.sh
+./monitoring.sh
 ./platform.sh

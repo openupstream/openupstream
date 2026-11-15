@@ -59,7 +59,7 @@ export const timeKey = (time: string): string => {
 export const firstRead = (tail: number, now: string): { readonly tailLines: number } | { readonly sinceTime: string; readonly after: string } =>
     tail > 0 ? { tailLines: tail } : { sinceTime: now.replace(/\.\d+/, ''), after: now };
 
-const siteOf = (zone: string | undefined): Site | null => COMPUTE_SITES.find((site) => site === zone) ?? null;
+export const siteOf = (zone: string | undefined): Site | null => COMPUTE_SITES.find((site) => site === zone) ?? null;
 
 /**
  * Which logs of a container hold output, as the kubelet serves them:

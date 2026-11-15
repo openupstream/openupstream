@@ -66,6 +66,15 @@ test('a billing service: its ServiceAccount and the Holds new Accounts start wit
     assert.deepEqual(bad.ok ? [] : bad.error, ['NEW_ACCOUNT_HOLDS must be reasons that are DNS labels, e.g. payment-method']);
 });
 
+test('Database volumes are dedicated unless said to be shared', () => {
+    const config = configFrom(env);
+    assert.equal(config.ok && config.value.databaseVolumes, 'dedicated');
+    const shared = configFrom({ ...env, DATABASE_VOLUMES: 'shared', PROMETHEUS_URL: 'http://prometheus:9090' });
+    assert.deepEqual(shared.ok && [shared.value.databaseVolumes, shared.value.prometheusUrl], ['shared', 'http://prometheus:9090']);
+    const bad = configFrom({ ...env, DATABASE_VOLUMES: 'local' });
+    assert.deepEqual(bad.ok ? [] : bad.error, ['DATABASE_VOLUMES must be dedicated or shared']);
+});
+
 test('every problem is reported at once', () => {
     const config = configFrom({ AUTH_JWKS: '{"keys": ', BACKUP_RETENTION: '1w', PORT: 'http' });
     assert.deepEqual(config.ok ? [] : config.error, [

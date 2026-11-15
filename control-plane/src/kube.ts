@@ -116,6 +116,11 @@ export interface PodInfo {
     /** undefined before it is scheduled. */
     readonly nodeName: string | undefined;
     readonly containers: readonly PodContainer[];
+    /** `Pending`, `Running`, `Succeeded`, `Failed` or `Unknown`; undefined when a caller has no use for it. */
+    readonly phase?: string;
+    readonly startedAt?: Date;
+    /** Being deleted. */
+    readonly terminating?: boolean;
 }
 
 /** What to read of one container's log; Kubernetes' own parameters, timestamps always on. */
@@ -277,6 +282,8 @@ interface PodObject {
         overhead?: Record<string, string>;
     };
     status?: {
+        phase?: string;
+        startTime?: Date | string;
         containerStatuses?: { name: string; restartCount?: number; state?: { running?: unknown; terminated?: unknown; waiting?: unknown } }[];
     };
 }
@@ -307,6 +314,9 @@ const podInfoOf = (pod: PodObject): PodInfo => ({
             state: status?.state?.running !== undefined ? 'running' : status?.state?.terminated !== undefined ? 'terminated' : 'waiting',
         };
     }),
+    ...(pod.status?.phase === undefined ? {} : { phase: pod.status.phase }),
+    ...(pod.status?.startTime === undefined ? {} : { startedAt: new Date(pod.status.startTime) }),
+    terminating: pod.metadata.deletionTimestamp !== undefined,
 });
 
 /** A Kubernetes Job, a run of a Job: the fields the control plane writes and reads. */

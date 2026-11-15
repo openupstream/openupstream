@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# The platform's own monitoring, after garage.sh and platform.sh
-# (ARCHITECTURE.md, "Observability and customer logs"; decisions 106, 107):
+# The platform's own monitoring, after garage.sh and before platform.sh,
+# which points the control plane at this Prometheus for the usage the API
+# shows, metering and storage growth (ARCHITECTURE.md, "Observability and
+# customer logs"; decisions 106, 107 and 124). Part of every install:
 #
 # 1. kube-prometheus-stack: Prometheus and Alertmanager once per compute
 #    Site, Grafana, node-exporter, kube-state-metrics, with alerts by e-mail
@@ -14,9 +16,11 @@
 #
 # ALERT_EMAIL is where alerts go (never committed). The healthchecks.io ping
 # URL is read from HEALTHCHECKS_URL_FILE, the SES key from the AWS profile
-# SES_PROFILE (docs/self-hosting.md, sections 6 and 10).
+# SES_PROFILE (docs/self-hosting.md, sections 6 and 10). Without ALERT_EMAIL
+# nothing is sent and none of the three is needed: the metrics are collected
+# and the rules evaluated, and the alerts show in Alertmanager only.
 #
-# Needs: KUBECONFIG, kubectl, helm, node, aws.
+# Needs: KUBECONFIG, kubectl, helm, and with ALERT_EMAIL node and aws.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -27,28 +31,35 @@ load_layout
 LOKI_REPLICAS=3
 [[ $LAYOUT == single-node ]] && LOKI_REPLICAS=1
 NS=monitoring
-ALERT_EMAIL=${ALERT_EMAIL:?ALERT_EMAIL: where alerts go}
+ALERT_EMAIL=${ALERT_EMAIL:-}
 HEALTHCHECKS_URL_FILE=${HEALTHCHECKS_URL_FILE:-$HOME/.config/openupstream/healthchecks-ping-url-dev}
 SES_PROFILE=${SES_PROFILE:-openupstream-ses}
 SES_REGION=${SES_REGION:-eu-central-1}
 LOKI_BUCKET=openupstream.platform-logs
 GRAFANA_CHARTS=https://grafana.github.io/helm-charts
 
-[[ -s $HEALTHCHECKS_URL_FILE ]] || { echo "no healthchecks.io ping URL in $HEALTHCHECKS_URL_FILE (docs/self-hosting.md, section 10)" >&2; exit 1; }
+[[ -z $ALERT_EMAIL || -s $HEALTHCHECKS_URL_FILE ]] ||
+  { echo "no healthchecks.io ping URL in $HEALTHCHECKS_URL_FILE (docs/self-hosting.md, section 10)" >&2; exit 1; }
 
 # Each Project's NetworkPolicy database-metrics admits Prometheus's pods in
 # this namespace to its Databases' metrics ports (operators/src/kubernetes.ts).
 kubectl create namespace "$NS" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
-# Alertmanager's SMTP password, derived from the send-only SES key, and the
-# ping URL: straight from their files into the Secret. Read first: set -e
-# does not see a failure inside $(…) in an argument.
-SES_KEY_ID=$(aws configure get aws_access_key_id --profile "$SES_PROFILE")
-SMTP_PASSWORD=$(aws configure get aws_secret_access_key --profile "$SES_PROFILE" | node "$ROOT/infra/monitoring/ses-smtp-password.mjs" "$SES_REGION")
-kubectl -n "$NS" create secret generic alertmanager-credentials --dry-run=client -o yaml \
-  --from-literal=smtp-password="$SMTP_PASSWORD" \
-  --from-literal=watchdog-url="$(tr -d ' \n\r' <"$HEALTHCHECKS_URL_FILE")" | kubectl apply -f - >/dev/null
-unset SMTP_PASSWORD
+# With alerts: Alertmanager's SMTP password, derived from the send-only SES
+# key, and the ping URL, straight from their files into the Secret. Read
+# first: set -e does not see a failure inside $(…) in an argument.
+ALERTS=(-f "$ROOT/infra/monitoring/no-alerts-values.yaml")
+if [[ -n $ALERT_EMAIL ]]; then
+  SES_KEY_ID=$(aws configure get aws_access_key_id --profile "$SES_PROFILE")
+  SMTP_PASSWORD=$(aws configure get aws_secret_access_key --profile "$SES_PROFILE" | node "$ROOT/infra/monitoring/ses-smtp-password.mjs" "$SES_REGION")
+  kubectl -n "$NS" create secret generic alertmanager-credentials --dry-run=client -o yaml \
+    --from-literal=smtp-password="$SMTP_PASSWORD" \
+    --from-literal=watchdog-url="$(tr -d ' \n\r' <"$HEALTHCHECKS_URL_FILE")" | kubectl apply -f - >/dev/null
+  ALERTS=(--set-string alerts.email="$ALERT_EMAIL" --set-string alerts.smtpUser="$SES_KEY_ID" --set-string alerts.sesRegion="$SES_REGION")
+  unset SMTP_PASSWORD SES_KEY_ID
+else
+  echo "no ALERT_EMAIL: alerts are not sent anywhere"
+fi
 
 # Grafana's admin password, generated once and kept in the cluster.
 if ! kubectl -n "$NS" get secret grafana-admin >/dev/null 2>&1; then
@@ -58,12 +69,10 @@ fi
 
 helm upgrade --install kube-prometheus-stack oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack --version 93.1.1 \
   -n "$NS" -f "$ROOT/infra/monitoring/kube-prometheus-stack-values.yaml" \
-  --set-string alerts.email="$ALERT_EMAIL" --set-string alerts.smtpUser="$SES_KEY_ID" \
-  --set-string alerts.sesRegion="$SES_REGION" \
+  "${ALERTS[@]}" \
   --set alertmanager.alertmanagerSpec.replicas="$SITE_REPLICAS" \
   --set prometheus.prometheusSpec.replicas="$SITE_REPLICAS" \
   --wait --timeout 10m >/dev/null
-unset SES_KEY_ID
 kubectl apply -f "$ROOT/infra/monitoring/scrape.yaml" >/dev/null
 # A Database has as many instances as there are compute Sites.
 sed "s#DATABASE_INSTANCES#$SITE_REPLICAS#" "$ROOT/infra/monitoring/rules.yaml" | kubectl apply -f - >/dev/null

@@ -8,7 +8,7 @@
  * The API surface is defined here first and implemented in control-plane/.
  */
 
-export const SDK_VERSION = '0.3.1';
+export const SDK_VERSION = '0.4.0';
 
 export * from './model.js';
 export * from './internal.js';
@@ -34,6 +34,7 @@ import type {
     LogQuery,
     Project,
     ProjectInput,
+    ProjectUsage,
     Route,
     RouteInput,
     Secret,
@@ -120,6 +121,11 @@ export class OpenUpstreamClient {
     /** Deletes the Project and everything in it; backups are kept for the retention window. */
     deleteProject(projectId: Id): Promise<ApiResult<void>> {
         return this.#call('DELETE', `/v1/projects/${encodeURIComponent(projectId)}`);
+    }
+
+    /** What every Resource of the Project uses now, with its instances. */
+    getUsage(projectId: Id): Promise<ApiResult<ProjectUsage>> {
+        return this.#call('GET', `/v1/projects/${encodeURIComponent(projectId)}/usage`);
     }
 
     listDatabases(projectId: Id): Promise<ApiResult<DatabaseDetails[]>> {

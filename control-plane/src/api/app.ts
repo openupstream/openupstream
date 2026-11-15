@@ -65,8 +65,10 @@ import { GARAGE_REGION, type ObjectStorage } from '../garage.js';
 import { type JobChanges, createJob, deleteJob, getJob, jobRegistryAuthName, listJobRows, listJobs, sealedJobRegistryAuth, updateJob } from '../jobs/store.js';
 import { byNewest, isRunOf, runManifest, runOf } from '../jobs/runs.js';
 import { isTimeZone, scheduleError } from '../jobs/schedule.js';
-import { openLogStream } from '../logs/stream.js';
 import { type ControlPlaneKube, jobStateOf, serviceStateOf, stateOf } from '../kube.js';
+import { openLogStream, siteOf } from '../logs/stream.js';
+import type { PrometheusQuery } from '../prometheus.js';
+import { measure, projectPods, projectUsage, usageOf } from '../usage/live.js';
 import { type RegistryDeps, type ResolveError, parseImageReference, resolveDigest } from '../registry.js';
 import { createProject, deleteProject, getProject, listProjects } from '../projects/store.js';
 import { type Result, err, ok } from '../result.js';
@@ -102,6 +104,10 @@ export interface ApiDeps {
     readonly platformDomain: string;
     /** The waitlist's host, when it is served (decision 123): ours as well. */
     readonly waitlistDomain?: string;
+    /** The platform's Prometheus, for what Resources use now (decision 124); without it nothing is measured. */
+    readonly prometheus?: PrometheusQuery;
+    /** How to read a Database's disk use (config.ts, `databaseVolumes`); `dedicated` when not given. */
+    readonly databaseVolumes?: 'dedicated' | 'shared';
     /** Where custom domains' TXT ownership proofs are looked up. */
     readonly lookupTxt: TxtLookup;
     /** Where `oup login` signs in (decision 87); without it, `GET /v1/login` answers 404. */
@@ -1287,6 +1293,38 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     /** The Job's stored credentials, opened; undefined when it has none. */
     const storedJobAuth = async (job: Job): Promise<RegistryAuth | undefined> =>
         openAuth(job.projectId, jobRegistryAuthName(job.id), await sealedJobRegistryAuth(pool, job.projectId, job.id));
+
+    app.get('/v1/projects/:projectId/usage', async (c) => {
+        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
+        if (project === undefined) {
+            return c.json(notFound, 404);
+        }
+        const [databases, services, jobs, buckets, pods] = await Promise.all([
+            listDatabases(pool, project.id),
+            listServices(pool, project.id),
+            listJobs(pool, project.id),
+            listBuckets(pool, project.id),
+            kube.listPods(projectNamespace(project.id), projectPods(project.id)),
+        ]);
+        if (!pods.ok) {
+            deps.log?.({ msg: 'usage: cannot list the pods', projectId: project.id, error: pods.error });
+            return c.json({ error: 'cannot read the instances now' }, 503);
+        }
+        const nodes = [...new Set(pods.value.flatMap((pod) => (pod.nodeName === undefined ? [] : [pod.nodeName])))];
+        const [nodeSites, measurements, sizes] = await Promise.all([
+            Promise.all(nodes.map(async (node) => [node, await kube.nodeSite(node)] as const)),
+            deps.prometheus === undefined ? undefined : measure(deps.prometheus, project.id, deps.databaseVolumes ?? 'dedicated'),
+            Promise.all(buckets.map(async (bucket) => [bucket.id, await storage.bucketBytes(bucket.bucketId)] as const)),
+        ]);
+        if (measurements !== undefined && !measurements.ok) {
+            deps.log?.({ msg: 'usage: cannot ask Prometheus', projectId: project.id, error: measurements.error });
+        }
+        const siteOfNode = new Map(nodeSites.map(([node, site]) => [node, site.ok ? siteOf(site.value) : null]));
+        const sites = new Map(pods.value.map((pod) => [pod.name, pod.nodeName === undefined ? null : (siteOfNode.get(pod.nodeName) ?? null)]));
+        const bucketBytes = new Map(sizes.flatMap(([id, size]) => (size.ok ? [[id, size.value] as const] : [])));
+        const measured = measurements?.ok === true ? measurements.value : undefined;
+        return c.json(projectUsage(new Date(), measured !== undefined, usageOf({ databases, services, jobs, buckets }, pods.value, sites, measured, bucketBytes)));
+    });
 
     app.get('/v1/projects/:projectId/jobs', async (c) => {
         const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));

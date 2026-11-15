@@ -154,6 +154,8 @@ async function main(): Promise<void> {
         registry: registryDeps(),
         customerDomain: config.value.customerDomain,
         platformDomain: config.value.platformDomain,
+        ...(config.value.prometheusUrl === undefined ? {} : { prometheus: prometheusClient(config.value.prometheusUrl) }),
+        databaseVolumes: config.value.databaseVolumes,
         ...(config.value.waitlist === undefined ? {} : { waitlistDomain: new URL(config.value.waitlist.url).hostname }),
         lookupTxt: txtLookup(),
         newAccountHolds: config.value.newAccountHolds,
@@ -196,7 +198,8 @@ async function main(): Promise<void> {
         allowedCallers: [...config.value.allowedCallers],
         billingCallers: [...config.value.billingCallers],
         newAccountHolds: config.value.newAccountHolds,
-        storageAutoGrowAndMetering: config.value.prometheusUrl === undefined ? 'off (no PROMETHEUS_URL)' : config.value.prometheusUrl,
+        usageAndMetering: config.value.prometheusUrl === undefined ? 'off (no PROMETHEUS_URL)' : config.value.prometheusUrl,
+        storageAutoGrow: config.value.prometheusUrl === undefined ? 'off (no PROMETHEUS_URL)' : config.value.databaseVolumes === 'shared' ? 'off (DATABASE_VOLUMES=shared)' : 'on',
         waitlist: waitlist === undefined ? 'off' : { url: waitlist.url, port: waitlist.port, mail: waitlist.mail.kind },
     });
 
@@ -214,12 +217,13 @@ async function main(): Promise<void> {
     await Promise.all([
         runExclusively('cleanup', pool, CLEANUP_LOCK, () => cleanupPass(cleanupDeps), interval, stop.signal, log),
         runExclusively('secrets', pool, SECRETS_LOCK, () => secretsPass(secretsDeps), interval, stop.signal, log),
+        // Shared volumes report their node's disk, not the Database's, and cannot grow (decision 124).
+        ...(prometheusUrl === undefined || config.value.databaseVolumes === 'shared'
+            ? []
+            : [runExclusively('growth', pool, GROWTH_LOCK, () => growthPass({ pool, kube, prometheus: prometheusClient(prometheusUrl), log }), interval, stop.signal, log)]),
         ...(prometheusUrl === undefined
             ? []
-            : [
-                  runExclusively('growth', pool, GROWTH_LOCK, () => growthPass({ pool, kube, prometheus: prometheusClient(prometheusUrl), log }), interval, stop.signal, log),
-                  runExclusively('metering', pool, METERING_LOCK, () => meteringPass({ pool, prometheus: prometheusClient(prometheusUrl), storage, log }), interval, stop.signal, log),
-              ]),
+            : [runExclusively('metering', pool, METERING_LOCK, () => meteringPass({ pool, prometheus: prometheusClient(prometheusUrl), storage, log }), interval, stop.signal, log)]),
     ]);
     await pool.end();
 }
