@@ -48,7 +48,7 @@ interface CronJobSpec {
             activeDeadlineSeconds: number;
             ttlSecondsAfterFinished: number;
             template: {
-                metadata: { labels: Record<string, string> };
+                metadata: { labels: Record<string, string>; annotations: Record<string, string> };
                 spec: {
                     restartPolicy: string;
                     runtimeClassName: string;
@@ -108,7 +108,12 @@ test('a run is one attempt under gVisor with the pinned image, its timeout, the 
     assert.deepEqual(container?.command, ['node', 'dist/nightly.js']);
     assert.deepEqual(container?.args, ['--full']);
     assert.deepEqual(container?.envFrom, [{ secretRef: { name: 'project-secrets' } }]);
-    assert.deepEqual(container?.resources, { requests: { cpu: '250m', memory: '256Mi' }, limits: { cpu: '250m', memory: '256Mi' } });
+    // A Service's limits: CPU and memory reserved in full, 2 GiB of disk, 300 Mbit/s each way.
+    assert.deepEqual(container?.resources, {
+        requests: { cpu: '250m', memory: '256Mi', 'ephemeral-storage': '100Mi' },
+        limits: { cpu: '250m', memory: '256Mi', 'ephemeral-storage': '2Gi' },
+    });
+    assert.deepEqual(job.spec.template.metadata.annotations, { 'kubernetes.io/ingress-bandwidth': '300M', 'kubernetes.io/egress-bandwidth': '300M' });
     assert.deepEqual(pod.affinity.nodeAffinity.preferredDuringSchedulingIgnoredDuringExecution, [
         { weight: 100, preference: { matchExpressions: [{ key: 'topology.kubernetes.io/zone', operator: 'In', values: ['ovh-lim'] }] } },
     ]);

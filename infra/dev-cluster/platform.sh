@@ -25,7 +25,9 @@
 # 7. the Services operator, running every Service as a Deployment under
 #    gVisor every 30 s;
 # 8. the CPU agent on each compute node, every pod's CPU total for metering
-#    (decision 115).
+#    (decision 115);
+# 9. the bandwidth agent on each compute node, which keeps the customers'
+#    pods from filling the node's uplink (decision 122).
 #
 # Images come from GHCR, pinned by digest: by default the ones built for the
 # current commit (.github/workflows/images.yml). Override with IMAGE_TAG.
@@ -244,3 +246,9 @@ kubectl -n openupstream-system rollout status deployment/jobs-operator --timeout
 sed "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" "$ROOT/operators/deploy/cpu-agent.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n openupstream-system rollout status daemonset/cpu-agent --timeout=5m
+
+# The bandwidth agent on each compute node, which keeps the customers' pods
+# from filling the node's uplink (decision 122).
+sed "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" "$ROOT/operators/deploy/bandwidth-agent.yaml" |
+  kubectl apply -f - >/dev/null
+kubectl -n openupstream-system rollout status daemonset/bandwidth-agent --timeout=5m

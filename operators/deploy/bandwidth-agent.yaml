@@ -1,0 +1,51 @@
+# The bandwidth agent (ARCHITECTURE.md, "Project isolation"; decision 122):
+# one pod per compute node that keeps the customers' pods from filling the
+# node's uplink. k3s's CNI limits each of them to 300 Mbit/s each way when
+# it starts; the agent shrinks the 512 MB burst the CNI allows and, while
+# the uplink is above 80% of its speed, lowers every customer pod's limit to
+# the fair share. Only the compute nodes run customers' pods.
+#
+# It runs `tc` on the pods' interfaces on the node, so it is on the node's
+# network as root with NET_ADMIN and nothing else: no other capability, no
+# ServiceAccount token, a read-only filesystem, no port. That is the right
+# to change the node's whole network configuration; the image is the
+# operators' image, pinned by digest when applied
+# (infra/dev-cluster/platform.sh).
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: bandwidth-agent
+  namespace: openupstream-system
+  labels: {app.kubernetes.io/name: bandwidth-agent}
+spec:
+  selector:
+    matchLabels: {app.kubernetes.io/name: bandwidth-agent}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: bandwidth-agent}
+    spec:
+      hostNetwork: true
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+      containers:
+        - name: bandwidth-agent
+          image: ghcr.io/openupstream/operators:main
+          command: [node, operators/dist/bandwidth-agent/main.js]
+          # The uplink's speed is what its interface reports. Set it where
+          # the interface reports none (a VM) or more than the line carries:
+          # env:
+          #   - {name: UPLINK_MBIT, value: "1000"}
+          resources:
+            requests: {cpu: 20m, memory: 64Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL], add: [NET_ADMIN]}

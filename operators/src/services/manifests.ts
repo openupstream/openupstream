@@ -8,8 +8,9 @@
  * the internet, but nothing else inside the cluster or in a private network,
  * and the nodes (`nodes`) on 80 and 443 only.
  * Per Service: a Deployment `svc-<id>` running the image pinned by digest
- * under the `gvisor` RuntimeClass, and a Kubernetes Service of the same
- * name, which the Routes operator sends its Routes to.
+ * under the `gvisor` RuntimeClass, with a disk limit and a bandwidth limit
+ * (decisions 121 and 122), and a Kubernetes Service of the same name, which
+ * the Routes operator sends its Routes to.
  *
  * Two or more replicas are spread over both compute Sites; a single one
  * prefers its Site (the row's `site`) and moves to the other when that
@@ -32,8 +33,10 @@ import {
     COMPONENT_LABEL,
     LABELS,
     MANAGED_BY,
+    POD_BANDWIDTH_ANNOTATIONS,
     ZONE_LABEL,
     customerEgressPolicy,
+    customerResources,
     databaseEnv,
     projectNamespace,
     projectObjectsFor,
@@ -93,7 +96,6 @@ const placement = (row: ServiceRow, podLabels: Record<string, string>) =>
 const deployment = (row: ServiceRow): KubeObject => {
     const { project, service } = row;
     const podLabels = { ...labels(project.id), [SERVICE_ID_LABEL]: service.id, [SERVICE_NAME_LABEL]: service.name };
-    const resources = { cpu: `${service.cpuMillicores}m`, memory: `${service.memoryMb}Mi` };
     return {
         apiVersion: 'apps/v1',
         kind: 'Deployment',
@@ -112,7 +114,7 @@ const deployment = (row: ServiceRow): KubeObject => {
             // Nothing probes a worker: it must run for 10 s before it replaces an old pod, so one that crashes at start does not.
             ...(service.port === null ? { minReadySeconds: WORKER_MIN_READY_SECONDS } : {}),
             template: {
-                metadata: { labels: podLabels, annotations: { [SECRETS_VERSION_ANNOTATION]: row.secretsVersion } },
+                metadata: { labels: podLabels, annotations: { [SECRETS_VERSION_ANNOTATION]: row.secretsVersion, ...POD_BANDWIDTH_ANNOTATIONS } },
                 spec: {
                     runtimeClassName: RUNTIME_CLASS,
                     automountServiceAccountToken: false,
@@ -127,8 +129,8 @@ const deployment = (row: ServiceRow): KubeObject => {
                             ...(service.port === null ? {} : { ports: [{ name: 'http', containerPort: service.port, protocol: 'TCP' }] }),
                             envFrom: [{ secretRef: { name: PROJECT_SECRETS } }],
                             ...(row.databases.length === 0 ? {} : { env: databaseEnv(row.project.id, row.databases) }),
-                            // The limits are what is reserved and billed (memory_gb_hours); no Service takes another's CPU.
-                            resources: { requests: resources, limits: resources },
+                            // CPU and memory are what is reserved and billed (memory_gb_hours); no Service takes another's CPU or the node's disk.
+                            resources: customerResources(service),
                             ...(service.port === null ? {} : { readinessProbe: { tcpSocket: { port: 'http' }, periodSeconds: 5 } }),
                             securityContext: { allowPrivilegeEscalation: false },
                         },

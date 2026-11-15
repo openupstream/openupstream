@@ -17,6 +17,8 @@ COPY operators operators
 RUN npm run build --workspace sdk && npm run build --workspace operators
 
 FROM node:24-alpine
+# ip and tc with JSON output, for the bandwidth agent (busybox's have none).
+RUN apk add --no-cache iproute2
 WORKDIR /repo
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
