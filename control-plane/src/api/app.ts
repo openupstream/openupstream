@@ -304,9 +304,18 @@ export function createApi(deps: ApiDeps): Hono<Env> {
      * Whether the compute Sites have room for `storageGb` more of this
      * Database (decision 109): a new one needs it in each Site; a grow on the
      * nodes that hold its volumes. A message for the 507 when not; undefined
-     * when there is room or the storage reports no capacity.
+     * when there is room, the storage reports no capacity, or Kubernetes
+     * cannot be asked: then the size is accepted, as without the check, so a
+     * slow API server does not stop Databases from being created.
      */
-    const noRoom = async (storageGb: number, existing?: Database): Promise<Result<string | undefined, string>> => {
+    const noRoom = async (storageGb: number, existing?: Database): Promise<{ readonly value: string | undefined }> => {
+        const checked = await roomCheck(storageGb, existing);
+        if (!checked.ok) {
+            deps.log?.({ msg: 'cannot read the storage capacity; size accepted unchecked', database: existing?.id, error: checked.error });
+        }
+        return { value: checked.ok ? checked.value : undefined };
+    };
+    const roomCheck = async (storageGb: number, existing?: Database): Promise<Result<string | undefined, string>> => {
         const capacity = await kube.storageCapacity();
         if (!capacity.ok || capacity.value === undefined) {
             return capacity.ok ? ok(undefined) : capacity;
@@ -448,10 +457,6 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             return held(c, holds);
         }
         const room = await noRoom(rest.storageGb);
-        if (!room.ok) {
-            deps.log?.({ msg: 'cannot read the storage capacity', error: room.error });
-            return c.json({ error: 'cannot check the free storage now' }, 503);
-        }
         if (room.value !== undefined) {
             return insufficientStorage(c, room.value);
         }
@@ -528,10 +533,6 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         if (storageGb !== undefined && storageGb > database.storageGb) {
             const room = await noRoom(storageGb, database);
-            if (!room.ok) {
-                deps.log?.({ msg: 'cannot read the storage capacity', database: database.id, error: room.error });
-                return c.json({ error: 'cannot check the free storage now' }, 503);
-            }
             if (room.value !== undefined) {
                 return insufficientStorage(c, room.value);
             }

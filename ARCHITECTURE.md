@@ -398,7 +398,10 @@ digest (#55).
   a node in each compute Site, a grow the extra size on the nodes holding
   its volumes. Without the check the row (and the bill) took a size the
   volume never reached, and a Database too large for any node stayed
-  `provisioning`. Storage that grows by itself up
+  `provisioning`. When Kubernetes cannot be asked, the size is accepted
+  unchecked rather than refusing every create. Memory has no such check
+  yet, and a grow that fails anyway (two requests taking the same space)
+  reads `resizing` without a reason (Open question 21). Storage that grows by itself up
   to a customer-set maximum is decided and comes next (decision 111).
 - PgBouncer through a CloudNativePG `Pooler` of type `rw`, so it follows the
   primary: `db-<database id>-pooler`, two instances with one per compute
@@ -1163,6 +1166,14 @@ Decisions table once it is settled.
 20. ~~**Customer pods reach the nodes' own ports.**~~ Settled by decision
     105: the egress policies leave the nodes' addresses out but for 80 and
     443.
+21. **Capacity beyond storage.** The API checks TopoLVM's free space before
+    accepting a size (decision 110), but not memory: a `memoryMb` no node
+    can schedule is accepted, and the restarted standby stays Pending while
+    the Database runs on one instance. Checking needs each node's
+    allocatable memory less what its pods request (listing pods across
+    namespaces). A volume grow that fails after the check (TopoLVM's
+    `ControllerResizeError`) keeps the Database `resizing` with no reason
+    shown. Both belong with decision 111's alert for a node without room.
 
 ## Build order
 

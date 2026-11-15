@@ -10,7 +10,6 @@ import { createInterface } from 'node:readline';
 import { ApiException, type KubeConfig, KubernetesObjectApi, Log, PatchStrategy } from '@kubernetes/client-node';
 import { SPEC_VERSION_ANNOTATION, type DatabaseState, type JobState, type ServiceState } from '@openupstream/sdk';
 import { type Result, err, ok } from './result.js';
-import { bytesOf } from './databases/capacity.js';
 
 export interface ObjectRef {
     readonly apiVersion: string;
@@ -177,10 +176,19 @@ export const stateOf = (status: ClusterStatus | undefined, wanted?: { readonly m
     return status.ready && status.readyInstances >= status.instances ? 'ready' : 'degraded';
 };
 
-/** `512Mi` → 512, `10Gi` → 10; undefined for any other form (the operator writes only these). */
+const UNITS: Readonly<Record<string, number>> = { '': 1, Ki: 1024, Mi: 1024 ** 2, Gi: 1024 ** 3, Ti: 1024 ** 4, k: 1e3, M: 1e6, G: 1e9, T: 1e12 };
+
+/** A Kubernetes quantity such as `15356Mi` in bytes; undefined for forms with a fraction or another suffix. */
+export const bytesOf = (quantity: string): number | undefined => {
+    const match = /^(\d+)(Ki|Mi|Gi|Ti|k|M|G|T)?$/.exec(quantity);
+    const unit = UNITS[match?.[2] ?? ''];
+    return match === null || unit === undefined ? undefined : Number(match[1]) * unit;
+};
+
+/** `512Mi` → 512, `10Gi` → 10: whole units only, as the operator writes them; undefined otherwise. */
 export const quantityIn = (quantity: string | undefined, unit: 'Mi' | 'Gi'): number | undefined => {
-    const match = quantity === undefined ? null : new RegExp(`^(\\d+)${unit}$`).exec(quantity);
-    return match === null ? undefined : Number(match[1]);
+    const bytes = quantity === undefined || !quantity.endsWith(unit) ? undefined : bytesOf(quantity);
+    return bytes === undefined ? undefined : bytes / (UNITS[unit] as number);
 };
 
 /** TopoLVM's topology key: one CSIStorageCapacity per node. */

@@ -505,10 +505,12 @@ describe('Databases', () => {
             507,
             'a new one needs room in both Sites',
         );
-        storageCapacity = undefined;
         volumeNodes.delete(`db-${created.id}`);
+        assert.equal((await patch({ storageGb: 14 })).status, 200, 'no volumes yet: room in both Sites as for a new one');
+        assert.equal((await patch({ storageGb: 15 })).status, 507);
+        storageCapacity = undefined;
 
-        clusters.set(`db-${created.id}`, { instances: 2, readyInstances: 2, ready: true, memoryMb: 1024, storageGb: 10 });
+        clusters.set(`db-${created.id}`, { instances: 2, readyInstances: 2, ready: true, memoryMb: 1024, storageGb: 14 });
         const state = async () =>
             ((await (await call('GET', `/v1/projects/${projectId}/databases/${created.id}`, 'alice')).json()) as DatabaseDetails).state;
         assert.equal(await state(), 'ready');

@@ -37,12 +37,3 @@ export function roomForGrowth(capacity: NodeCapacity, volumeNodes: readonly stri
     const largestGb = Math.min(...volumeNodes.map((node) => wholeGb(capacity.get(node) ?? 0)));
     return extraGb <= largestGb ? ok(undefined) : err({ largestGb });
 }
-
-const UNITS: Readonly<Record<string, number>> = { '': 1, Ki: 1024, Mi: 1024 ** 2, Gi: GiB, Ti: 1024 ** 4, k: 1e3, M: 1e6, G: 1e9, T: 1e12 };
-
-/** A Kubernetes quantity such as `15356Mi` in bytes; undefined for forms TopoLVM does not write. */
-export const bytesOf = (quantity: string): number | undefined => {
-    const match = /^(\d+)(Ki|Mi|Gi|Ti|k|M|G|T)?$/.exec(quantity);
-    const unit = UNITS[match?.[2] ?? ''];
-    return match === null || unit === undefined ? undefined : Number(match[1]) * unit;
-};

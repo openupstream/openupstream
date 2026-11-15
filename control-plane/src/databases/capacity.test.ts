@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Site } from '@openupstream/sdk';
-import { bytesOf, roomForGrowth, roomForNew } from './capacity.js';
+import { bytesOf } from '../kube.js';
+import { roomForGrowth, roomForNew } from './capacity.js';
 
 const GiB = 1024 ** 3;
 const siteOf = new Map<string, Site>([
