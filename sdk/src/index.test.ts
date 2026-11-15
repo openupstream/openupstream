@@ -2,7 +2,7 @@ import { after, before, describe, test } from 'node:test';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import assert from 'node:assert/strict';
-import { OpenUpstreamClient, txtRecordName } from './index.js';
+import { OpenUpstreamClient, errorMessage, txtRecordName } from './index.js';
 
 test('client defaults to the production API', () => {
     const client = new OpenUpstreamClient({ token: 'x' });
@@ -94,3 +94,14 @@ describe('API calls', () => {
         assert.equal(!result.ok && result.error.status, 0);
     });
 });
+
+test("an error names each field the API's issues name", () => {
+    assert.equal(
+        errorMessage({ error: 'invalid request', issues: [{ path: 'name', message: 'a DNS label: lowercase letters, digits and hyphens' }] }, 'Bad Request'),
+        'invalid request (name: a DNS label: lowercase letters, digits and hyphens)',
+    );
+    assert.equal(errorMessage({ error: 'invalid request', issues: [{ path: '', message: 'a' }, { message: 'b' }, 'junk'] }, 'Bad Request'), 'invalid request (a; b)');
+    assert.equal(errorMessage({ error: 'a Project named shop exists' }, 'Conflict'), 'a Project named shop exists');
+    assert.equal(errorMessage(undefined, 'Bad Gateway'), 'Bad Gateway');
+});
+

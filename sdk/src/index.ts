@@ -345,12 +345,26 @@ export class OpenUpstreamClient {
         if (response.value.ok) {
             return { ok: true, value: parsed as T };
         }
-        const message =
-            typeof parsed === 'object' && parsed !== null && 'error' in parsed && typeof parsed.error === 'string'
-                ? parsed.error
-                : response.value.statusText;
-        return { ok: false, error: { status: response.value.status, message } };
+        return { ok: false, error: { status: response.value.status, message: errorMessage(parsed, response.value.statusText) } };
     }
+}
+
+/**
+ * The API's `error`, followed by what its `issues` say about each field
+ * (a 400's `{error: 'invalid request', issues: [{path, message}]}`), so
+ * the caller learns what to change; the HTTP status text without either.
+ */
+export function errorMessage(body: unknown, statusText: string): string {
+    if (typeof body !== 'object' || body === null || !('error' in body) || typeof body.error !== 'string') {
+        return statusText;
+    }
+    const issues = 'issues' in body && Array.isArray(body.issues) ? body.issues : [];
+    const details = issues.flatMap((issue: unknown) =>
+        typeof issue === 'object' && issue !== null && 'message' in issue && typeof issue.message === 'string'
+            ? ['path' in issue && typeof issue.path === 'string' && issue.path !== '' ? `${issue.path}: ${issue.message}` : issue.message]
+            : [],
+    );
+    return details.length === 0 ? body.error : `${body.error} (${details.join('; ')})`;
 }
 
 const logSearch = (query: LogQuery): string => {

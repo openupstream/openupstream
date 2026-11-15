@@ -5,7 +5,7 @@
 ```sh
 npm i -g @openupstream/cli
 oup login
-oup link shop
+oup project create shop --link
 oup pg create main --memory 512 --storage 10
 oup service deploy api --image ghcr.io/acme/api:v3 --port 8080
 oup job deploy nightly --image ghcr.io/acme/api:v3 --schedule '0 3 * * *' --time-zone Europe/Berlin -- node dist/nightly.js
@@ -22,6 +22,11 @@ oup site deploy dist --bucket my-site
   600); the access token is refreshed when it has less than a minute left,
   by one `oup` process at a time (a lock file next to it).
 - `oup logout`: forgets them and ends the CLI's refresh tokens at madAuth.
+- `oup project list`: the Projects of your Accounts, with each one's
+  Account and id, and which one is linked in this directory.
+- `oup project create <name> [--account <name|id>] [--link]`: a new
+  Project in your Account; with several Accounts, `--account` says which.
+  `--link` also links this directory to it, as `oup link` does.
 - `oup link <project>`: the Project the commands below act on, by name
   (or id, when two of your Accounts have one of that name). It writes the
   id to `.openupstream.json` in this directory; commands in it or below

@@ -17,7 +17,9 @@ if (project.ok) {
 ```
 
 Every call returns `{ ok: true, value }` or `{ ok: false, error: { status, message } }`
-(status 0: the API was not reached); nothing throws. `src/internal.ts` holds
+(status 0: the API was not reached); nothing throws. For a refused request
+`message` also names each field the API objected to, e.g. `invalid request
+(name: a DNS label: lowercase letters, digits and hyphens)`. `src/internal.ts` holds
 the contract between the control plane and its internal callers (the
 operators and the billing service), not for customers.
 
