@@ -34,8 +34,11 @@ which is why it lives in the monorepo.
   Cloud for one working session (ARCHITECTURE.md, decisions 33 and 52).
 
 Bootstrap order: servers ordered by hand (ARCHITECTURE.md, decision 116) →
-k3s install on the nodes → Helm releases → Garage
-layout → control plane. A runbook lives in `docs/runbooks/bootstrap.md` once
+node setup over SSH (host firewall, AppArmor profile, gVisor, volume group,
+k3s; the production script is not written yet, `dev-cluster-hetzner/up.sh`
+does it for the dev cluster) → `dev-cluster/install-multi-node.sh` (Helm
+releases, Garage layout, control plane, DNS records and health checks). The
+backup bucket is made by hand (`docs/self-hosting.md`, section 4). A runbook lives in `docs/runbooks/bootstrap.md` once
 the first cluster exists.
 
 Nothing in this directory contains secrets.
