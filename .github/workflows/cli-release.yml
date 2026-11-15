@@ -38,11 +38,24 @@ jobs:
       - run: npm ci
       - name: The tag names the package's version
         run: test "cli-v$(node -p "require('./cli/package.json').version")" = "$GITHUB_REF_NAME"
+      # npm lists a new version before it serves its file: a CLI tag pushed
+      # right after the SDK's release found the version, then failed to
+      # install it. So wait for the file of the newest version in the range.
       - name: The SDK version the CLI needs is on npm
         run: |
           range=$(node -p "require('./cli/package.json').dependencies['@openupstream/sdk']")
-          test -n "$(npm view "@openupstream/sdk@$range" version)" ||
-            { echo "no @openupstream/sdk $range on npm; release the SDK first" >&2; exit 1; }
+          # npm fails both when no version matches and when it cannot be
+          # reached; its own message, printed above ours, says which.
+          versions=$(npm view "@openupstream/sdk@$range" version --json) ||
+            { echo "no @openupstream/sdk $range read from npm: release the SDK first, unless npm's error above is another" >&2; exit 1; }
+          version=$(jq -r 'if type == "array" then last else . end' <<<"$versions")
+          tarball=$(npm view "@openupstream/sdk@$version" dist.tarball)
+          for _ in $(seq 30); do
+            curl -fsSI -o /dev/null "$tarball" 2>/dev/null && exit 0
+            sleep 10
+          done
+          echo "npm lists @openupstream/sdk $version but does not serve $tarball" >&2
+          exit 1
       - run: npm run build -w sdk -w cli
       - run: npm test -w cli
       - name: The packed CLI installs from npm and runs
