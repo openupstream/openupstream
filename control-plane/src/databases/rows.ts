@@ -16,6 +16,8 @@ interface Row {
     home_site: Site;
     memory_mb: number;
     storage_gb: number;
+    auto_grow: boolean;
+    max_storage_gb: number | null;
     database_created_at: Date;
     restore_source_id: string | null;
     restore_target_time: Date | null;
@@ -26,7 +28,7 @@ interface Row {
 export async function listDatabaseRows(pool: pg.Pool): Promise<DatabaseRow[]> {
     const { rows } = await pool.query<Row>(`
         select p.id as project_id, p.account_id, p.name as project_name, p.created_at as project_created_at,
-               d.id as database_id, d.name as database_name, d.home_site, d.memory_mb, d.storage_gb,
+               d.id as database_id, d.name as database_name, d.home_site, d.memory_mb, d.storage_gb, d.auto_grow, d.max_storage_gb,
                d.created_at as database_created_at, d.restore_source_id, d.restore_target_time, d.restore_finished_at
         from databases d
         join projects p on p.id = d.project_id
@@ -46,6 +48,8 @@ export async function listDatabaseRows(pool: pg.Pool): Promise<DatabaseRow[]> {
             homeSite: row.home_site,
             memoryMb: row.memory_mb,
             storageGb: row.storage_gb,
+            autoGrow: row.auto_grow,
+            maxStorageGb: row.max_storage_gb,
             createdAt: row.database_created_at.toISOString(),
             ...restoreOf(row),
         },

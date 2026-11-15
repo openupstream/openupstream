@@ -23,6 +23,7 @@ import { accessTokenVerifier, apiKeyVerifier, keysFrom, madauthAuthenticator, se
 import { getAccountRecord, liftHold, placeHold } from './accounts/store.js';
 import { s3BackupStore } from './backups.js';
 import { cleanupPass } from './cleanup.js';
+import { growthPass, prometheusClient } from './databases/growth.js';
 import { configFrom } from './config.js';
 import { listDatabaseRows } from './databases/rows.js';
 import { txtLookup } from './domains/dns.js';
@@ -48,6 +49,7 @@ const log = (entry: Record<string, unknown>): void =>
 /** Any numbers will do, as long as nothing else in this database uses them. */
 const CLEANUP_LOCK = 7_310_001;
 const SECRETS_LOCK = 7_310_002;
+const GROWTH_LOCK = 7_310_003;
 
 /**
  * Runs `pass` every interval until stopped. Both replicas run the loop; a
@@ -186,6 +188,7 @@ async function main(): Promise<void> {
         allowedCallers: [...config.value.allowedCallers],
         billingCallers: [...config.value.billingCallers],
         newAccountHolds: config.value.newAccountHolds,
+        storageAutoGrow: config.value.prometheusUrl === undefined ? 'off (no PROMETHEUS_URL)' : config.value.prometheusUrl,
         waitlist: waitlist === undefined ? 'off' : { url: waitlist.url, port: waitlist.port, mail: waitlist.mail.kind },
     });
 
@@ -199,9 +202,13 @@ async function main(): Promise<void> {
     const cleanupDeps = { pool, kube, backups: s3BackupStore(backup), storage, retention: backup.retention, log };
     const secretsDeps = { pool, kube, kek: config.value.kek, log };
     const interval = config.value.cleanupIntervalMs;
+    const prometheusUrl = config.value.prometheusUrl;
     await Promise.all([
         runExclusively('cleanup', pool, CLEANUP_LOCK, () => cleanupPass(cleanupDeps), interval, stop.signal, log),
         runExclusively('secrets', pool, SECRETS_LOCK, () => secretsPass(secretsDeps), interval, stop.signal, log),
+        ...(prometheusUrl === undefined
+            ? []
+            : [runExclusively('growth', pool, GROWTH_LOCK, () => growthPass({ pool, kube, prometheus: prometheusClient(prometheusUrl), log }), interval, stop.signal, log)]),
     ]);
     await pool.end();
 }

@@ -10,6 +10,39 @@ export const DATABASE_DEFAULTS = { memoryMb: DATABASE_MIN_MEMORY_MB, storageGb: 
 /** RFC 3339 with an explicit offset, as the API wants it; a bare time would be read in some server's zone. */
 const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
+/** How storage grows, in a few words: `auto`, `auto ≤ 20 GB` or `manual`. */
+export const growthOf = (database: Pick<DatabaseDetails, 'autoGrow' | 'maxStorageGb'>): string =>
+    !database.autoGrow ? 'manual' : database.maxStorageGb === null ? 'auto' : `auto ≤ ${database.maxStorageGb} GB`;
+
+export interface GrowthFlags {
+    readonly 'max-storage'?: string | undefined;
+    readonly 'no-max-storage'?: boolean | undefined;
+    readonly 'auto-grow'?: boolean | undefined;
+    readonly 'no-auto-grow'?: boolean | undefined;
+}
+
+/** The auto-grow settings the flags ask for (decision 111); empty when they say nothing. */
+export function growthSettings(flags: GrowthFlags): { ok: true; settings: Pick<DatabaseInput, 'autoGrow' | 'maxStorageGb'> } | { ok: false; reason: string } {
+    if (flags['max-storage'] !== undefined && flags['no-max-storage'] === true) {
+        return { ok: false, reason: '--max-storage and --no-max-storage exclude each other' };
+    }
+    if (flags['auto-grow'] === true && flags['no-auto-grow'] === true) {
+        return { ok: false, reason: '--auto-grow and --no-auto-grow exclude each other' };
+    }
+    const max = flags['max-storage'] === undefined ? undefined : Number(flags['max-storage']);
+    if (max !== undefined && !(Number.isInteger(max) && max > 0)) {
+        return { ok: false, reason: `--max-storage must be a positive whole number of GB, not ${flags['max-storage']}` };
+    }
+    const autoGrow = flags['no-auto-grow'] === true ? false : flags['auto-grow'] === true ? true : undefined;
+    return {
+        ok: true,
+        settings: {
+            ...(autoGrow === undefined ? {} : { autoGrow }),
+            ...(max !== undefined ? { maxStorageGb: max } : flags['no-max-storage'] === true ? { maxStorageGb: null } : {}),
+        },
+    };
+}
+
 /** One line per Database: name, state, Home site, memory and storage, and what it was restored from. */
 export const formatDatabases = (databases: readonly DatabaseDetails[]): string[] =>
     databases.map((database) => {
@@ -17,7 +50,7 @@ export const formatDatabases = (databases: readonly DatabaseDetails[]): string[]
             database.restoredFrom === undefined
                 ? ''
                 : `  restored from ${database.restoredFrom.databaseId}${database.restoredFrom.targetTime === undefined ? '' : ` at ${database.restoredFrom.targetTime}`}`;
-        return `${database.name.padEnd(24)} ${database.state.padEnd(12)} ${database.homeSite.padEnd(13)} ${String(database.memoryMb).padStart(6)} MB ${String(database.storageGb).padStart(4)} GB${restored}`;
+        return `${database.name.padEnd(24)} ${database.state.padEnd(12)} ${database.homeSite.padEnd(13)} ${String(database.memoryMb).padStart(6)} MB ${String(database.storageGb).padStart(4)} GB  ${growthOf(database).padEnd(14)}${restored}`;
     });
 
 export interface RestoreFlags {

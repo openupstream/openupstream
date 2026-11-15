@@ -17,6 +17,8 @@ interface DatabaseRow {
     home_site: Site;
     memory_mb: number;
     storage_gb: number;
+    auto_grow: boolean;
+    max_storage_gb: number | null;
     created_at: Date;
     restore_source_id: string | null;
     restore_target_time: Date | null;
@@ -43,11 +45,14 @@ const toDatabase = (row: DatabaseRow): Database => ({
     homeSite: row.home_site,
     memoryMb: row.memory_mb,
     storageGb: row.storage_gb,
+    autoGrow: row.auto_grow,
+    maxStorageGb: row.max_storage_gb,
     createdAt: row.created_at.toISOString(),
     ...restoreOf(row),
 });
 
-const COLUMNS = 'id, project_id, name, home_site, memory_mb, storage_gb, created_at, restore_source_id, restore_target_time';
+const COLUMNS =
+    'id, project_id, name, home_site, memory_mb, storage_gb, auto_grow, max_storage_gb, created_at, restore_source_id, restore_target_time';
 
 export async function listDatabases(pool: pg.Pool, projectId: string): Promise<Database[]> {
     const { rows } = await pool.query<DatabaseRow>(
@@ -75,8 +80,8 @@ export async function createDatabase(
 ): Promise<Result<Database, CreateDatabaseError>> {
     const inserted = await unlessCodes<pg.QueryResult<DatabaseRow>, CreateDatabaseError>(
         pool.query<DatabaseRow>(
-            `insert into databases (project_id, name, home_site, memory_mb, storage_gb, restore_source_id, restore_target_time)
-             values ($1, $2, coalesce($3, 'hetzner-fsn1'), $4, $5, $6, $7) returning ${COLUMNS}`,
+            `insert into databases (project_id, name, home_site, memory_mb, storage_gb, restore_source_id, restore_target_time, auto_grow, max_storage_gb)
+             values ($1, $2, coalesce($3, 'hetzner-fsn1'), $4, $5, $6, $7, coalesce($8, true), $9) returning ${COLUMNS}`,
             [
                 projectId,
                 input.name,
@@ -85,6 +90,8 @@ export async function createDatabase(
                 input.storageGb,
                 input.restoreFrom?.databaseId ?? null,
                 input.restoreFrom?.targetTime ?? null,
+                input.autoGrow ?? null,
+                input.maxStorageGb ?? null,
             ],
         ),
         { [UNIQUE_VIOLATION]: { kind: 'name-taken', name: input.name }, [ACCOUNT_HELD]: { kind: 'held' } },
@@ -112,14 +119,16 @@ export async function getRestoreSource(pool: pg.Pool, projectId: string, id: str
 }
 
 /**
- * Sets the sizes in `patch` on a live Database; undefined when there is none.
- * The API checks that storage only grows; the operator applies it.
+ * Sets what `patch` has on a live Database; undefined when there is none.
+ * `maxStorageGb: null` removes the limit, a missing key keeps it. The API
+ * checks that storage only grows; the operator applies it.
  */
 export async function updateDatabase(pool: pg.Pool, projectId: string, id: string, patch: DatabasePatch): Promise<Database | undefined> {
     const { rows } = await pool.query<DatabaseRow>(
-        `update databases set memory_mb = coalesce($3, memory_mb), storage_gb = coalesce($4, storage_gb)
+        `update databases set memory_mb = coalesce($3, memory_mb), storage_gb = coalesce($4, storage_gb),
+             auto_grow = coalesce($5, auto_grow), max_storage_gb = case when $6::boolean then $7::integer else max_storage_gb end
          where id = $1 and project_id = $2 and deleted_at is null returning ${COLUMNS}`,
-        [id, projectId, patch.memoryMb ?? null, patch.storageGb ?? null],
+        [id, projectId, patch.memoryMb ?? null, patch.storageGb ?? null, patch.autoGrow ?? null, 'maxStorageGb' in patch, patch.maxStorageGb ?? null],
     );
     return rows.map(toDatabase)[0];
 }

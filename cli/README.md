@@ -28,9 +28,12 @@ oup site deploy dist --bucket my-site
   find it, as git finds `.git`. It holds no secret and may be committed.
   `--project <name|id>`, or `OUP_PROJECT` in CI, names another Project for
   one command.
-- `oup pg create <name> [--memory <MB>] [--storage <GB>] [--site hetzner-fsn1|ovh-lim] [--no-wait]`:
+- `oup pg create <name> [--memory <MB>] [--storage <GB>] [--site hetzner-fsn1|ovh-lim] [--max-storage <GB> | --no-auto-grow] [--no-wait]`:
   a Database with its primary in the Site (default `hetzner-fsn1`) and a
-  standby in the other one, 256 MB and 1 GB unless told otherwise. It waits
+  standby in the other one, 256 MB and 1 GB unless told otherwise. Its
+  storage grows by half once 90% full (decision 111), without a limit
+  unless `--max-storage` sets one; `--no-auto-grow` leaves growing to
+  `oup pg resize`. It waits
   until both instances are ready, unless `--no-wait`. The Project's
   Services and Jobs get its URL as `DATABASE_URL_<NAME>` (decision 97).
 - `oup pg restore <source> <name> [--time <RFC 3339>] [--memory <MB>] [--storage <GB>] [--site …] [--no-wait]`:
@@ -43,11 +46,13 @@ oup site deploy dist --bucket my-site
   retention window, with `--storage`. The time must lie after the source's
   oldest base backup and at least 5 minutes in the past (WAL reaches the
   archive up to that late).
-- `oup pg resize <name> [--memory <MB>] [--storage <GB>] [--no-wait]`:
+- `oup pg resize <name> [--memory <MB>] [--storage <GB>] [--max-storage <GB> | --no-max-storage] [--auto-grow | --no-auto-grow] [--no-wait]`:
   storage only grows, online; a new memory size restarts the two instances
   one after the other, the standby first (writes pause for seconds). Waits
-  until the Database is ready again, unless `--no-wait`.
-- `oup pg list`, `oup pg show <name>` (JSON), `oup pg delete <name>`.
+  until the Database is ready again, unless `--no-wait`; a change of the
+  growth settings alone takes effect at once.
+- `oup pg list` (with each Database's growth: `auto`, `auto ≤ 40 GB` or
+  `manual`), `oup pg show <name>` (JSON), `oup pg delete <name>`.
 - `oup service deploy <name> --image <ref> [--port <n> | --no-port] [--replicas <n>]
   [--memory <MB>] [--cpu <millicores>] [--site hetzner-fsn1|ovh-lim]
   [--registry-user <user> --registry-password-stdin] [--no-wait]`: brings
