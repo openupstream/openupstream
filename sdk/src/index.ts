@@ -45,19 +45,20 @@ import type {
 
 export const DEFAULT_API_URL = 'https://api.openupstream.com';
 
-export type ClientOptions = { baseUrl?: string } & (
-    | {
-          /** A madAuth session token, an access token of `oup`, or one of the user's madAuth API keys (`madauth_…`). */
-          token: string;
-      }
-    | {
-          /**
-           * In a browser on the dashboard's origin: no token, the browser
-           * sends madAuth's session cookie along (`credentials: 'include'`).
-           */
-          session: 'cookie';
-      }
-);
+export interface ClientOptions {
+    baseUrl?: string;
+    /** A madAuth session token, an access token of `oup`, or one of the user's madAuth API keys (`madauth_…`). */
+    token: string;
+}
+
+/**
+ * In a browser on the dashboard's origin: no token, the browser sends
+ * madAuth's session cookie along (`credentials: 'include'`).
+ */
+export interface CookieSessionOptions {
+    baseUrl?: string;
+    session: 'cookie';
+}
 
 /** Where the CLI signs in; asked before there is a token. 404 when the platform has no CLI client. */
 export async function cliLogin(baseUrl: string = DEFAULT_API_URL): Promise<ApiResult<CliLogin>> {
@@ -77,7 +78,7 @@ export class OpenUpstreamClient {
     /** The credential of every request: the token as a header, or the browser's cookie. */
     readonly #auth: { readonly headers: Record<string, string>; readonly credentials?: 'include' };
 
-    constructor(options: ClientOptions) {
+    constructor(options: ClientOptions | CookieSessionOptions) {
         this.baseUrl = options.baseUrl ?? DEFAULT_API_URL;
         this.#auth = 'token' in options ? { headers: { authorization: `Bearer ${options.token}` } } : { headers: {}, credentials: 'include' };
     }

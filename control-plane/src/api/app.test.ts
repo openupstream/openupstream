@@ -289,6 +289,7 @@ describe('the dashboard: the session cookie from its origin', () => {
         assert.equal(allowed.status, 204);
         assert.equal(allowed.headers.get('access-control-allow-origin'), DASHBOARD);
         assert.match(allowed.headers.get('access-control-allow-methods') ?? '', /DELETE/);
+        assert.equal(allowed.headers.get('access-control-allow-headers'), 'content-type,authorization');
         assert.equal((await preflight('https://evil.test')).headers.get('access-control-allow-origin'), null);
     });
 

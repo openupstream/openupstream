@@ -411,7 +411,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
                 origin: (origin) => (dashboardOrigins.has(origin) ? origin : null),
                 credentials: true,
                 allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-                allowHeaders: ['content-type'],
+                allowHeaders: ['content-type', 'authorization'],
                 maxAge: 600,
             }),
         );
@@ -429,12 +429,13 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         // browser send the cookie along (CSRF) is answered like no credential.
         const cookie =
             token === undefined && deps.dashboard !== undefined && dashboardOrigins.has(c.req.header('origin') ?? '')
-                ? getCookie(c, SESSION_COOKIE)
+                ? { value: getCookie(c, SESSION_COOKIE), verify: deps.dashboard.sessions }
                 : undefined;
-        if (token === undefined && cookie === undefined) {
+        const identity =
+            token !== undefined ? await authenticate(token) : cookie?.value !== undefined ? await cookie.verify(cookie.value) : undefined;
+        if (identity === undefined) {
             return c.json({ error: 'bearer token required' }, 401);
         }
-        const identity = token !== undefined ? await authenticate(token) : await deps.dashboard!.sessions(cookie!);
         if (!identity.ok) {
             if (identity.error.kind === 'unavailable') {
                 deps.log?.({ msg: 'cannot verify tokens', error: identity.error.reason });

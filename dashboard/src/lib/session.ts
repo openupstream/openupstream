@@ -19,17 +19,29 @@ export type User = MadauthUser | null | undefined;
  */
 let initialized: Promise<string | undefined> | undefined;
 const initialize = (): Promise<string | undefined> =>
-    (initialized ??= madauth().then(async ({ Madauth, Password }) => {
-        const result = await Madauth.initialize({ providers: [new Password()] });
-        if (!result.isSuccess) {
-            return `Sign-in is not available now: ${result.error.message}`;
-        }
-        const code = new URLSearchParams(window.location.search).get('madauth_device');
-        if (code !== null) {
-            void Madauth.showDeviceApprovalDialog({ code });
-        }
-        return undefined;
-    }));
+    (initialized ??= madauth()
+        .then(async ({ Madauth, Password }) => {
+            const result = await Madauth.initialize({ providers: [new Password()] });
+            if (!result.isSuccess) {
+                return `Sign-in is not available now: ${result.error.message}`;
+            }
+            const url = new URL(window.location.href);
+            const code = url.searchParams.get('madauth_device');
+            if (code !== null) {
+                // The code works once: out of the address, so a reload does not ask again.
+                url.searchParams.delete('madauth_device');
+                window.history.replaceState(null, '', url);
+                void Madauth.showDeviceApprovalDialog({ code });
+            }
+            return undefined;
+        })
+        // The import itself failed, e.g. the network went away.
+        .catch(() => 'Sign-in could not be loaded. Reload the page.')
+        .then((problem) => {
+            // A failure is not kept: the next page that mounts tries again.
+            initialized = problem === undefined ? initialized : undefined;
+            return problem;
+        }));
 
 /** Who is signed in, followed across sign-ins and sign-outs. */
 export function useUser(): { readonly user: User; readonly problem: string | undefined } {
@@ -38,12 +50,21 @@ export function useUser(): { readonly user: User; readonly problem: string | und
     useEffect(() => {
         // A listener of this effect's own: madAuth keeps listeners by identity, so
         // an earlier effect that unsubscribes `setUser` itself would take this one's too.
-        const subscription = madauth().then(({ Madauth }) => Madauth.onAuthStateChanged((next) => setUser(next)));
+        const subscription = madauth().then(
+            ({ Madauth }) => Madauth.onAuthStateChanged((next) => setUser(next)),
+            () => () => undefined,
+        );
         void initialize().then(setProblem);
         return () => void subscription.then((unsubscribe) => unsubscribe());
     }, []);
     return { user, problem };
 }
+
+/**
+ * Asks madAuth whether the session still exists, after the API answered
+ * 401: when it does not, the page goes back to the sign-in.
+ */
+export const sessionEnded = () => madauth().then(({ Madauth }) => Madauth.getSession());
 
 export const signIn = () => madauth().then(({ Madauth }) => Madauth.showSignInDialog());
 export const signOut = () => madauth().then(({ Madauth }) => Madauth.signOut());

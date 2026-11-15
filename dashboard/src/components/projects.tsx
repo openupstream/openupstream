@@ -3,12 +3,20 @@
 import type { Account, ApiError, ApiResult, OpenUpstreamClient, Project } from '@openupstream/sdk';
 import { type FormEvent, useCallback, useEffect, useState } from 'react';
 import { projectNameProblem, projectsByAccount } from '../lib/projects';
-import { api } from '../lib/session';
+import { api, sessionEnded } from '../lib/session';
 
 type Loaded = { readonly accounts: readonly Account[]; readonly projects: readonly Project[] };
 
 const say = (error: ApiError): string =>
     error.status === 0 ? `The API could not be reached: ${error.message}` : error.status === 401 ? 'Your session has ended. Sign in again.' : error.message;
+
+/** What to show for a refusal; a 401 also has madAuth look at the session, which signs the page out when it is gone. */
+const refused = (error: ApiError): string => {
+    if (error.status === 401) {
+        void sessionEnded();
+    }
+    return say(error);
+};
 
 const load = async (client: OpenUpstreamClient): Promise<ApiResult<Loaded>> => {
     const [accounts, projects] = await Promise.all([client.listAccounts(), client.listProjects()]);
@@ -22,7 +30,7 @@ export function Projects() {
 
     const refresh = useCallback(async () => {
         const result = await load(await api());
-        setProblem(result.ok ? undefined : say(result.error));
+        setProblem(result.ok ? undefined : refused(result.error));
         if (result.ok) {
             setLoaded(result.value);
         }
@@ -33,7 +41,7 @@ export function Projects() {
     const change = async (run: (client: OpenUpstreamClient) => Promise<ApiResult<unknown>>): Promise<boolean> => {
         const result = await run(await api());
         if (!result.ok) {
-            setProblem(say(result.error));
+            setProblem(refused(result.error));
             return false;
         }
         await refresh();
