@@ -62,7 +62,7 @@ pages, a year for the content-named files under `/_next/static/`). The
 Images workflow publishes it as `ghcr.io/openupstream/dashboard`, and
 `infra/dev-cluster/platform.sh` installs `deploy/dashboard.yaml`: two
 replicas, one per compute Site, behind every path of the platform domain
-that madAuth and the API do not have (decision 121). It has no settings
+that madAuth and the API do not have (decision 123). It has no settings
 and talks to nothing. For the hosted service that host is
 `console.openupstream.com`; `openupstream.com` is the welcome page with the
 waitlist and never shows the dashboard.

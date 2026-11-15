@@ -1,4 +1,4 @@
-# The waitlist page (ARCHITECTURE.md, decisions 86 and 121), while sign-up
+# The waitlist page (ARCHITECTURE.md, decisions 86 and 123), while sign-up
 # on the hosted service is closed, at a host of its own: WAITLIST_DOMAIN is
 # `openupstream.com` for the hosted service, whose dashboard, madAuth and
 # API are at `console.openupstream.com` (platform-routes.yaml). Every path

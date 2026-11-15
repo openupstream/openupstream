@@ -174,6 +174,43 @@ export const requireComputeSite = () => ({
     nodeSelectorTerms: [{ matchExpressions: [{ key: ZONE_LABEL, operator: 'In', values: [...COMPUTE_SITES] }] }],
 });
 
+/**
+ * What a customer's pod may write to its container's filesystem and logs
+ * (decision 121): the kubelet evicts a pod above it, so one cannot fill a
+ * node's disk and have other customers' pods evicted. Under gVisor the
+ * writes land in a file in the container's root on the host, which the
+ * kubelet counts.
+ */
+export const POD_DISK_LIMIT = '2Gi';
+/**
+ * What the scheduler counts of that against a node's disk. Kubernetes
+ * would take the limit as the request when none is given, and the node's
+ * system disk would then cap its pods at its size / 2 GiB.
+ */
+export const POD_DISK_REQUEST = '100Mi';
+
+/** A customer container's requests and limits: CPU and memory as reserved and billed, and the disk limit. */
+export const customerResources = (size: { readonly cpuMillicores: number; readonly memoryMb: number }) => {
+    const reserved = { cpu: `${size.cpuMillicores}m`, memory: `${size.memoryMb}Mi` };
+    return {
+        requests: { ...reserved, 'ephemeral-storage': POD_DISK_REQUEST },
+        limits: { ...reserved, 'ephemeral-storage': POD_DISK_LIMIT },
+    };
+};
+
+/**
+ * The most a customer's pod sends and receives, in Mbit/s (decision 122).
+ * k3s's CNI (the `bandwidth` plugin) shapes the pod's interface on the node
+ * to it when the pod starts; the bandwidth agent lowers it while the node's
+ * uplink is nearly full.
+ */
+export const POD_BANDWIDTH_MBIT = 300;
+/** The pod annotations the CNI reads the limit from, in bits per second. */
+export const POD_BANDWIDTH_ANNOTATIONS = {
+    'kubernetes.io/ingress-bandwidth': `${POD_BANDWIDTH_MBIT}M`,
+    'kubernetes.io/egress-bandwidth': `${POD_BANDWIDTH_MBIT}M`,
+} as const;
+
 /** Which operator's objects, and which kind of customer pod, an object is: `services`, `jobs`, `routes`. */
 export const COMPONENT_LABEL = 'openupstream.io/component';
 

@@ -1,6 +1,6 @@
 # The dashboard, as a Service of the platform Project (PLATFORM in
 # sdk/src/internal.ts): nginx with the static files of dashboard/Dockerfile
-# (ARCHITECTURE.md, decision 121). Two replicas, one per compute Site. It
+# (ARCHITECTURE.md, decision 123). Two replicas, one per compute Site. It
 # talks to nothing: the browser calls madAuth and the API itself, on the
 # same host (infra/ingress/platform-routes.yaml routes all three).
 #

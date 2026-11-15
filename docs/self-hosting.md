@@ -73,8 +73,8 @@ Other names that are ours today and need yours:
 | --- | --- |
 | The backup bucket | `infra/dev-cluster/database-config.json` (section 4) |
 | madAuth's public URL | `MADAUTH_ISSUER` in `infra/dev-cluster/platform.sh` (on the dev cluster `http://localhost:8787`) |
-| Our hostname (`console.openupstream.com`: the dashboard, madAuth under `/auth`, the API under `/api`) | decisions 67, 120 and 121; `PLATFORM_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
-| The waitlist's hostname (`openupstream.com`), only with `SIGNUP=closed` | decision 121; `WAITLIST_DOMAIN` for `infra/dev-cluster/platform.sh` (section 9) |
+| Our hostname (`console.openupstream.com`: the dashboard, madAuth under `/auth`, the API under `/api`) | decisions 67, 120 and 123; `PLATFORM_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
+| The waitlist's hostname (`openupstream.com`), only with `SIGNUP=closed` | decision 123; `WAITLIST_DOMAIN` for `infra/dev-cluster/platform.sh` (section 9) |
 | The customer domain (`openupstream.app`), under which Buckets are reached | decision 68; `CUSTOMER_DOMAIN`, defaults in `infra/dev-cluster/lib.sh` |
 
 ## 3. Development clusters
@@ -406,7 +406,7 @@ To close it, as the hosted service does until it can invoice:
 
    `WAITLIST_DOMAIN` is the waitlist's own host, a bunny.net zone or a
    name inside one, and never the platform domain, which serves the
-   dashboard (decision 121): for the hosted service `openupstream.com`
+   dashboard (decision 123): for the hosted service `openupstream.com`
    next to `console.openupstream.com`. `platform.sh` points it at the
    compute nodes and requests its certificate.
    `SIGNUP_ALLOW` takes addresses and `@domains`, comma-separated. madAuth

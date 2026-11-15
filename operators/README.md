@@ -68,6 +68,16 @@ Traefik already implements is configured, not reimplemented.
   cgroup on the node, read every second and when its last process exits,
   served on :9101/metrics as `openupstream_pod_cpu_usage_seconds_total` and
   kept 15 minutes after the pod ended. `totals.ts` is the pure bookkeeping.
+- `src/bandwidth-agent/`: the bandwidth agent (ARCHITECTURE.md, decision
+  122), another entry point (`node operators/dist/bandwidth-agent/main.js`,
+  a DaemonSet in `deploy/bandwidth-agent.yaml`, on the node's network as
+  root with NET_ADMIN): every second it reads the customer pods' token
+  buckets with `tc` (the CNI's `bandwidth` plugin creates them from the
+  pods' annotations), sets a new one's burst to a tenth of a second of its
+  limit, and lowers all limits to the fair share while the node's uplink
+  is above 80% of its speed. `shares.ts` is the pure arithmetic. The
+  limits themselves (`POD_BANDWIDTH_MBIT`, `POD_DISK_LIMIT`) are in
+  `src/kubernetes.ts`, which the Services and Jobs manifests use.
 - `src/main.ts`: the image's entry point; `OPERATOR` (`databases`, the
   default, `routes`, `services` or `jobs`) picks which operator the process runs,
   each in its own Deployment with its own ServiceAccount.

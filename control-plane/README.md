@@ -163,7 +163,7 @@ logged.
 
 While sign-up on the hosted service is closed, `src/waitlist/` serves
 `openupstream.com`, a host of its own next to the platform domain
-(decisions 86 and 121): plain HTML, no script, no cookies, routed by
+(decisions 86 and 123): plain HTML, no script, no cookies, routed by
 `infra/ingress/waitlist-route.yaml`. It is
 on only with `WAITLIST_URL`, the page's public URL, which the e-mails link
 to; then it needs `WAITLIST_IMPRINT`, the Impressum as plain text, and

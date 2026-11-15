@@ -165,11 +165,17 @@ pinned by digest (`IMAGE_TAG` to choose others; the commit must be pushed
 and its Images workflow done). The DatabaseConfig is `database-config.json`,
 with the cluster's layout added.
 madAuth sends real e-mails through SES; `MAIL=log ./platform.sh` writes
-them to the sidecar's log instead. To try the payment-method gate without a
+them to the sidecar's log instead. It also installs the CPU agent and the
+bandwidth agent on the compute nodes. The bandwidth agent lowers the
+customer pods' limits while a node's uplink is above 80% of its speed,
+which it reads from the node's network interface: set `UPLINK_MBIT` (for
+all nodes, in Mbit/s) where the interface reports none, as on a VM, or
+more than the line carries, as a home machine's does; without a speed it
+lowers nothing (decision 122). To try the payment-method gate without a
 billing service, set `NEW_ACCOUNT_HOLDS=payment-method` and
 `BILLING_CALLERS` to a ServiceAccount you lift Holds with (control-plane
 README, "Internal API"). To close sign-up as the hosted service does, with
-the waitlist at a host of its own (decision 121), set `SIGNUP=closed`,
+the waitlist at a host of its own (decision 123), set `SIGNUP=closed`,
 `WAITLIST_DOMAIN` to that host (e.g. `waitlist.dev.openupstream.com`; never
 the platform domain, which serves the dashboard),
 `IMPRINT_FILE` to a text file with an Impressum, and `SIGNUP_ALLOW` to your

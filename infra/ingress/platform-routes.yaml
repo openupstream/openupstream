@@ -1,4 +1,4 @@
-# Our own public hostname (ARCHITECTURE.md, decisions 67, 120 and 121), in
+# Our own public hostname (ARCHITECTURE.md, decisions 67, 120 and 123), in
 # the platform Project's namespace. PLATFORM_DOMAIN is
 # `console.openupstream.com` for the hosted service and
 # `dev.openupstream.com` on a dev cluster; CLUSTER_ISSUER is `letsencrypt` or

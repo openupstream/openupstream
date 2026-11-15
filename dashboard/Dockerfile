@@ -1,5 +1,5 @@
 # The dashboard's image: its static files behind nginx (ARCHITECTURE.md,
-# decision 121). Build from the repository root, which holds the npm
+# decision 123). Build from the repository root, which holds the npm
 # workspaces it depends on:
 #
 #   docker build -f dashboard/Dockerfile .

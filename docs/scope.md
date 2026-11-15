@@ -32,7 +32,8 @@ deletes it all.
    separate product.
 4. **Containers**: the customer's image from any registry, in three modes:
    Service (HTTP), Cron job, One-off job. gVisor sandbox. Scales 1..N, no
-   scale-to-zero.
+   scale-to-zero. Each pod has 2 GiB of scratch disk and 300 Mbit/s each
+   way, less while its node's uplink is nearly full.
 5. **Routing**: `Domain → [(path prefix → Bucket | Service)]` per Project,
    automatic TLS. Every Project gets a default hostname; custom domains are
    added after a TXT-record ownership check and CNAME to the platform's

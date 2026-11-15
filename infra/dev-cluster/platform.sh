@@ -26,7 +26,11 @@
 # 7. the Services operator, running every Service as a Deployment under
 #    gVisor every 30 s;
 # 8. the CPU agent on each compute node, every pod's CPU total for metering
-#    (decision 115).
+#    (decision 115);
+# 9. the bandwidth agent on each compute node, which keeps the customers'
+#    pods from filling the node's uplink (decision 122). UPLINK_MBIT is the
+#    nodes' uplink speed in Mbit/s, for nodes whose interface reports none
+#    (VMs) or more than the line carries; unset, the interface's own.
 #
 # Images come from GHCR, pinned by digest: by default the ones built for the
 # current commit (.github/workflows/images.yml). Override with IMAGE_TAG.
@@ -62,7 +66,7 @@ BILLING_CALLERS=${BILLING_CALLERS:-}
 # openupstream themselves. The hosted service sets SIGNUP=closed until it
 # can invoice: madAuth then refuses new users except the addresses and
 # @domains in SIGNUP_ALLOW, and https://$WAITLIST_DOMAIN serves the
-# waitlist: a host of its own (decision 121; openupstream.com for the hosted
+# waitlist: a host of its own (decision 123; openupstream.com for the hosted
 # service at console.openupstream.com), a bunny.net zone or a name inside
 # one. The waitlist also needs IMPRINT_FILE, a text file with the Impressum,
 # and MAIL=ses or log for its confirmation e-mails.
@@ -261,3 +265,11 @@ kubectl -n openupstream-system rollout status deployment/jobs-operator --timeout
 sed "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" "$ROOT/operators/deploy/cpu-agent.yaml" |
   kubectl apply -f - >/dev/null
 kubectl -n openupstream-system rollout status daemonset/cpu-agent --timeout=5m
+
+# The bandwidth agent on each compute node, which keeps the customers' pods
+# from filling the node's uplink (decision 122).
+sed -e "s#ghcr.io/openupstream/operators:main#$OPERATORS_IMAGE#" \
+  -e "s#{name: UPLINK_MBIT, value: \"\"}#{name: UPLINK_MBIT, value: \"${UPLINK_MBIT:-}\"}#" \
+  "$ROOT/operators/deploy/bandwidth-agent.yaml" |
+  kubectl apply -f - >/dev/null
+kubectl -n openupstream-system rollout status daemonset/bandwidth-agent --timeout=5m
