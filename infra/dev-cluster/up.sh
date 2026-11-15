@@ -9,6 +9,10 @@
 #   ovh-lim       hel1  compute Site (stand-in; Hetzner Cloud has no Limburg)
 #   netcup-nbg    nbg1  third Site, tainted openupstream.io/third-site
 #
+# Each compute node gets a Hetzner Cloud Volume as its LVM volume group
+# `openupstream`, where TopoLVM puts the Databases' volumes (infra/topolvm);
+# on the real servers it is their NVMe.
+#
 # Needs: hcloud with an active context, kubectl, ssh, curl, openssl, jq.
 # Writes: .state/ (SSH key, k3s token, kubeconfig), gitignored.
 set -euo pipefail
@@ -20,6 +24,7 @@ LABEL="openupstream=dev"
 SERVER_TYPE=${SERVER_TYPE:-cpx32}
 IMAGE=${IMAGE:-ubuntu-24.04}
 K3S_VERSION=${K3S_VERSION:-v1.36.5+k3s1}
+VOLUME_GB=${VOLUME_GB:-40}
 SITES=(hetzner-fsn1 ovh-lim netcup-nbg)
 location() {
   case $1 in
@@ -78,6 +83,19 @@ hcloud firewall describe "$PREFIX" -o json |
 
 for node_ip in "${IPS[@]}"; do
   until "${SSH[@]}" "root@$node_ip" true 2>/dev/null; do sleep 3; done
+done
+
+# The volume group on the compute nodes, from a volume of their own; down.sh
+# deletes the volumes by label, as it does the servers.
+for i in 0 1; do
+  site=${SITES[$i]}
+  name="$PREFIX-$site"
+  hcloud volume describe "$name" >/dev/null 2>&1 ||
+    hcloud volume create --name "$name" --size "$VOLUME_GB" --server "$name" --label "$LABEL" >/dev/null
+  device=$(hcloud volume describe "$name" -o json | jq -r .linux_device)
+  until "${SSH[@]}" "root@${IPS[$i]}" test -b "$device"; do sleep 2; done
+  echo "volume group on $site ($device)"
+  "${SSH[@]}" "root@${IPS[$i]}" bash -s -- "$device" <../topolvm/vgcreate.sh
 done
 
 # A dark node is marked NotReady after 20 s instead of 50 s, and its pods

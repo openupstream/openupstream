@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deletes everything up.sh, ingress.sh and garage.sh created: DNS records, servers,
-# firewall, SSH key, local state.
+# their volumes, firewall, SSH key, local state.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -18,7 +18,13 @@ for name in $(hcloud server list --selector "$LABEL" -o noheader -o columns=name
   echo "deleting $name"
   hcloud server delete "$name" >/dev/null
 done
+# Detached with their servers; a volume left behind would bill on.
+for name in $(hcloud volume list --selector "$LABEL" -o noheader -o columns=name); do
+  echo "deleting volume $name"
+  hcloud volume delete "$name" >/dev/null
+done
 hcloud firewall describe "$PREFIX" >/dev/null 2>&1 && hcloud firewall delete "$PREFIX" >/dev/null
 hcloud ssh-key describe "$PREFIX" >/dev/null 2>&1 && hcloud ssh-key delete "$PREFIX" >/dev/null
 rm -rf .state
 hcloud server list --selector "$LABEL"
+hcloud volume list --selector "$LABEL"

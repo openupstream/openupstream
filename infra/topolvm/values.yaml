@@ -1,0 +1,52 @@
+# TopoLVM (chart 17.3.1, TopoLVM 0.42.1): local volumes for the Databases
+# on the compute Sites (ARCHITECTURE.md, "Postgres", decisions 26 and 109).
+#
+# Thick logical volumes in the volume group `openupstream` (vgcreate.sh): a
+# volume reserves its full size, so a node never promises more disk than it
+# has and one Database filling its volume never stops another. The
+# scheduler places an instance only where its size still fits, through
+# Kubernetes' storage capacity tracking; no scheduler extender.
+
+# cert-manager is installed already (infra/dev-cluster/operators.sh).
+cert-manager:
+  enabled: false
+webhook:
+  certManager: true
+  podMutatingWebhook:
+    enabled: false
+scheduler:
+  enabled: false
+controller:
+  storageCapacityTracking:
+    enabled: true
+
+# Only the compute Sites hold Databases; the third Site has no volume group.
+lvmd:
+  managed: true
+  affinity: &compute
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: topology.kubernetes.io/zone
+                operator: In
+                values: [hetzner-fsn1, ovh-lim]
+  deviceClasses:
+    - name: nvme
+      volume-group: openupstream
+      default: true
+      # Kept free for LVM's own metadata and an emergency lvextend.
+      spare-gb: 10
+node:
+  affinity: *compute
+
+storageClasses:
+  - name: topolvm-provisioner
+    storageClass:
+      fsType: xfs
+      isDefaultClass: false
+      volumeBindingMode: WaitForFirstConsumer
+      allowVolumeExpansion: true
+      reclaimPolicy: Delete
+      additionalParameters:
+        topolvm.io/device-class: nvme

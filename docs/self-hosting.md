@@ -90,8 +90,10 @@ working session (#33, #52); see [infra/dev-cluster](../infra/dev-cluster/README.
    hcloud context create openupstream-dev
    ```
 
-Three `cpx32` VMs cost about €0.20 an hour together; `infra/dev-cluster/down.sh`
-deletes everything `up.sh` created.
+Three `cpx32` VMs cost about €0.20 an hour together, the two 40 GB volumes
+of the compute VMs about €0.005; `infra/dev-cluster/down.sh` deletes
+everything `up.sh` created. A volume left behind by an interrupted run
+shows in `hcloud volume list --selector openupstream=dev`.
 
 ## 4. Hetzner Object Storage: backups
 
@@ -423,3 +425,8 @@ sent at all.
   PayPal connected before January 2025 may need connecting again for
   recurring payments.
 - The production DNS zones and public hostnames.
+- **Storage on the compute servers**: TopoLVM needs the LVM volume group
+  `openupstream` on each compute server, made from its NVMe with
+  `infra/topolvm/vgcreate.sh <device>` before TopoLVM is installed
+  (`infra/topolvm/values.yaml`). How the NVMe disks are combined (RAID 1
+  or not) is decided when the servers are ordered.

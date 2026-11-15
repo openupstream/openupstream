@@ -5,7 +5,7 @@
  * (src/cleanup.ts) removes the Kubernetes objects and, after the retention
  * window, the backups and the row.
  */
-import type { Database, DatabaseInput, DatabaseRestore, Site } from '@openupstream/sdk';
+import type { Database, DatabaseInput, DatabasePatch, DatabaseRestore, Site } from '@openupstream/sdk';
 import type pg from 'pg';
 import { ACCOUNT_HELD, UNIQUE_VIOLATION, unlessCodes } from '../db/errors.js';
 import { type Result, ok } from '../result.js';
@@ -109,6 +109,19 @@ export async function getRestoreSource(pool: pg.Pool, projectId: string, id: str
         [id, projectId],
     );
     return rows.map((row) => ({ id: row.id, deletedAt: row.deleted_at ?? undefined }))[0];
+}
+
+/**
+ * Sets the sizes in `patch` on a live Database; undefined when there is none.
+ * The API checks that storage only grows; the operator applies it.
+ */
+export async function updateDatabase(pool: pg.Pool, projectId: string, id: string, patch: DatabasePatch): Promise<Database | undefined> {
+    const { rows } = await pool.query<DatabaseRow>(
+        `update databases set memory_mb = coalesce($3, memory_mb), storage_gb = coalesce($4, storage_gb)
+         where id = $1 and project_id = $2 and deleted_at is null returning ${COLUMNS}`,
+        [id, projectId, patch.memoryMb ?? null, patch.storageGb ?? null],
+    );
+    return rows.map(toDatabase)[0];
 }
 
 /** Marks the Database deleted; false when there was no such live Database. */

@@ -23,6 +23,8 @@ const fakes = () => {
     const kube: ControlPlaneKube = {
         readCluster: async (_namespace, name) => ok(clusters.get(name)),
         readRecoveryWindow: async () => ok(undefined),
+        storageCapacity: async () => ok(undefined),
+        volumeNodes: async () => ok([]),
         readDeployment: async () => ok(undefined),
         readCronJob: async () => ok(undefined),
         createJob: async () => err('not in this test'),

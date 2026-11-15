@@ -8,6 +8,7 @@
  *   oup pg list | show <name> | delete <name>
  *   oup pg create <name> [--memory <MB>] [--storage <GB>] [--site …]   waits until ready
  *   oup pg restore <source> <name> [--time <RFC 3339>] …   a new Database as a copy of <source>
+ *   oup pg resize <name> [--memory <MB>] [--storage <GB>]   storage only grows
  *   oup service list | show <name> | delete <name>
  *   oup service deploy <name> --image <ref> [--port … | --no-port] …
  *   oup service logs <name> [--tail <n>] [-f] [--timestamps]
@@ -75,6 +76,7 @@ const USAGE = `usage:
   oup pg show <name>
   oup pg create <name> [--memory <MB>] [--storage <GB>] [--site hetzner-fsn1|ovh-lim] [--no-wait]
   oup pg restore <source> <name> [--time <RFC 3339>] [--memory <MB>] [--storage <GB>] [--site …] [--no-wait]
+  oup pg resize <name> [--memory <MB>] [--storage <GB>] [--no-wait]
   oup pg delete <name>
   oup service list
   oup service show <name>
@@ -106,6 +108,8 @@ creates a new Database that starts as a copy of <source> at --time, or at
 the latest point its backups reach; <source> keeps running. Its size and
 Site default to the source's. A deleted Database can be restored by its id
 (oup pg delete prints it) within the backup retention window, with --storage.
+pg resize grows the storage online; a new memory size restarts the
+instances one after the other (writes pause for seconds).
 
 logs prints the last lines (100 by default) of every replica or of a run,
 with -f also new ones as they are written, for up to an hour. Nothing is
@@ -239,6 +243,7 @@ const PG_FLAGS = {
     delete: [],
     create: ['memory', 'storage', 'site', 'no-wait'],
     restore: ['memory', 'storage', 'site', 'no-wait', 'time'],
+    resize: ['memory', 'storage', 'no-wait'],
 } as const satisfies Record<string, readonly string[]>;
 
 async function pg(args: string[]): Promise<void> {
@@ -295,6 +300,24 @@ async function pg(args: string[]): Promise<void> {
                   )
                 : fail(deleted.error.message);
         }
+        case 'resize': {
+            const database = found();
+            if (memoryMb === undefined && storageGb === undefined) {
+                return fail('oup pg resize needs --memory, --storage or both');
+            }
+            const resized = await client.updateDatabase(project.id, database.id, {
+                ...(memoryMb === undefined ? {} : { memoryMb }),
+                ...(storageGb === undefined ? {} : { storageGb }),
+            });
+            if (!resized.ok) {
+                return fail(resized.error.message);
+            }
+            console.log(`Resizing ${name}: ${database.memoryMb} → ${resized.value.memoryMb} MB, ${database.storageGb} → ${resized.value.storageGb} GB`);
+            if (values['no-wait'] === true) {
+                return;
+            }
+            return waitReady(client, project.id, database.id, name as string);
+        }
         case 'create':
         case 'restore': {
             const planned =
@@ -328,17 +351,22 @@ async function pg(args: string[]): Promise<void> {
             if (values['no-wait'] === true) {
                 return;
             }
-            // A restore first fetches the base backup and replays WAL; both take longer than an empty start.
-            const ready = await waitUntil(() => client.getDatabase(project.id, id), (database) => database.state === 'ready', {
-                timeoutMs: 20 * 60_000,
-                intervalMs: 5_000,
-                report: (state) => console.log(`  ${state}`),
-            });
-            return ready.ok ? undefined : fail(`${createdName} is not ready: ${ready.error}`);
+            return waitReady(client, project.id, id, createdName);
         }
         default:
             return fail(USAGE);
     }
+}
+
+/** Until the Database is ready; every state it passes through is reported once. */
+async function waitReady(client: OpenUpstreamClient, projectId: string, databaseId: string, name: string): Promise<void> {
+    // A restore first fetches the base backup and replays WAL; a new memory size restarts both instances.
+    const ready = await waitUntil(() => client.getDatabase(projectId, databaseId), (database) => database.state === 'ready', {
+        timeoutMs: 20 * 60_000,
+        intervalMs: 5_000,
+        report: (state) => console.log(`  ${state}`),
+    });
+    return ready.ok ? undefined : fail(`${name} is not ready: ${ready.error}`);
 }
 
 async function service(args: string[]): Promise<void> {
