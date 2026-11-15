@@ -23,8 +23,9 @@ operators and the billing service), not for customers.
 
 ## Releasing
 
-Raise `version` in `package.json` (and `SDK_VERSION` in `src/index.ts`),
-merge, then tag that commit `sdk-v<version>` and push the tag; only admins
+Raise `version` in `package.json` (and `SDK_VERSION` in `src/index.ts`,
+and the range of `@openupstream/sdk` in the other workspaces when the
+minor version changes: `^0.1.0` does not match `0.2.0`), merge, then tag that commit `sdk-v<version>` and push the tag; only admins
 may. The workflow `.github/workflows/sdk-release.yml` waits in the
 Environment `npm-release` until a maintainer approves the run on GitHub,
 then checks that the tag names the version, builds, tests and publishes

@@ -122,3 +122,16 @@ for each call, `src/deploy.ts` the site deploy (`planDeploy` is pure),
 (`planServiceDeploy` is pure), `src/jobs.ts` the Job deploy and runs
 (`planJobDeploy` is pure), `src/wait.ts` the polling both wait with and
 `src/stdin.ts` reading secret values.
+
+## Releasing
+
+Raise `version` in `package.json` and `CLI_VERSION` in `src/version.ts`
+(a test checks they match). When the CLI needs a newer SDK, raise the
+range of `@openupstream/sdk` and release the SDK first (sdk/README.md).
+Merge, then tag that commit `cli-v<version>` and push the tag; only admins
+may. The workflow `.github/workflows/cli-release.yml` waits in the
+Environment `npm-release` until a maintainer approves the run on GitHub,
+then checks that the tag names the version and that the SDK it needs is
+on npm, builds, tests, installs the packed CLI and runs `oup version`, and
+publishes with npm trusted publishing and provenance (ARCHITECTURE.md,
+decision 80).

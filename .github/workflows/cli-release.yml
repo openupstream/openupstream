@@ -1,0 +1,55 @@
+name: Release cli
+
+# Publishes @openupstream/cli (`oup`) to npm when a tag `cli-v<version>` is
+# pushed, e.g. `cli-v0.1.0` for the version in cli/package.json
+# (ARCHITECTURE.md, decision 80), as sdk-release.yml does the SDK:
+#
+# - only repository and organization admins may create `cli-v*` tags (the
+#   ruleset "cli release tags");
+# - the job runs in the GitHub Environment `npm-release`, which waits for a
+#   maintainer's approval and accepts only `sdk-v*` and `cli-v*` tags;
+# - npm trusted publishing (OIDC) authenticates it, for this workflow in
+#   that environment only, so no npm token is stored anywhere; npm records
+#   the provenance;
+# - every action is pinned to a full commit SHA.
+#
+# The CLI is installed with the SDK from npm, not the one in this
+# repository: release the SDK first when the CLI needs a newer one.
+
+on:
+  push:
+    tags: ['cli-v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later; early Node 24 releases ship an older npm.
+      - run: npm install -g npm@11.20.0
+      - run: npm ci
+      - name: The tag names the package's version
+        run: test "cli-v$(node -p "require('./cli/package.json').version")" = "$GITHUB_REF_NAME"
+      - name: The SDK version the CLI needs is on npm
+        run: |
+          range=$(node -p "require('./cli/package.json').dependencies['@openupstream/sdk']")
+          test -n "$(npm view "@openupstream/sdk@$range" version)" ||
+            { echo "no @openupstream/sdk $range on npm; release the SDK first" >&2; exit 1; }
+      - run: npm run build -w sdk -w cli
+      - run: npm test -w cli
+      - name: The packed CLI installs from npm and runs
+        run: |
+          npm pack -w cli --pack-destination "$RUNNER_TEMP" >/dev/null
+          cd "$(mktemp -d)"
+          npm init -y >/dev/null
+          npm install "$RUNNER_TEMP"/openupstream-cli-*.tgz
+          npx oup version | grep -F "oup ${GITHUB_REF_NAME#cli-v} "
+      - run: npm publish -w cli --provenance
