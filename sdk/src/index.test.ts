@@ -1,4 +1,4 @@
-import { after, before, describe, test } from 'node:test';
+import { after, before, describe, mock, test } from 'node:test';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import assert from 'node:assert/strict';
@@ -7,6 +7,22 @@ import { OpenUpstreamClient, errorMessage, txtRecordName } from './index.js';
 test('client defaults to the production API', () => {
     const client = new OpenUpstreamClient({ token: 'x' });
     assert.equal(client.baseUrl, 'https://api.openupstream.com');
+});
+
+test("with the session cookie, the browser sends the credential: no authorization header, credentials 'include'", async (t) => {
+    const fetched = mock.method(globalThis, 'fetch', async () => new Response('[]', { headers: { 'content-type': 'application/json' } }));
+    t.after(() => fetched.mock.restore());
+    const client = new OpenUpstreamClient({ baseUrl: 'https://api.example.test', session: 'cookie' });
+    assert.deepEqual(await client.listProjects(), { ok: true, value: [] });
+    await client.createProject({ accountId: 'a', name: 'shop' });
+    const inits = fetched.mock.calls.map((call) => call.arguments[1] as RequestInit);
+    assert.deepEqual(
+        inits.map((init) => [init.credentials, init.headers]),
+        [
+            ['include', {}],
+            ['include', { 'content-type': 'application/json' }],
+        ],
+    );
 });
 
 test('the TXT ownership proof lives under _openupstream', () => {

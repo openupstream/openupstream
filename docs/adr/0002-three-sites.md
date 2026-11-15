@@ -58,7 +58,7 @@ What we found when placing the Sites (checked 2026-10-16):
 - Three hosting providers to contract with and list as subprocessors, three
   Terraform setups (netcup has no official provider).
   (Since replaced: the servers are ordered by hand and set up by shell
-  scripts, ARCHITECTURE.md decision 116.)
+  scripts, ARCHITECTURE.md decision 117.)
 - Object storage costs three copies of every byte. Unit prices for Bucket
   storage have to cover that.
 - Rejected:

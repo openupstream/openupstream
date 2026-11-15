@@ -482,4 +482,4 @@ sent at all.
   (`infra/topolvm/values.yaml`). The two NVMe disks are mirrored
   (software RAID 1) in two parts, a small one for the operating system and
   the rest left empty for the volume group (ARCHITECTURE.md, decision
-  117); the device is that second `/dev/md…`.
+  118); the device is that second `/dev/md…`.

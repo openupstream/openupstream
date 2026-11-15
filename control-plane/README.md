@@ -45,6 +45,8 @@ S3 API inside the cluster, `GARAGE_ADMIN_URL` and `GARAGE_S3_URL`, with
 in madAuth (`infra/madauth/register-cli.sh`); `CUSTOMER_DOMAIN`, under which Buckets are reached
 at `<bucket>.s3.<CUSTOMER_DOMAIN>`; `PLATFORM_DOMAIN`, our own hostnames,
 which like `CUSTOMER_DOMAIN` cannot be claimed as custom domains; optionally
+`DASHBOARD_ORIGINS`, the origins whose browsers may call the API with the
+session cookie, default `https://<PLATFORM_DOMAIN>`; optionally
 `NEW_ACCOUNT_HOLDS`, the Holds every new Account starts with, e.g.
 `payment-method`, and `BILLING_CALLERS`, the billing service's
 ServiceAccount; `ROUTES_CALLERS`, default the Routes operator's;
@@ -74,6 +76,13 @@ for GET and `openupstream:write` for anything else. The caller acts for
 every Account its madAuth user is a Member of. A Project of another
 Account answers 404, like one that does not exist. An Account with a Hold
 gets 402 when it creates a Resource, with `{error, holds}`.
+
+The dashboard's browser sends no header but madAuth's session cookie
+(`madauth_session`, decision 116). The API reads it only on a request
+whose `Origin` is one of `DASHBOARD_ORIGINS` (comma-separated origins,
+default `https://<PLATFORM_DOMAIN>`), as a session token only, and answers
+those origins with CORS headers that allow credentials; from any other
+origin, or without one, the cookie counts for nothing (401).
 
 | Route | |
 | --- | --- |

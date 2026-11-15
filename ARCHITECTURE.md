@@ -209,7 +209,14 @@ deleted, an Account with a Hold creates no Resource, and usage events are
 append-only. Its tests run against a real
 Postgres in Docker. The API types are in `sdk/src/model.ts`.
 
-The dashboard (`dashboard/`) is a Next.js app on the same API.
+The dashboard (`dashboard/`) is a Next.js app on the same API, built as
+static files (#116): every page renders in the browser, which calls the API
+itself through `@openupstream/sdk`. It signs Members in and up with
+madAuth's dialog (`@madauth/web`, e-mail and password), shows the approval
+dialog of `oup login` when opened with `?madauth_device=<code>`, creates an
+Account on the first visit (#62) and lists, creates and deletes Projects;
+the pages for Resources follow. It finds the API at `api.` in front of its
+own hostname, so one build serves every installation.
 
 Sign-in for Members and API keys for `oup` and the SDK come from
 [madAuth](https://madauth.com), self-hosted on the cluster as its published
@@ -227,7 +234,8 @@ front of each. madAuth needs its Database for every sign-in: while that
 Database fails over, sign-in is unavailable (53 s measured on the dev
 cluster).
 
-The API accepts three kinds of madAuth credentials (#64, #87):
+The API accepts three kinds of madAuth credentials as `Authorization:
+Bearer` (#64, #87), and the session also as madAuth's cookie (#116):
 
 - a session token: a JWT (ES256, `typ: madauth-session+jwt`, issuer
   checked, no audience) verified against madAuth's JWKS, fetched from madAuth
@@ -255,6 +263,18 @@ The API accepts three kinds of madAuth credentials (#64, #87):
   sign-in in CI. An admin registers the CLI once
   (`infra/madauth/register-cli.sh`); the approval page at madAuth's
   `loginUrl` comes with the dashboard's first page.
+
+The dashboard's JavaScript never holds a credential: madAuth keeps the
+session token in an HttpOnly cookie (`madauth_session`, for the Domain
+`COOKIE_DOMAIN` names, the platform domain), which the browser sends to
+`api.<platform domain>` as well. The API reads the cookie only on a request
+whose `Origin` header is one of the dashboard's origins
+(`DASHBOARD_ORIGINS`, by default `https://<platform domain>`), takes it for
+a session token only, never an API key, and answers only those origins
+with CORS headers that allow credentials. A page of another site can make
+the browser send the cookie but cannot set that header, so it is answered
+401 like a request without a credential (CSRF); a Project's site cannot
+either, since customer hostnames are on another registrable domain (#31).
 
 The subject is a madAuth user, which can be a Member of several Accounts.
 A signed-in user creates an Account with `POST /v1/accounts` and becomes its
@@ -395,7 +415,7 @@ digest (#55).
 - Storage is local NVMe through TopoLVM (`infra/topolvm`), as thick
   logical volumes in the volume group `openupstream` on each compute Site
   (decision 109), which lies on a RAID 1 of the server's two disks
-  (decision 117): a volume reserves its full size, so a node never
+  (decision 118): a volume reserves its full size, so a node never
   promises more disk than it has and one Database filling its volume never
   stops another. The scheduler places an instance only where its size
   still fits (Kubernetes' storage capacity tracking). 10 GB of each group
@@ -1123,9 +1143,10 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 113 | On nodes with AppArmor, containers run under our copy of containerd's profile `cri-containerd.apparmor.d` (`infra/apparmor`), containerd 2.3's own plus signal and ptrace rules for the stacked label `cri-containerd.apparmor.d//&unconfined`; installed into `/etc/apparmor.d` and loaded before k3s by `k3s-single-node.sh`, on every run. Delete it once k3s ships containerd's fix (containerd #14487) | `kernel.apparmor_restrict_unprivileged_unconfined=0`; the Databases' pods `Unconfined`; staying on Ubuntu 24.04 | Ubuntu 26.04 stacks every container's profile on `unconfined`, and containerd's rules name only the unstacked label, so a container's processes cannot signal each other: on the Minisforum (2026-11-15) every Postgres failed with `could not signal for checkpoint: Permission denied` and stayed in recovery. The copy fixes exactly that rule, as upstream does, and keeps the containers confined; the sysctl would switch off Ubuntu's restriction on unprivileged user namespaces for every program on the machine, and `Unconfined` drops AppArmor from the Databases. Costs: our copy lags behind changes to containerd's profile until it is deleted, and it must be in place before k3s first starts. The Hetzner dev cluster runs Ubuntu 24.04 and does not need it yet; production nodes on 26.04 will |
 | 114 | Metering: a control-plane pass turns every completed hour into one usage event per Resource and unit. CPU seconds of all Resources come from the CPU agent through Prometheus (decision 115), memory of Services from running pods' requests and of Jobs from each run's request × run time (kube-state-metrics); egress from Traefik's per-rule response bytes, with an IngressRoute per Domain and Resource so each rule's metric names its Resource; Databases' memory and storage from their rows; Buckets' storage from Garage. Jobs are Resources of their own. Metered hours are listed; the billing service reads monthly sums per Project, Resource and unit | the Kubernetes metrics API (a sampled rate, not a counter); daily events; raw events to the billing service; one IngressRoute per Domain and the rules' hashes recomputed by metering (reproduces Traefik's internal naming; a Route deleted before its hour is metered is lost) | the counters are already scraped and exact over an hour; hourly events bill a Resource for the part of an hour it lived. Costs: billing depends on Prometheus (an outage longer than 14 days loses revenue, never overcharges); a Bucket's bytes are those at metering time, not the hour's average; a Project purged before its last hours are metered is not billed for them |
 | 115 | CPU seconds come from our own CPU agent, a DaemonSet on the compute nodes that reads each pod's total from its cgroup every second and when its last process exits (`cgroup.events`), and serves it to Prometheus, kept 15 minutes after the pod ended; metering bills a pod's total at the hour's end less at the previous hour's end | cAdvisor's counter (misses up to 30 s at each end of a pod's life and all of a run shorter than a scrape); Jobs' CPU as reservation × run time (Fargate, Cloud Run, Fly.io bill containers that way); measured CPU with short runs free | the kernel counts every pod's CPU exactly, but the count goes with the cgroup half a second after the pod ends; reading it then makes measured CPU exact for every Resource, short Job runs included, with one meaning for all. Costs: a component of our own on every compute node (read-only cgroup mount, listing its node's pods), and it races the cgroup's removal: if it loses, at most about a second of CPU is missing |
-| 116 | Production servers are ordered by hand in the providers' consoles and set up by shell scripts over SSH: the platform install is the dev cluster's (`infra/dev-cluster/install-multi-node.sh`), and the node setup (host firewall, AppArmor profile, gVisor, volume group, k3s) is to be one script used for production and by `infra/dev-cluster-hetzner/up.sh`, not written yet; no Terraform, `infra/terraform` is removed. This replaces the Terraform setups that ADR-0002's consequences and `infra/README.md` named | Terraform for the OVHcloud server order and the bunny.net records, scripts for the nodes | Hetzner's dedicated servers and netcup have no official provider, so Terraform would manage one server order and DNS records that `dns.sh` already writes from the nodes' addresses, at the price of a state file with secrets kept outside the cluster and a second DNS path the dev cluster does not test. One path means every dev session tests the production install. The backup bucket is made by hand (`docs/self-hosting.md`, section 4), the DNS records and health checks by `dns.sh`. Costs: nothing reports a firewall rule or record changed by hand, so the scripts must be safe to run again |
-| 117 | The two NVMe disks of each compute server are mirrored by software RAID 1 in two parts: a small one for the operating system and the rest, left empty by the installer, as the volume group `openupstream` (`infra/topolvm/vgcreate.sh /dev/md…`) | both disks in the volume group without RAID | a dead disk costs a disk swap; without RAID it takes down every Database instance on it, their primaries fail over and each instance is rebuilt from the other Site while its Database runs on one copy. Two parts keep the system's disk use and the Databases' apart, and a default install would give the whole mirror to `/`. Costs: half the room for Databases, and changing it later means reinstalling the node |
-| 118 | The production servers are ordered one after another: OVHcloud first on a monthly term, to measure FSN1↔Limburg RTT with WireGuard over a few days, then Hetzner and netcup. The OVHcloud server is a RISE-2 or RISE-S with 64 GB and two NVMe disks; the order waits until one is in stock in Limburg | all three at once; what Limburg had in stock on 2026-11-15: RISE-1 (32 GB only), Rise-Game-1 with 64 GB (game range, its DDoS filter in front of WireGuard's UDP), RISE-2 with 128 GB (about €53/month more), ADVANCE-2 (about €100/month more); another provider for this Site, checked the same day: IONOS (64 GB for €69/month only with a 4-core CPU from 2017 and hardware RAID, 8 cores only on a 12-month term or for €171), webtropia in Düsseldorf (from €160), Cherry Servers in Frankfurt (from $186), Contabo (out of stock) | if Limburg's latency does not hold, only one month of one server is lost and ADR-0002 can still change; both compute Sites get the same RAM, since each must carry the other's Services (decision 33's cost stays). Another provider would also need its latency measured, a new ADR and the Site's name `ovh-lim` changed. Costs: production waits for OVHcloud's stock, for which it gives no date |
+| 116 | The dashboard is static files that call the API from the browser, authenticated by madAuth's session cookie: the API reads `madauth_session` (madAuth's `COOKIE_DOMAIN` = the platform domain) on requests whose `Origin` is one of `DASHBOARD_ORIGINS` (default `https://<platform domain>`), as a session token only, and answers those origins with CORS headers that allow credentials; the SDK takes `session: 'cookie'` in place of a token | the dashboard's server reading the cookie and calling the API with it as Bearer (a backend-for-frontend); an OIDC access token held by the page's JavaScript, like `oup`'s | madAuth's session cookie is HttpOnly, so a page cannot send it as Bearer, and decision 67 already put the API where the cookie reaches it. No Node server to run for the dashboard: it can be served like any static site, and log streams (#103) go straight to the API. No token a script could read (XSS), and a session carries the e-mail address that creating an Account needs, which an access token does not. Costs: the API has a CORS and CSRF surface of its own, held by the `Origin` check, which every browser sets and no page can forge; a browser extension or a script injected into the dashboard itself can still call the API as the Member |
+| 117 | Production servers are ordered by hand in the providers' consoles and set up by shell scripts over SSH: the platform install is the dev cluster's (`infra/dev-cluster/install-multi-node.sh`), and the node setup (host firewall, AppArmor profile, gVisor, volume group, k3s) is to be one script used for production and by `infra/dev-cluster-hetzner/up.sh`, not written yet; no Terraform, `infra/terraform` is removed. This replaces the Terraform setups that ADR-0002's consequences and `infra/README.md` named | Terraform for the OVHcloud server order and the bunny.net records, scripts for the nodes | Hetzner's dedicated servers and netcup have no official provider, so Terraform would manage one server order and DNS records that `dns.sh` already writes from the nodes' addresses, at the price of a state file with secrets kept outside the cluster and a second DNS path the dev cluster does not test. One path means every dev session tests the production install. The backup bucket is made by hand (`docs/self-hosting.md`, section 4), the DNS records and health checks by `dns.sh`. Costs: nothing reports a firewall rule or record changed by hand, so the scripts must be safe to run again |
+| 118 | The two NVMe disks of each compute server are mirrored by software RAID 1 in two parts: a small one for the operating system and the rest, left empty by the installer, as the volume group `openupstream` (`infra/topolvm/vgcreate.sh /dev/md…`) | both disks in the volume group without RAID | a dead disk costs a disk swap; without RAID it takes down every Database instance on it, their primaries fail over and each instance is rebuilt from the other Site while its Database runs on one copy. Two parts keep the system's disk use and the Databases' apart, and a default install would give the whole mirror to `/`. Costs: half the room for Databases, and changing it later means reinstalling the node |
+| 119 | The production servers are ordered one after another: OVHcloud first on a monthly term, to measure FSN1↔Limburg RTT with WireGuard over a few days, then Hetzner and netcup. The OVHcloud server is a RISE-2 or RISE-S with 64 GB and two NVMe disks; the order waits until one is in stock in Limburg | all three at once; what Limburg had in stock on 2026-11-15: RISE-1 (32 GB only), Rise-Game-1 with 64 GB (game range, its DDoS filter in front of WireGuard's UDP), RISE-2 with 128 GB (about €53/month more), ADVANCE-2 (about €100/month more); another provider for this Site, checked the same day: IONOS (64 GB for €69/month only with a 4-core CPU from 2017 and hardware RAID, 8 cores only on a 12-month term or for €171), webtropia in Düsseldorf (from €160), Cherry Servers in Frankfurt (from $186), Contabo (out of stock) | if Limburg's latency does not hold, only one month of one server is lost and ADR-0002 can still change; both compute Sites get the same RAM, since each must carry the other's Services (decision 33's cost stays). Another provider would also need its latency measured, a new ADR and the Site's name `ovh-lim` changed. Costs: production waits for OVHcloud's stock, for which it gives no date |
 
 ## Open questions
 
@@ -1134,7 +1155,7 @@ Decisions table once it is settled.
 
 1. **Checks before ordering servers.** Measure FSN1↔Limburg RTT with
    WireGuard over a few days once the OVHcloud server is there (decision
-   118); check netcup's traffic allowance (not on its product pages);
+   119); check netcup's traffic allowance (not on its product pages);
    check Hetzner's Falkenstein stock and what "LTD" means (shown only in
    Robot). Checked 2026-11-15: OVHcloud's order page names the German
    location "Deutschland - Limburg". Its stock can be read without an
@@ -1256,6 +1277,15 @@ Decisions table once it is settled.
 21. ~~**Capacity beyond storage.**~~ Settled with decision 111: the API
     also checks memory before accepting a size, and a volume grow that
     fails anyway fires `DatabaseVolumeResizeFailed`.
+22. **Where the dashboard is served from.** It is static files (decision
+    116) and runs in development (`npm run dev -w dashboard`), but nothing
+    serves it on a cluster yet; while sign-up is closed the waitlist has
+    its paths at the platform domain (decision 86). Options: a Bucket of
+    the platform Project behind a Domain at the platform domain, deployed
+    with `oup site deploy` (our own product; the routing table then has to
+    leave `/auth/*` and `/.well-known/*` to madAuth), or an nginx container
+    with the files. Until it is served, `oup login` has no approval page
+    at madAuth's `loginUrl`.
 
 ## Build order
 
@@ -1342,7 +1372,12 @@ Decisions table once it is settled.
    deploy uploaded nothing, a new build only its changed files with the
    index last and deleted the old bundle, and the served headers matched.
    Left: the approval page
-   for `oup login` at madAuth's `loginUrl`, the production DNS zones.
+   for `oup login` at madAuth's `loginUrl`, which the dashboard has
+   (decision 116; run locally 2026-11-15 against madAuth 0.7.0 and the
+   control plane: sign-up with the code from the e-mail, the session
+   cookie accepted by the API from the dashboard's origin, an Account,
+   Projects created and deleted) but nothing serves on a cluster yet
+   (Open question 22); the production DNS zones.
 3. Containers, Service mode. Done on the dev cluster (2026-10-31): the
    NetworkPolicy `project-isolation` in every Project namespace (#89),
    gVisor on the compute nodes and the RuntimeClass `gvisor` (#90),

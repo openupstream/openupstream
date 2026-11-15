@@ -33,7 +33,7 @@ which is why it lives in the monorepo.
 - `dev-cluster-hetzner/` — a throwaway three-Site k3s cluster on Hetzner
   Cloud for one working session (ARCHITECTURE.md, decisions 33 and 52).
 
-Bootstrap order: servers ordered by hand (ARCHITECTURE.md, decision 116) →
+Bootstrap order: servers ordered by hand (ARCHITECTURE.md, decision 117) →
 node setup over SSH (host firewall, AppArmor profile, gVisor, volume group,
 k3s; the production script is not written yet, `dev-cluster-hetzner/up.sh`
 does it for the dev cluster) → `dev-cluster/install-multi-node.sh` (Helm
