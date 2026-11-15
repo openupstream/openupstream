@@ -123,7 +123,12 @@ export function usageOf(
         }
         const [, prefix, id, rest] = match as unknown as [string, string, string, string];
         const kind = KIND[prefix] as ResourceKind;
-        const role: InstanceRole = kind === 'service' ? 'replica' : kind === 'job' ? 'run' : rest.startsWith('pooler-') ? 'pooler' : 'database';
+        // CloudNativePG's own short-lived pods (`db-<id>-1-initdb-…`, `-join-…`) are not instances.
+        const role: InstanceRole | undefined =
+            kind === 'service' ? 'replica' : kind === 'job' ? 'run' : rest.startsWith('pooler-') ? 'pooler' : /^\d+$/.test(rest) ? 'database' : undefined;
+        if (role === undefined) {
+            continue;
+        }
         const cores = measurements?.cpuCores.get(pod.name);
         const instance: Instance = {
             name: rest,

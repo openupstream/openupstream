@@ -39,6 +39,8 @@ const pods = [
     pod(`job-${JOB}-9f8e7d6c-q1w2e`, 'Running', { terminating: true }),
     pod('svc-60000000-0000-4000-8000-000000000001-x-y', 'Running'),
     pod('something-else', 'Running'),
+    // CloudNativePG's setup pod of instance 1.
+    pod(`db-${DB}-1-initdb-x7k2p`, 'Succeeded'),
 ];
 const sites = new Map<string, 'hetzner-fsn1' | 'ovh-lim' | null>([
     [`db-${DB}-1`, 'hetzner-fsn1'],

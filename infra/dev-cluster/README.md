@@ -37,8 +37,10 @@ stored with k3s's local-path provisioner on the root filesystem, not
 TopoLVM: their sizes are not reserved, so one can fill the disk, the API
 accepts any size unchecked, growing a Database's storage never completes
 (local-path cannot expand a volume), and storage does not grow by itself
-(decision 111): `platform.sh` leaves the control plane without
-Prometheus there, so it records no usage either (metering, decision 114).
+(decision 111): `platform.sh` tells the control plane that the volumes
+are the node's own disk (`DATABASE_VOLUMES=shared`, decision 124), so a
+Database's disk use shown by the API is Postgres's own figure. Usage is
+shown and metered as on any cluster.
 The node carries
 the label of the compute Site `hetzner-fsn1`; a Database or Service with
 the Home site `ovh-lim` runs there as well.
@@ -182,9 +184,14 @@ the platform domain, which serves the dashboard),
 own address, so you can still create users (docs/self-hosting.md, "Sign-up
 and the waitlist").
 
-For the platform's monitoring (docs/self-hosting.md, section 10), with
-the healthchecks.io ping URL in
-`~/.config/openupstream/healthchecks-ping-url-dev`:
+`monitoring.sh` is the platform's monitoring and runs in both install
+scripts before `platform.sh`, which points the control plane at its
+Prometheus: what Resources use now (the API's `/usage`, the dashboard),
+metering and storage auto-grow all read it (decision 124). Run that way it
+sends no alerts. For alerts by e-mail and the dead man's switch
+(docs/self-hosting.md, section 10), with the healthchecks.io ping URL in
+`~/.config/openupstream/healthchecks-ping-url-dev`, set `ALERT_EMAIL` for
+the install or run it again:
 
 ```bash
 ALERT_EMAIL=you@example.com ./monitoring.sh
