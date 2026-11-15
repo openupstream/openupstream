@@ -13,11 +13,11 @@ export interface PrometheusSample {
 export type PrometheusQuery = (query: string, time?: Date) => Promise<Result<PrometheusSample[], string>>;
 
 export const prometheusClient =
-    (url: string, fetchImpl: typeof fetch = fetch): PrometheusQuery =>
+    (url: string, fetchImpl: typeof fetch = fetch, timeoutMs = 30_000): PrometheusQuery =>
     async (query, time) => {
         const params = new URLSearchParams({ query, ...(time === undefined ? {} : { time: String(time.getTime() / 1000) }) });
         const response = await fetchImpl(`${url.replace(/\/$/, '')}/api/v1/query?${params}`, {
-            signal: AbortSignal.timeout(30_000),
+            signal: AbortSignal.timeout(timeoutMs),
         }).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
         if (response instanceof Error) {
             return err(response.message);

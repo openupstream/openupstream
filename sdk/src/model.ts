@@ -657,8 +657,10 @@ export interface Measured {
 
 /**
  * A Resource's current use (ARCHITECTURE.md, decision 124): the sum over
- * its instances for CPU and memory; for a Database's storage its fullest
- * instance, since each holds the same data; for a Bucket its objects' bytes.
+ * its instances for CPU and memory (a Database's memory: its Postgres
+ * instances only, as only they have its size); for a Database's storage
+ * its fullest instance, since each holds the same data; for a Bucket its
+ * objects' bytes.
  * Not what is billed: usage events are (`UsageEvent`).
  */
 export interface ResourceUsage {

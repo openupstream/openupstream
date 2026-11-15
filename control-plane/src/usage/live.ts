@@ -151,14 +151,16 @@ export function usageOf(
     return [
         ...rows.databases.map((database): ResourceUsage => {
             const list = of('database', database.id);
-            // PgBouncers have no size of the customer's choosing: only the instances' memory is allocated.
-            const members = list.filter((instance) => instance.role === 'database' && !ended(instance)).length;
+            // PgBouncers have no size of the customer's choosing: the Database's memory is its instances',
+            // used and allocated alike. Its CPU is all its pods', as it is billed (decision 114).
+            const postgres = list.filter((instance) => instance.role === 'database');
+            const members = postgres.filter((instance) => !ended(instance)).length;
             return {
                 kind: 'database',
                 id: database.id,
                 name: database.name,
                 cpuMillicores: { used: used(list, 'cpuMillicores'), allocated: null },
-                memoryBytes: { used: used(list, 'memoryBytes'), allocated: database.memoryMb * MIB * Math.max(1, members) },
+                memoryBytes: { used: used(postgres, 'memoryBytes'), allocated: database.memoryMb * MIB * Math.max(1, members) },
                 storageBytes: { used: largest(list.map((instance) => instance.storageBytes)), allocated: database.storageGb * GIB },
                 instances: list,
             };

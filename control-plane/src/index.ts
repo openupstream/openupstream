@@ -100,6 +100,9 @@ async function runExclusively(
     }
 }
 
+/** A request for usage waits this long for Prometheus, then answers unmeasured; the passes wait longer. */
+const USAGE_PROMETHEUS_TIMEOUT_MS = 5_000;
+
 async function main(): Promise<void> {
     const config = configFrom(process.env);
     if (!config.ok) {
@@ -154,7 +157,7 @@ async function main(): Promise<void> {
         registry: registryDeps(),
         customerDomain: config.value.customerDomain,
         platformDomain: config.value.platformDomain,
-        ...(config.value.prometheusUrl === undefined ? {} : { prometheus: prometheusClient(config.value.prometheusUrl) }),
+        ...(config.value.prometheusUrl === undefined ? {} : { prometheus: prometheusClient(config.value.prometheusUrl, fetch, USAGE_PROMETHEUS_TIMEOUT_MS) }),
         databaseVolumes: config.value.databaseVolumes,
         ...(config.value.waitlist === undefined ? {} : { waitlistDomain: new URL(config.value.waitlist.url).hostname }),
         lookupTxt: txtLookup(),

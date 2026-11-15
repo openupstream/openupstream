@@ -77,7 +77,8 @@ test('each Resource with its instances, summed; a Database\'s disk is its fulles
         ],
     );
     assert.deepEqual(db?.cpuMillicores, { used: 45, allocated: null });
-    assert.deepEqual(db?.memoryBytes, { used: 290_000_000, allocated: 2 * 512 * 2 ** 20 });
+    // Without the PgBouncer's 20 MB: only the instances have the Database's size.
+    assert.deepEqual(db?.memoryBytes, { used: 270_000_000, allocated: 2 * 512 * 2 ** 20 });
     assert.deepEqual(db?.storageBytes, { used: 310_000_000, allocated: 10 * 2 ** 30 });
 
     assert.deepEqual(
