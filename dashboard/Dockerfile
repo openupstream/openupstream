@@ -15,6 +15,8 @@ COPY examples/package.json examples/
 RUN npm ci --workspace sdk --workspace dashboard
 COPY sdk sdk
 COPY dashboard dashboard
+# The /cli page is built from the CLI's README.
+COPY cli/README.md cli/README.md
 RUN npm run build --workspace sdk && npm run build --workspace dashboard
 
 # Runs as uid 101, listens on 8080 and writes only below /tmp.

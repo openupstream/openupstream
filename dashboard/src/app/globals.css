@@ -315,3 +315,26 @@ dt {
 dd {
     margin: 0;
 }
+
+nav a {
+    text-decoration: none;
+}
+
+.docs pre {
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    background: var(--raised);
+    overflow-x: auto;
+}
+
+.docs pre code {
+    overflow-wrap: normal;
+}
+
+.docs ul {
+    padding-left: 1.25rem;
+}
+
+.docs li + li {
+    margin-top: 0.75rem;
+}

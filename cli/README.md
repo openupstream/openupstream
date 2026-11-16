@@ -2,6 +2,13 @@
 
 `oup` — the openupstream command line tool. Built on `@openupstream/sdk`.
 
+The dashboard shows what is between the two `docs` comments below as its
+`/cli` page (`dashboard/src/lib/docs.ts`): paragraphs, one level of list
+items, code blocks and inline code only; a test of the dashboard fails on
+anything else.
+
+<!-- docs:start -->
+
 ```sh
 npm i -g @openupstream/cli
 oup login
@@ -120,6 +127,8 @@ oup site deploy dist --bucket my-site
 
 In CI, set `OUP_API_KEY` to a madAuth API key instead of signing in, and
 `OUP_API_URL` for another API than `https://console.openupstream.com/api`.
+
+<!-- docs:end -->
 
 `src/oidc.ts` is the device grant and refresh, `src/session.ts` the token
 for each call, `src/deploy.ts` the site deploy (`planDeploy` is pure),

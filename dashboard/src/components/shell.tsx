@@ -2,19 +2,18 @@
 
 import type { MadauthUser } from '@madauth/web';
 import type { ReactNode } from 'react';
-import { manageApiKeys, signIn, signOut, useUser } from '../lib/session';
+import { type User, manageApiKeys, signIn, signOut, useUser } from '../lib/session';
 
-/** The header and the sign-in: `children` is what a signed-in Member sees. */
-export function Shell({ children }: { readonly children: (user: MadauthUser) => ReactNode }) {
-    const { user, problem } = useUser();
+function Header({ user }: { readonly user: User }) {
     return (
-        <>
-            <header>
-                <a className="brand" href="/">
-                    openupstream
-                </a>
+        <header>
+            <a className="brand" href="/">
+                openupstream
+            </a>
+            <nav>
+                <a href="/cli">CLI</a>
                 {user != null && (
-                    <nav>
+                    <>
                         <span>{user.email ?? user.name ?? user.id}</span>
                         <button type="button" className="link" onClick={() => void manageApiKeys()}>
                             API keys
@@ -22,9 +21,19 @@ export function Shell({ children }: { readonly children: (user: MadauthUser) => 
                         <button type="button" className="link" onClick={() => void signOut()}>
                             Sign out
                         </button>
-                    </nav>
+                    </>
                 )}
-            </header>
+            </nav>
+        </header>
+    );
+}
+
+/** The header and the sign-in: `children` is what a signed-in Member sees. */
+export function Shell({ children }: { readonly children: (user: MadauthUser) => ReactNode }) {
+    const { user, problem } = useUser();
+    return (
+        <>
+            <Header user={user} />
             <main>
                 {problem !== undefined ? (
                     <p role="alert">{problem}</p>
@@ -42,6 +51,17 @@ export function Shell({ children }: { readonly children: (user: MadauthUser) => 
                     children(user)
                 )}
             </main>
+        </>
+    );
+}
+
+/** The header around a page anyone may read, signed in or not. */
+export function OpenShell({ children }: { readonly children: ReactNode }) {
+    const { user } = useUser();
+    return (
+        <>
+            <Header user={user} />
+            <main>{children}</main>
         </>
     );
 }
