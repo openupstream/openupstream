@@ -20,7 +20,7 @@ What it does now:
     port or none for a worker, replicas, memory, CPU, Site), change,
     redeploy what the tag points at now, delete. Public images only: a
     private registry's password is given to `oup service deploy`, never
-    typed into the page (decision 126).
+    typed into the page (decision 127).
   - what every Resource uses now, from the API's `/usage` (decision 124):
     CPU, memory and storage against what it was given, and its instances
     with their Site, state and restarts. Jobs and Buckets are shown this
