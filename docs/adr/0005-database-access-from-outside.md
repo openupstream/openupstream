@@ -63,13 +63,27 @@ Four ways were considered:
    the WebSocket opens.
 5. **Poolers only.** The tunnel reaches a Database the way a Service does,
    through PgBouncer in transaction mode.
-6. **A Postgres role per Member per Database**, not the `app` password.
-   The first `oup pg proxy` of a Member for a Database records the role in
-   the control plane; the Databases operator adds it to the Cluster with a
-   generated password, and `oup` prints the connection URL. The role acts
-   as `app`, so what it creates belongs to `app`. It is dropped with the
-   Database and when the Member leaves the Account. Decision 61 stands:
-   the `app` password is still never returned.
+6. **Postgres roles per Member, Database and access level**, not the
+   `app` password. `oup pg proxy --access read|write|owner` picks the
+   level, `read` when nothing is given:
+   - `read` may read every table (Postgres's `pg_read_all_data`);
+   - `write` may also insert, update and delete rows
+     (`pg_write_all_data`), but not change the schema;
+   - `owner` acts as `app`, so it may do everything `app` may and what it
+     creates belongs to `app`. Migrations need it.
+
+   A Member has at most three roles per Database, one per level. The
+   first `oup pg proxy` of a Member for a Database at a level records the
+   role in the control plane; the Databases operator adds it to the
+   Cluster with a generated password, and `oup` prints the connection
+   URL. A role is dropped with the Database and when the Member leaves
+   the Account. Decision 61 stands: the `app` password is still never
+   returned.
+7. **Every Member picks their own level.** Nothing stops a Member from
+   asking for `owner`: the levels guard against mistakes, such as a
+   stray `DELETE` while looking at production, not against a colleague.
+   Limiting what a given Member may pick needs Member roles (Open
+   question 9), which are not part of this decision.
 
 ## Consequences
 
@@ -88,8 +102,12 @@ Four ways were considered:
   traffic.
 - The forwarder pod uses memory in every Project that has used the tunnel.
   Who pays for it, and whether a Hold removes it, is open.
-- PgBouncer keeps a pool per role, so every Member role can hold server
-  connections of its own, at a 256 MB floor.
+- PgBouncer keeps a pool per role, so every role can hold server
+  connections of its own, at a 256 MB floor: up to three per Member per
+  Database.
+- Roles have no names and cannot be listed or revoked one by one. Named
+  credentials, which could also serve a public endpoint or CI, would be
+  a later step.
 - An open tunnel outlives what authorized it: a token that expires or a
   Member who is removed keeps the connection until the WebSocket closes.
   Dropping the Member's role ends its use of the Database; a longest
@@ -105,7 +123,9 @@ Four ways were considered:
 To settle before this is accepted, on a dev cluster where it can be tried:
 
 - PgBouncer accepts a role added to the Cluster after it was created, and
-  the role can be made to act as `app` in transaction mode.
+  an `owner` role can be made to act as `app` in transaction mode. A
+  `read` role cannot write and a `write` role cannot change the schema,
+  also for tables created after the role.
 - Which hostname the tunnel's route lives on: the API's or one per
   Project. Traefik does not route across namespaces.
 - Traefik keeps a WebSocket open for hours, and whether its bytes are
