@@ -4,41 +4,48 @@ import {
     type ApiResult,
     COMPUTE_SITES,
     type DatabaseDetails,
-    type Instance,
-    type Measured,
     type OpenUpstreamClient,
     type Project,
     type ProjectUsage,
     type ResourceKind,
     type ResourceUsage,
+    type ServiceDetails,
     type Site,
 } from '@openupstream/sdk';
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { api, refused } from '../lib/session';
-import { databaseNameProblem, databaseSizes, databaseUrlVariable, formatBytes, formatCpu, formatMeasured, resizeOf, usedShare } from '../lib/usage';
+import { databaseNameProblem, databaseSizes, databaseUrlVariable, resizeOf } from '../lib/usage';
+import { ServiceCard, ServiceForm } from './services';
+import { Usage } from './usage';
 
-/** The Project, its Databases, and what its Resources use now; `usage` undefined when the API could not say. */
-type Loaded = { readonly project: Project; readonly databases: readonly DatabaseDetails[]; readonly usage: ProjectUsage | undefined };
+/** The Project, its Databases and Services, and what its Resources use now; `usage` undefined when the API could not say. */
+type Loaded = {
+    readonly project: Project;
+    readonly databases: readonly DatabaseDetails[];
+    readonly services: readonly ServiceDetails[];
+    readonly usage: ProjectUsage | undefined;
+};
 
 /** How often the page asks again while it is in front. */
 const REFRESH_MS = 10_000;
 
 const load = async (client: OpenUpstreamClient, id: string): Promise<ApiResult<Loaded>> => {
-    const [project, databases, usage] = await Promise.all([client.getProject(id), client.listDatabases(id), client.getUsage(id)]);
+    const [project, databases, services, usage] = await Promise.all([client.getProject(id), client.listDatabases(id), client.listServices(id), client.getUsage(id)]);
     return !project.ok
         ? project
         : !databases.ok
           ? databases
-          : { ok: true, value: { project: project.value, databases: databases.value, usage: usage.ok ? usage.value : undefined } };
+          : !services.ok
+            ? services
+            : { ok: true, value: { project: project.value, databases: databases.value, services: services.value, usage: usage.ok ? usage.value : undefined } };
 };
 
 const OTHER_KINDS: readonly { readonly kind: ResourceKind; readonly title: string; readonly command: string }[] = [
-    { kind: 'service', title: 'Services', command: 'oup service deploy' },
     { kind: 'job', title: 'Jobs', command: 'oup job deploy' },
     { kind: 'bucket', title: 'Buckets', command: 'the API' },
 ];
 
-/** One Project: its Databases, to create, resize and delete, and what every Resource uses now with its instances. */
+/** One Project: its Databases and Services, to create, change and delete, and what every Resource uses now with its instances. */
 export function ProjectPage({ id }: { readonly id: string }) {
     const [loaded, setLoaded] = useState<Loaded | undefined>(undefined);
     const [problem, setProblem] = useState<string | undefined>(undefined);
@@ -86,7 +93,7 @@ export function ProjectPage({ id }: { readonly id: string }) {
             </p>
         );
     }
-    const { project, databases, usage } = loaded;
+    const { project, databases, services, usage } = loaded;
     const usageOf = (kind: ResourceKind, resourceId: string): ResourceUsage | undefined =>
         usage?.resources.find((resource) => resource.kind === kind && resource.id === resourceId);
     return (
@@ -120,6 +127,27 @@ export function ProjectPage({ id }: { readonly id: string }) {
                     </ul>
                 )}
                 <DatabaseForm existing={databases} onCreate={(input) => change((client) => client.createDatabase(project.id, input))} />
+            </section>
+
+            <section>
+                <h2>Services</h2>
+                {services.length === 0 ? (
+                    <p>No Services yet. A Service is a container that is always on: an HTTP server, or a worker without a port.</p>
+                ) : (
+                    <ul className="resources">
+                        {services.map((service) => (
+                            <ServiceCard
+                                key={service.id}
+                                service={service}
+                                usage={usageOf('service', service.id)}
+                                onChange={(patch) => change((client) => client.updateService(project.id, service.id, patch))}
+                                onRedeploy={() => change((client) => client.deployService(project.id, service.id))}
+                                onDelete={() => change((client) => client.deleteService(project.id, service.id))}
+                            />
+                        ))}
+                    </ul>
+                )}
+                <ServiceForm existing={services} onCreate={(input) => change((client) => client.createService(project.id, input))} />
             </section>
 
             {OTHER_KINDS.map(({ kind, title, command }) => {
@@ -243,76 +271,6 @@ function DatabaseCard(props: {
                 </small>
             </details>
         </li>
-    );
-}
-
-/** A Resource's CPU, memory and storage against what it was given, then its instances. */
-function Usage({ usage }: { readonly usage: ResourceUsage }) {
-    return (
-        <>
-            <div className="meters">
-                <Meter label="CPU" measured={usage.cpuMillicores} format={formatCpu} />
-                <Meter label="Memory" measured={usage.memoryBytes} format={formatBytes} />
-                <Meter label="Storage" measured={usage.storageBytes} format={formatBytes} />
-            </div>
-            {usage.instances.length > 0 && (
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Instance</th>
-                            <th>Site</th>
-                            <th>State</th>
-                            <th>CPU</th>
-                            <th>Memory</th>
-                            <th>Disk</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {usage.instances.map((instance) => (
-                            <InstanceRow key={instance.name} instance={instance} />
-                        ))}
-                    </tbody>
-                </table>
-            )}
-        </>
-    );
-}
-
-const ROLE: Readonly<Record<Instance['role'], string>> = { database: 'Postgres', pooler: 'PgBouncer', replica: 'replica', run: 'run' };
-
-function InstanceRow({ instance }: { readonly instance: Instance }) {
-    const value = (measured: number | null, format: (value: number) => string) => (measured === null ? '–' : format(measured));
-    return (
-        <tr>
-            <td>
-                {ROLE[instance.role]} <code>{instance.name}</code>
-            </td>
-            <td>{instance.site ?? '–'}</td>
-            <td>
-                <span className={`state ${instance.state}`}>{instance.state}</span>
-                {instance.restarts > 0 && <small> {instance.restarts} restarts</small>}
-            </td>
-            <td>{value(instance.cpuMillicores, formatCpu)}</td>
-            <td>{value(instance.memoryBytes, formatBytes)}</td>
-            <td>{value(instance.storageBytes, formatBytes)}</td>
-        </tr>
-    );
-}
-
-/** One figure with a bar when both what is used and what was given are known; nothing when neither is. */
-function Meter(props: { readonly label: string; readonly measured: Measured; readonly format: (value: number) => string }) {
-    const text = formatMeasured(props.measured, props.format);
-    const share = usedShare(props.measured);
-    return text === undefined ? null : (
-        <div className="meter">
-            <small>{props.label}</small>
-            <span>{text}</span>
-            {share !== undefined && (
-                <div className="bar" role="meter" aria-label={props.label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(share * 100)}>
-                    <div className={share >= 0.9 ? 'full' : undefined} style={{ width: `${Math.max(1, share * 100)}%` }} />
-                </div>
-            )}
-        </div>
     );
 }
 
