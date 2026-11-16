@@ -156,3 +156,162 @@ small {
 .projects span {
     display: grid;
 }
+
+a {
+    color: var(--accent);
+}
+
+.brand {
+    font-weight: 700;
+    color: var(--text);
+    text-decoration: none;
+}
+
+.projects a {
+    text-decoration: none;
+}
+
+h3 {
+    font-size: 0.875rem;
+    margin: 1.5rem 0 0;
+}
+
+select {
+    font: inherit;
+    padding: 0.5rem 0.625rem;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--text);
+    background: var(--surface);
+}
+
+code {
+    font-size: 0.875em;
+    overflow-wrap: anywhere;
+}
+
+.resources {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.75rem;
+}
+
+.resources > li {
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+}
+
+.resource-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+}
+
+.actions {
+    display: flex;
+    gap: 1rem;
+}
+
+.state {
+    padding: 0.0625rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    color: var(--muted);
+    background: var(--raised);
+}
+
+.state.ready,
+.state.running,
+.state.succeeded {
+    color: light-dark(#0b6b3a, #7ddba3);
+}
+
+.state.degraded,
+.state.failed,
+.state.restarting {
+    color: var(--danger);
+}
+
+.meters {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 0.75rem 1.5rem;
+    margin-top: 0.75rem;
+}
+
+.meter {
+    display: grid;
+    gap: 0.125rem;
+}
+
+.bar {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--raised);
+    overflow: hidden;
+}
+
+.bar div {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--accent);
+}
+
+.bar div.full {
+    background: var(--danger);
+}
+
+table {
+    width: 100%;
+    margin-top: 0.75rem;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+
+th {
+    text-align: left;
+    font-weight: 400;
+    color: var(--muted);
+}
+
+th,
+td {
+    padding: 0.25rem 0.75rem 0.25rem 0;
+    border-top: 1px solid var(--line);
+    vertical-align: baseline;
+}
+
+.resources > li {
+    overflow-x: auto;
+}
+
+details {
+    margin-top: 0.75rem;
+}
+
+summary {
+    cursor: pointer;
+    color: var(--accent);
+    font-size: 0.875rem;
+}
+
+dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.25rem 1rem;
+    margin: 0.5rem 0;
+    font-size: 0.875rem;
+}
+
+dt {
+    color: var(--muted);
+}
+
+dd {
+    margin: 0;
+}

@@ -1,7 +1,7 @@
 'use client';
 
 import type { MadauthUser } from '@madauth/web';
-import { OpenUpstreamClient } from '@openupstream/sdk';
+import { type ApiError, OpenUpstreamClient } from '@openupstream/sdk';
 import { useEffect, useState } from 'react';
 
 /** madAuth's client. It defines web components, so it only loads in the browser. */
@@ -82,3 +82,15 @@ export async function api(): Promise<OpenUpstreamClient> {
     await Madauth.sessionReady();
     return new OpenUpstreamClient({ baseUrl: API_PATH, session: 'cookie' });
 }
+
+/**
+ * What to show for a refusal of the API. A 401 also has madAuth look at the
+ * session, which signs the page out when it is gone.
+ */
+export const refused = (error: ApiError): string => {
+    if (error.status === 401) {
+        void sessionEnded();
+        return 'Your session has ended. Sign in again.';
+    }
+    return error.status === 0 ? `The API could not be reached: ${error.message}` : error.message;
+};
