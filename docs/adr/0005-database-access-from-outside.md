@@ -40,7 +40,9 @@ Four ways were considered:
 ## Decision
 
 1. **`oup pg proxy <database>` opens the connection.** While it runs, it
-   listens on a local port (5432 by default) and carries every connection
+   listens on a local port (5432 by default, `--port` for another; it
+   stops with a message if the port is taken, as it is on a machine with
+   a Postgres of its own) and carries every connection
    to the Database. The Member points any Postgres client at `localhost`.
    Nothing is installed besides `oup`, and nothing changes in the machine's
    network settings.
@@ -55,8 +57,10 @@ Four ways were considered:
    egress policy of its own limits it to the Project's Poolers and DNS.
 4. **Traefik asks the control plane before it forwards.** A ForwardAuth
    middleware on the tunnel's route calls the control plane, which checks
-   that the token belongs to a Member of the Project's Account. A request
-   that fails the check never reaches the Project's namespace.
+   that the token belongs to a Member of the Project's Account (a caller
+   with an API key: see "To verify"). A request that fails the check
+   never reaches the Project's namespace. The check happens once, when
+   the WebSocket opens.
 5. **Poolers only.** The tunnel reaches a Database the way a Service does,
    through PgBouncer in transaction mode.
 6. **A Postgres role per Member per Database**, not the `app` password.
@@ -86,6 +90,10 @@ Four ways were considered:
   Who pays for it, and whether a Hold removes it, is open.
 - PgBouncer keeps a pool per role, so every Member role can hold server
   connections of its own, at a 256 MB floor.
+- An open tunnel outlives what authorized it: a token that expires or a
+  Member who is removed keeps the connection until the WebSocket closes.
+  Dropping the Member's role ends its use of the Database; a longest
+  lifetime for a tunnel is open.
 - A tunnel is down while the forwarder restarts or moves to the other
   Site, up to about a minute in a Site failure.
 - New Kubernetes objects per Project (a Deployment, a Service, an
@@ -94,7 +102,7 @@ Four ways were considered:
 
 ## To verify
 
-On a dev cluster, before this is accepted:
+To settle before this is accepted, on a dev cluster where it can be tried:
 
 - PgBouncer accepts a role added to the Cluster after it was created, and
   the role can be made to act as `app` in transaction mode.
@@ -103,5 +111,9 @@ On a dev cluster, before this is accepted:
 - Traefik keeps a WebSocket open for hours, and whether its bytes are
   counted as Egress like HTTP responses (decision 16).
 - The forwarder runs under the `gvisor` RuntimeClass.
+- How `oup` gets the role's password on a later run. Returning it every
+  time means the control plane keeps it readable; setting a new one per
+  run breaks a second `oup pg proxy` that is still open; keeping it in
+  `oup`'s credentials file ties it to one machine.
 - What a caller with an API key instead of a Member's sign-in gets (a CI
   run with `OUP_API_KEY`): a role per key, or no tunnel.
