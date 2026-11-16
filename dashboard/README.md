@@ -21,6 +21,14 @@ What it does now:
     with their Site, state and restarts. Services, Jobs and Buckets are
     shown this way and still created with `oup` or the API.
 
+- `/cli`: how to use `oup`, for anyone, signed in or not (decision 125).
+  The text is the part of `cli/README.md` between its `docs` comments, read
+  when the dashboard is built (`src/app/cli/page.tsx`) and shown by
+  `src/lib/docs.ts`, which knows paragraphs, list items, code blocks and
+  inline code and leaves out pointers to decisions. On an installation
+  other than the hosted service the page names its own API address, in a
+  note and in the example's `oup login --api …`.
+
 Forms for Buckets, Domains, Services, Jobs and Secrets follow.
 
 ## How it reaches madAuth and the API

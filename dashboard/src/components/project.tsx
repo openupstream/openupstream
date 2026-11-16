@@ -129,7 +129,17 @@ export function ProjectPage({ id }: { readonly id: string }) {
                         <h2>{title}</h2>
                         {resources.length === 0 ? (
                             <p>
-                                <small>None. They are created with {command === 'the API' ? command : <code>{command}</code>} for now.</small>
+                                <small>
+                                    None. They are created with{' '}
+                                    {command === 'the API' ? (
+                                        command
+                                    ) : (
+                                        <a href="/cli">
+                                            <code>{command}</code>
+                                        </a>
+                                    )}{' '}
+                                    for now.
+                                </small>
                             </p>
                         ) : (
                             <ul className="resources">
