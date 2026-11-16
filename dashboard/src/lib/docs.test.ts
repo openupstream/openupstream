@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { apiOf, docsProblems, docsSection, parseDocs, withApi } from './docs';
+import { apiOf, docsProblems, docsSection, nodeVersion, parseDocs, withApi } from './docs';
 
 const readme = readFileSync(new URL('../../../cli/README.md', import.meta.url), 'utf8');
 
@@ -40,6 +40,12 @@ test('what the page cannot show is named', () => {
     assert.deepEqual(docsProblems('a `b` c\n\n```sh\n# a comment, **not bold**\n```'), []);
     assert.deepEqual(docsProblems('## More\nsee [here](x), **now**\n- a\n  - b\n1. one\n`open'), ['a heading', 'a link', 'bold text', 'a list inside a list', 'a numbered list', 'an unclosed `']);
     assert.deepEqual(docsProblems('```sh\noup login'), ['an unclosed code block']);
+    assert.deepEqual(docsProblems('`a_b * c` is fine\n\n> *not* this\n\n| a | b |'), ['emphasis', 'a quote', 'a table']);
+});
+
+test('the Node.js range in words', () => {
+    assert.equal(nodeVersion('>=24'), '24 or newer');
+    assert.equal(nodeVersion('^22.12 || >=24'), '^22.12 || >=24');
 });
 
 test("another installation's address goes into the example's oup login", () => {

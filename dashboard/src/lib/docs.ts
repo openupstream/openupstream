@@ -44,7 +44,11 @@ export const docsProblems = (text: string): string[] => {
         return ['an unclosed code block'];
     }
     const outside = text.replace(/```[\s\S]*?```/g, '');
+    const plain = outside.replace(/`[^`]*`/g, '');
     return [
+        ...(/[*_]/.test(plain.replace(/\*\*|__/g, '')) ? ['emphasis'] : []),
+        ...(/^[ \t]*>/m.test(plain) ? ['a quote'] : []),
+        ...(/^[ \t]*\|/m.test(plain) ? ['a table'] : []),
         ...(/^#/m.test(outside) ? ['a heading'] : []),
         ...(/\]\(/.test(outside) ? ['a link'] : []),
         ...(/\*\*|__/.test(outside) ? ['bold text'] : []),
@@ -120,3 +124,9 @@ export const withApi = (blocks: readonly Block[], api: string, defaultApi: strin
                     }
                   : block,
           );
+
+/** `>=24` as "24 or newer"; any other range as it is written. */
+export const nodeVersion = (range: string): string => {
+    const least = /^>=\s*(\d+(?:\.\d+)*)$/.exec(range.trim());
+    return least === null ? range : `${least[1]} or newer`;
+};

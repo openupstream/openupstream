@@ -13,7 +13,7 @@ const Text = ({ parts }: { readonly parts: readonly Inline[] }) => parts.map((pa
  * in to by default is named by its own address, which only the browser
  * knows: the built page has none yet.
  */
-export function CliPage({ blocks }: { readonly blocks: readonly Block[] }) {
+export function CliPage({ blocks, node }: { readonly blocks: readonly Block[]; readonly node: string }) {
     const [api, setApi] = useState(DEFAULT_API_URL);
     useEffect(() => setApi(apiOf(window.location.origin)), []);
     return (
@@ -27,7 +27,7 @@ export function CliPage({ blocks }: { readonly blocks: readonly Block[] }) {
                     <a href="https://nodejs.org/" rel="noreferrer">
                         Node.js
                     </a>{' '}
-                    24 or newer.
+                    {node}.
                 </p>
                 {api !== DEFAULT_API_URL && (
                     <p className="notice">
