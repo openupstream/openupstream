@@ -737,6 +737,10 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         const access = input.data.access ?? 'read';
         const role = await roleFor(pool, deps.kek, database, { subject: identity.subject, apiKeyId: identity.apiKeyId }, access);
+        if (!role.ok && role.error.kind === 'project-not-found') {
+            // The Database went, or the caller was removed from the Account, while the request ran.
+            return c.json(notFound, 404);
+        }
         if (!role.ok) {
             deps.log?.({ msg: 'cannot open a database role', database: database.id, error: role.error.kind });
             return c.json({ error: 'cannot open the role now' }, 500);

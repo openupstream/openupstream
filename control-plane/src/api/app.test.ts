@@ -24,6 +24,8 @@ import {
 } from '@openupstream/sdk';
 import { getAccountRecord, liftHold, placeHold } from '../accounts/store.js';
 import { listDatabaseRows } from '../databases/rows.js';
+import { roleFor } from '../databases/roles.js';
+import { syncProjectSecrets } from '../secrets/render.js';
 import { ensureDefaultDomains } from '../domains/store.js';
 import { listDomainRoutings } from '../routes/store.js';
 import { type ClusterStatus, type ControlPlaneKube, type CronJobStatus, type DeploymentStatus, type KubeJob, type PodInfo, type RecoveryWindow, type SecretManifest } from '../kube.js';
@@ -537,6 +539,13 @@ describe('Members and their roles', () => {
         assert.equal(roles.filter((role) => role.dropped !== true).length, 1, "olga's role stays");
         assert.equal(removedObjects.filter((object) => object.kind === 'Secret' && object.namespace === `project-${projectId}`).length, 2);
         assert.equal((await withKey('madauth_nobody_write_k9', 'POST', proxyPath, { access: 'read' })).status, 404);
+        // A request that passed its Account check before the removal creates no role afterwards.
+        const late = await roleFor(db.pool, domainDeps.kek, database, { subject: 'nobody' }, 'owner');
+        assert.deepEqual(late.ok ? 'created' : late.error.kind, 'project-not-found');
+        // The secrets pass deletes the dropped roles' Secrets again, in case the first delete failed.
+        removedObjects.length = 0;
+        assert.ok((await syncProjectSecrets({ pool: db.pool, kube, kek: domainDeps.kek }, projectId)).ok);
+        assert.equal(removedObjects.filter((object) => object.kind === 'Secret' && object.name.startsWith('pg-role-')).length, 2);
 
         await db.pool.query(`insert into members (account_id, auth_subject, email, role) values ($1, 'nobody', 'nobody@olga.test', 'developer')`, [accountId]);
         const after = await call('POST', proxyPath, 'nobody', { access: 'write' });

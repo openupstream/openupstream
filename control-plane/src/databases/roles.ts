@@ -19,6 +19,8 @@ import {
     projectNamespace,
 } from '@openupstream/sdk';
 import type pg from 'pg';
+import { lockCaller } from '../accounts/members.js';
+import { inTransaction } from '../db/transaction.js';
 import type { SecretManifest } from '../kube.js';
 import { type Result, err, ok } from '../result.js';
 import type { KeyEncryptionKey } from '../secrets/envelope.js';
@@ -110,14 +112,31 @@ async function insertRole(
     if (!sealed.ok) {
         return sealed;
     }
-    const { rows } = await pool.query<RoleRow>(
-        `insert into database_roles (id, database_id, auth_subject, api_key_id, access, password)
-         select $1, $2, $3, $4, $5, $6 where exists (select 1 from databases where id = $2 and deleted_at is null)
-         on conflict do nothing
-         returning id, access, password`,
-        [id, database.id, caller.subject, caller.apiKeyId ?? null, access, sealed.value],
+    // Under the caller's lock, and only while they are still a Member with a role: a removal that
+    // runs meanwhile either sees this row and marks it, or has removed them and nothing is inserted.
+    const inserted = await inTransaction(
+        pool,
+        async (client) => {
+            await client.query(
+                `select ${lockCaller('p.account_id', '$1')} from databases d join projects p on p.id = d.project_id where d.id = $2`,
+                [caller.subject, database.id],
+            );
+            return client.query<RoleRow>(
+                `insert into database_roles (id, database_id, auth_subject, api_key_id, access, password)
+                 select $1, $2, $3, $4, $5, $6
+                 where exists (
+                     select 1 from databases d join projects p on p.id = d.project_id
+                     join members m on m.account_id = p.account_id and m.auth_subject = $3 and m.role is not null
+                     where d.id = $2 and d.deleted_at is null
+                 )
+                 on conflict do nothing
+                 returning id, access, password`,
+                [id, database.id, caller.subject, caller.apiKeyId ?? null, access, sealed.value],
+            );
+        },
+        () => true,
     );
-    return ok(rows[0]);
+    return ok(inserted.rows[0]);
 }
 
 /** Every role of the Project's live Databases that is not dropped, opened, for the Secrets CloudNativePG reads. */
@@ -138,6 +157,19 @@ export async function projectRoles(pool: pg.Pool, kek: KeyEncryptionKey, project
         roles.push({ id: row.id, databaseId: row.database_id, access: row.access, name: databaseRoleName(row), password: password.value });
     }
     return ok(roles);
+}
+
+/** How long the secrets pass keeps deleting a dropped role's Secret, in case the delete at its removal failed or a pass wrote it back. */
+export const DROPPED_SECRET_RETRY = '1 hour';
+
+/** The roles of the Project's Databases dropped within DROPPED_SECRET_RETRY, whose Secrets go. */
+export async function recentlyDroppedRoles(pool: pg.Pool, projectId: Id): Promise<readonly { readonly id: Id }[]> {
+    const { rows } = await pool.query<{ id: string }>(
+        `select r.id from database_roles r join databases d on d.id = r.database_id
+         where d.project_id = $1 and r.dropped_at > now() - $2::interval`,
+        [projectId, DROPPED_SECRET_RETRY],
+    );
+    return rows;
 }
 
 /**

@@ -11,6 +11,7 @@
 import type { Id, Member, MemberRole } from '@openupstream/sdk';
 import type pg from 'pg';
 import { LAST_OWNER, unlessCodes } from '../db/errors.js';
+import { inTransaction } from '../db/transaction.js';
 import { type Result, err, ok } from '../result.js';
 
 interface MemberRow {
@@ -76,13 +77,44 @@ export interface DroppedRole {
 }
 
 /**
+ * The SQL that locks a user's place in an Account for the rest of the
+ * transaction, from SQL expressions for the Account's id and the madAuth
+ * subject: taken by a removal and by the creation of a Postgres role
+ * (databases/roles.ts), so a role is never created for a Member whose
+ * removal is under way and left unmarked.
+ */
+export const lockCaller = (accountId: string, subject: string): string =>
+    `pg_advisory_xact_lock(hashtextextended('member:' || ${accountId}::text || '/' || ${subject}::text, 0))`;
+
+/**
  * Removes the Member and marks their Postgres roles, and those of their API
  * keys, in every Database of the Account, in one statement: when the schema
- * refuses the delete (the last owner), no role is marked either.
+ * refuses the delete (the last owner), no role is marked either. The lock
+ * comes first, in a statement of its own, so the removal sees every role
+ * created before it.
  */
 export async function removeMember(pool: pg.Pool, accountId: Id, memberId: Id): Promise<Result<readonly DroppedRole[], MemberError>> {
+    return inTransaction(
+        pool,
+        async (client) => {
+            const { rows } = await client.query<{ auth_subject: string }>('select auth_subject from members where account_id = $1 and id = $2', [
+                accountId,
+                memberId,
+            ]);
+            const subject = rows[0]?.auth_subject;
+            if (subject === undefined) {
+                return err({ kind: 'not-found' } as const);
+            }
+            await client.query(`select ${lockCaller('$1', '$2')}`, [accountId, subject]);
+            return removeLocked(client, accountId, memberId);
+        },
+        (result) => result.ok,
+    );
+}
+
+async function removeLocked(client: pg.PoolClient, accountId: Id, memberId: Id): Promise<Result<readonly DroppedRole[], MemberError>> {
     const removed = await unlessCodes(
-        pool.query<{ removed: boolean; dropped: DroppedRole[] }>(
+        client.query<{ removed: boolean; dropped: DroppedRole[] }>(
             `with member as (
                  delete from members where account_id = $1 and id = $2 returning auth_subject
              ),
