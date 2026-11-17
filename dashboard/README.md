@@ -29,6 +29,8 @@ What it does now:
     arguments and variables are given to `oup` (decision 129).
   - Secrets: names with the time their value was set, delete. A value is
     set with `oup secret set`, never typed into the page (decision 129).
+  - Logs of a Service and of a run: a live tail (decision 130), open only
+    while its "Logs" is and the tab is looked at; the newest 2000 lines.
   - Buckets: list with the S3 endpoint and the addresses Routes serve them
     at, create, delete. A Bucket's key is not shown and never fetched
     (decision 128): it comes from the API, and `oup site deploy` gets it
@@ -49,8 +51,6 @@ What it does now:
   inline code and leaves out pointers to decisions. On an installation
   other than the hosted service the page names its own API address, in a
   note and in the example's `oup login --api …`.
-
-A Service's and a run's logs follow.
 
 ## How it reaches madAuth and the API
 

@@ -2,7 +2,7 @@ import { after, before, describe, mock, test } from 'node:test';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import assert from 'node:assert/strict';
-import { OpenUpstreamClient, errorMessage, txtRecordName } from './index.js';
+import { OpenUpstreamClient, errorMessage, ndjsonLines, txtRecordName } from './index.js';
 
 test('client defaults to the production API', () => {
     const client = new OpenUpstreamClient({ token: 'x' });
@@ -131,3 +131,34 @@ test("an error names each field the API's issues name", () => {
     assert.equal(errorMessage(undefined, 'Bad Gateway'), 'Bad Gateway');
 });
 
+
+test('NDJSON is read line by line across chunks, and stopping early cancels the body', async () => {
+    const encoder = new TextEncoder();
+    const chunks = ['{"line":"a"}\n{"li', 'ne":"b"}\n\n{"line":"c"}'];
+    const bodyOf = (onCancel: () => void = () => undefined) =>
+        new ReadableStream<Uint8Array>({
+            pull(controller) {
+                const next = chunks[sent++];
+                if (next === undefined) {
+                    controller.close();
+                } else {
+                    controller.enqueue(encoder.encode(next));
+                }
+            },
+            cancel: onCancel,
+        });
+    let sent = 0;
+    const lines: string[] = [];
+    for await (const entry of ndjsonLines<{ line: string }>(bodyOf())) {
+        lines.push(entry.line);
+    }
+    assert.deepEqual(lines, ['a', 'b', 'c']);
+
+    sent = 0;
+    let cancelled = false;
+    for await (const entry of ndjsonLines<{ line: string }>(bodyOf(() => (cancelled = true)))) {
+        assert.equal(entry.line, 'a');
+        break;
+    }
+    assert.equal(cancelled, true);
+});

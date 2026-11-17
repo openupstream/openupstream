@@ -3,6 +3,7 @@
 import { COMPUTE_SITES, type ResourceUsage, type ServiceDetails, type ServiceInput, type ServicePatch } from '@openupstream/sdk';
 import { type FormEvent, type ReactNode, useState } from 'react';
 import { NEW_SERVICE, type ServiceFields, type ServiceWanted, fieldsOf, serviceInput, serviceNameProblem, servicePatch, serviceWanted, shortDigest } from '../lib/services';
+import { Logs } from './logs';
 import { Usage } from './usage';
 
 /** A Service: what runs, its state and usage, and the ways to change it. */
@@ -77,6 +78,7 @@ export function ServiceCard(props: {
                 />
             )}
             {usage !== undefined && <Usage usage={usage} />}
+            <Logs source={(client, query, signal) => client.serviceLogs(service.projectId, service.id, query, signal)} />
         </li>
     );
 }
