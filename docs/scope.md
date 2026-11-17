@@ -54,6 +54,13 @@ tell them when it opens. Whoever runs openupstream themselves has open
 sign-up by default and can close it the same way. The hosted service
 itself, with its dashboard, is at `console.openupstream.com`.
 
+An Account's owners invite people by e-mail, as owners, as developers
+(every Project, but not the Account itself), or with access to single
+Databases only, such as read-only for an analyst. Account tokens give CI
+and tools outside the platform the developer role or such access without
+belonging to a person. Designed, not built yet; invited people may sign up
+while sign-up is closed.
+
 ## Deliberately not offered
 
 - **Queues.** Use `SELECT … FOR UPDATE SKIP LOCKED` on your Postgres; pg-boss
