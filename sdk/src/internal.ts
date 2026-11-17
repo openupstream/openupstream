@@ -48,6 +48,8 @@ export const databaseRoleSecret = (role: { readonly id: Id }): string => `pg-rol
 export interface DatabaseRoleRow {
     readonly id: Id;
     readonly access: DatabaseAccess;
+    /** Taken from its caller (decision 142): the Cluster drops it (`ensure: absent`). */
+    readonly dropped?: true;
 }
 
 /** The Secret CloudNativePG keeps the Database's `app` user in, with its generated `password`. */
@@ -179,7 +181,7 @@ export interface DomainRouting {
 }
 
 export interface AccountRecord extends Account {
-    readonly members: readonly Pick<Member, 'authSubject' | 'email'>[];
+    readonly members: readonly Pick<Member, 'authSubject' | 'email' | 'role'>[];
 }
 
 /** One Service as the Services operator needs it. */

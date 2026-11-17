@@ -6,6 +6,7 @@
  *   oup logout
  *   oup project list | create <name> [--account <name|id>] [--link]
  *   oup link <project>                       this directory's Project (.openupstream.json)
+ *   oup member list | role <email> owner|developer | remove <email> | leave [--account <name|id>]
  *   oup pg list | show <name> | delete <name>
  *   oup pg create <name> [--memory <MB>] [--storage <GB>] [--site …]   waits until ready
  *   oup pg restore <source> <name> [--time <RFC 3339>] …   a new Database as a copy of <source>
@@ -64,6 +65,7 @@ import { credentialsPath, readCredentials, removeCredentials, writeCredentials }
 import { deploy } from './deploy.js';
 import { discover, emailOf, startDeviceSignIn, waitForApproval } from './oidc.js';
 import { accountFor, findLink, formatProjects, projectFor, resolveProject, writeLink } from './project.js';
+import { LAST_OWNER_HINT, formatMembers, memberByEmail, parseRole } from './members.js';
 import {
     type DesiredJob,
     JOB_FLAGS,
@@ -93,6 +95,10 @@ const USAGE = `usage:
   oup project list
   oup project create <name> [--account <name|id>] [--link]
   oup link <project>
+  oup member list [--account <name|id>]
+  oup member role <email> owner|developer [--account <name|id>]
+  oup member remove <email> [--account <name|id>]
+  oup member leave [--account <name|id>]
   oup pg list
   oup pg show <name>
   oup pg create <name> [--memory <MB>] [--storage <GB>] [--site hetzner-fsn1|ovh-lim] [--max-storage <GB> | --no-auto-grow] [--no-wait]
@@ -156,6 +162,13 @@ log in with a Postgres role of your own: --access read (the default) reads
 every table, write also changes rows, owner acts as app, the role the
 Project's Services use, so migrations work; owner connections go to the
 primary, so migration tools' locks work, at most 5 at once.
+
+member acts on your only Account, or on --account. An owner may do
+everything, the Account's Members included; a developer every Project and
+everything in it. Only owners change roles and remove Members; anyone may
+leave. An Account always keeps an owner. A removed Member's Postgres roles
+are dropped. These commands need oup login: an API key cannot change who is
+in an Account.
 
 logs prints the last lines (100 by default) of every replica or of a run,
 with -f also new ones as they are written, for up to an hour. Nothing is
@@ -1124,6 +1137,51 @@ async function route(args: string[]): Promise<void> {
 }
 
 /** `oup usage`: what the linked Project's Resources use now of what they were given (decision 124); not what is billed. */
+/** `oup member`: the Account's Members, their roles, removing one, leaving. */
+async function member(args: string[]): Promise<void> {
+    const [verb, ...rest] = args;
+    const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { account: { type: 'string' } } });
+    const [email, role, ...extra] = positionals;
+    const arity = { list: 0, leave: 0, remove: 1, role: 2 }[verb ?? ''];
+    if (arity === undefined || positionals.length !== arity || extra.length > 0) {
+        return fail(USAGE);
+    }
+    const client = await apiClient();
+    const account = accountFor(await listAccounts(client), values.account);
+    if (!account.ok) {
+        return fail(account.error);
+    }
+    const refusal = (error: { status: number; message: string }) =>
+        fail(error.status === 409 ? `${error.message}\n  ${LAST_OWNER_HINT}` : error.message);
+    if (verb === 'leave') {
+        const left = await client.removeMember(account.value.id, 'me');
+        return left.ok ? console.log(`You left the Account ${account.value.name}.`) : refusal(left.error);
+    }
+    const members = await client.listMembers(account.value.id);
+    if (!members.ok) {
+        return fail(members.error.message);
+    }
+    if (verb === 'list') {
+        return console.log(formatMembers(members.value).join('\n'));
+    }
+    const target = memberByEmail(members.value, email ?? '');
+    if (!target.ok) {
+        return fail(target.error);
+    }
+    if (verb === 'remove') {
+        const removed = await client.removeMember(account.value.id, target.value.id);
+        return removed.ok
+            ? console.log(`Removed ${target.value.email} from ${account.value.name}; their Postgres roles in its Databases are dropped.`)
+            : refusal(removed.error);
+    }
+    const parsed = parseRole(role);
+    if (!parsed.ok) {
+        return fail(parsed.error);
+    }
+    const changed = await client.updateMember(account.value.id, target.value.id, { role: parsed.value });
+    return changed.ok ? console.log(`${changed.value.email} is now ${changed.value.role} of ${account.value.name}.`) : refusal(changed.error);
+}
+
 async function usage(args: string[]): Promise<void> {
     const { values, positionals } = parseArgs({
         args,
@@ -1193,6 +1251,8 @@ const run = async (): Promise<void> => {
             return project(rest);
         case 'link':
             return link(rest);
+        case 'member':
+            return member(rest);
         case 'pg':
             return pg(rest);
         case 'service':

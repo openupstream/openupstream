@@ -6,8 +6,9 @@ Garage's admin API for Buckets.
 
 Responsibilities:
 
-- accounts, members, API keys (sign-in and keys via madAuth), and the Holds
-  that stop an Account from creating Resources
+- accounts, members with their roles (owner, developer), API keys
+  (sign-in and keys via madAuth), and the Holds that stop an Account from
+  creating Resources
 - projects and their resources: databases, buckets, sites, services, jobs
 - the routing table (`domain → prefix → target`)
 - secrets (envelope-encrypted, injected into containers as env)
@@ -86,8 +87,11 @@ what the control plane sees.
 | Route | |
 | --- | --- |
 | `GET /v1/login` | no token needed: `{issuer, clientId}`, where `oup login` signs in with the device grant; 404 without `CLI_CLIENT_ID` |
-| `GET /v1/accounts` | the caller's Accounts, each with its `holds` |
-| `POST /v1/accounts` | `{name}` → 201: a new Account, the caller its first Member |
+| `GET /v1/accounts` | the caller's Accounts, each with its `holds` and the caller's `role` in it |
+| `POST /v1/accounts` | `{name}` → 201: a new Account, the caller its first Member and owner |
+| `GET /v1/accounts/{id}/members` | the Members with their `role` (`owner`, `developer`, or null), for owners and developers; 404 for anyone else |
+| `PATCH /v1/accounts/{id}/members/{id}` | `{role}`: another role, owners only (403 otherwise); 409 when the Account would have no owner. Never with an API key (403) |
+| `DELETE /v1/accounts/{id}/members/{id}` | 204: removes the Member, owners only, and drops their and their API keys' Postgres roles in the Account's Databases; `me` leaves the Account, which anyone may. 409 for the last owner. Never with an API key (403) |
 | `GET /v1/projects` | the Projects of the caller's Accounts |
 | `POST /v1/projects` | `{accountId, name}` → 201, with its default Domain `<name>-<random>.<CUSTOMER_DOMAIN>`; 409 if the name is taken in the Account |
 | `GET /v1/projects/{id}` | |

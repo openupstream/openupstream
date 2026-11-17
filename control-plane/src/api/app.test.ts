@@ -12,6 +12,7 @@ import {
     type JobDetails,
     type JobRun,
     type LogEntry,
+    type Member,
     type Project,
     type ProjectUsage,
     type Route,
@@ -134,6 +135,8 @@ const recoveryWindows = new Map<string, RecoveryWindow | string>();
 
 /** The Secrets the fake Kubernetes received, latest last; namespaces in `missingNamespaces` do not exist. */
 const appliedSecrets: SecretManifest[] = [];
+/** What the fake Kubernetes was asked to delete through `remove`. */
+const removedObjects: { kind: string; namespace?: string; name: string }[] = [];
 const missingNamespaces = new Set<string>();
 /** When set, the next Secret write into `namespace` calls `reached` and waits for `released` before it lands. */
 let secretHold: { readonly namespace: string; readonly reached: () => void; readonly released: Promise<void> } | undefined;
@@ -181,7 +184,10 @@ const kube: ControlPlaneKube = {
             yield* tail;
         })());
     },
-    remove: async () => ok(undefined),
+    remove: async (ref) => {
+        removedObjects.push({ kind: ref.kind, name: ref.name, ...(ref.namespace === undefined ? {} : { namespace: ref.namespace }) });
+        return ok(undefined);
+    },
     applySecret: async (secret) => {
         const hold = secretHold?.namespace === secret.metadata.namespace ? secretHold : undefined;
         if (hold !== undefined) {
@@ -232,8 +238,9 @@ before(async () => {
     [accountA, accountB] = accounts.rows.map((row) => row.id) as [string, string];
     // alice is in A; bob in B; carol in both.
     await db.pool.query(
-        `insert into members (account_id, auth_subject, email) values
-         ($1, 'alice', 'alice@a.test'), ($2, 'bob', 'bob@b.test'), ($1, 'carol', 'carol@a.test'), ($2, 'carol', 'carol@b.test')`,
+        `insert into members (account_id, auth_subject, email, role) values
+         ($1, 'alice', 'alice@a.test', 'owner'), ($2, 'bob', 'bob@b.test', 'owner'),
+         ($1, 'carol', 'carol@a.test', 'owner'), ($2, 'carol', 'carol@b.test', 'owner')`,
         [accountA, accountB],
     );
 });
@@ -392,6 +399,7 @@ describe('Accounts', () => {
         assert.equal(response.status, 201);
         const account = (await response.json()) as Account;
         assert.equal(account.name, 'Dora GmbH');
+        assert.equal(account.role, 'owner');
         assert.equal(response.headers.get('location'), `/v1/accounts/${account.id}`);
         assert.deepEqual(
             ((await (await call('GET', '/v1/accounts', 'dora')).json()) as Account[]).map((a) => a.id),
@@ -423,6 +431,126 @@ describe('Accounts', () => {
         assert.equal((await call('POST', '/v1/accounts', 'dora', { name: '   ' })).status, 400);
         assert.equal((await call('POST', '/v1/accounts', 'dora', { name: 'x'.repeat(201) })).status, 400);
         assert.equal((await call('POST', '/v1/accounts', 'dora', {})).status, 400);
+    });
+});
+
+describe('Members and their roles', () => {
+    let accountId: string;
+    let projectId: string;
+    const members = (subject: string) => call('GET', `/v1/accounts/${accountId}/members`, subject);
+    const memberId = async (subject: string) =>
+        (await db.pool.query<{ id: string }>('select id from members where account_id = $1 and auth_subject = $2', [accountId, subject])).rows[0]
+            ?.id ?? 'none';
+    const withKey = (key: string, method: string, path: string, body?: unknown) =>
+        api.request(path, {
+            method,
+            headers: { authorization: `Bearer ${key}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+
+    before(async () => {
+        // No invitations yet: the other Members are inserted as an invitation will.
+        accountId = ((await (await call('POST', '/v1/accounts', 'olga', { name: 'Olga AG' })).json()) as Account).id;
+        await db.pool.query(
+            `insert into members (account_id, auth_subject, email, role, created_at) values
+             ($1, 'dev', 'dev@olga.test', 'developer', now() + interval '1 second'),
+             ($1, 'nobody', 'nobody@olga.test', null, now() + interval '2 seconds')`,
+            [accountId],
+        );
+        projectId = ((await (await call('POST', '/v1/projects', 'olga', { accountId, name: 'shop' })).json()) as Project).id;
+    });
+
+    test('owners and developers see the Members with their roles; others get 404', async () => {
+        const listed = (await (await members('dev')).json()) as Member[];
+        assert.deepEqual(
+            listed.map((member) => [member.email, member.role]),
+            [
+                ['olga@example.test', 'owner'],
+                // each address as the Member's last request brought it from madAuth
+                ['dev@example.test', 'developer'],
+                ['nobody@olga.test', null],
+            ],
+        );
+        assert.equal((await members('olga')).status, 200);
+        assert.equal((await members('nobody')).status, 404);
+        assert.equal((await members('bob')).status, 404);
+        assert.equal((await call('GET', '/v1/accounts/not-a-uuid/members', 'olga')).status, 404);
+        const accounts = (await (await call('GET', '/v1/accounts', 'dev')).json()) as Account[];
+        assert.deepEqual(accounts.map((account) => [account.name, account.role]), [['Olga AG', 'developer']]);
+    });
+
+    test('a developer works in every Project but changes and removes no Member', async () => {
+        assert.equal((await call('GET', `/v1/projects/${projectId}`, 'dev')).status, 200);
+        assert.equal((await call('POST', '/v1/projects', 'dev', { accountId, name: 'dev-made' })).status, 201);
+        assert.equal((await call('PATCH', `/v1/accounts/${accountId}/members/${await memberId('olga')}`, 'dev', { role: 'developer' })).status, 403);
+        assert.equal((await call('DELETE', `/v1/accounts/${accountId}/members/${await memberId('olga')}`, 'dev')).status, 403);
+    });
+
+    test('a Member without a role reaches no Project (grants are not built yet)', async () => {
+        assert.equal((await call('GET', `/v1/projects/${projectId}`, 'nobody')).status, 404);
+        assert.deepEqual(await (await call('GET', '/v1/projects', 'nobody')).json(), []);
+        assert.equal((await call('POST', '/v1/projects', 'nobody', { accountId, name: 'sneaky' })).status, 403);
+        assert.equal((await call('DELETE', `/v1/accounts/${accountId}/members/${await memberId('dev')}`, 'nobody')).status, 404);
+    });
+
+    test('an owner changes roles; a bad role is 400, an unknown Member 404', async () => {
+        const path = `/v1/accounts/${accountId}/members/${await memberId('nobody')}`;
+        const changed = await call('PATCH', path, 'olga', { role: 'developer' });
+        assert.equal(changed.status, 200);
+        assert.equal(((await changed.json()) as Member).role, 'developer');
+        assert.equal((await call('GET', `/v1/projects/${projectId}`, 'nobody')).status, 200);
+        assert.equal((await call('PATCH', path, 'olga', { role: 'admin' })).status, 400);
+        assert.equal((await call('PATCH', path, 'olga', {})).status, 400);
+        assert.equal((await call('PATCH', `/v1/accounts/${accountId}/members/00000000-0000-4000-8000-000000000000`, 'olga', { role: 'owner' })).status, 404);
+        assert.equal((await call('PATCH', `/v1/accounts/${accountId}/members/${await memberId('bob')}`, 'olga', { role: 'owner' })).status, 404);
+    });
+
+    test('an API key reads the Members but never changes them, its owner\'s write key neither', async () => {
+        assert.equal((await withKey('madauth_olga_read', 'GET', `/v1/accounts/${accountId}/members`)).status, 200);
+        const path = `/v1/accounts/${accountId}/members/${await memberId('dev')}`;
+        assert.equal((await withKey('madauth_olga_write', 'PATCH', path, { role: 'owner' })).status, 403);
+        assert.equal((await withKey('madauth_olga_write', 'DELETE', path)).status, 403);
+        assert.equal((await withKey('madauth_dev_write', 'DELETE', `/v1/accounts/${accountId}/members/me`)).status, 403);
+    });
+
+    test('the last owner can neither leave nor lose the role; with a second owner they can', async () => {
+        const olga = await memberId('olga');
+        assert.equal((await call('DELETE', `/v1/accounts/${accountId}/members/me`, 'olga')).status, 409);
+        assert.equal((await call('PATCH', `/v1/accounts/${accountId}/members/${olga}`, 'olga', { role: 'developer' })).status, 409);
+        assert.equal((await call('PATCH', `/v1/accounts/${accountId}/members/${await memberId('dev')}`, 'olga', { role: 'owner' })).status, 200);
+        assert.equal((await call('PATCH', `/v1/accounts/${accountId}/members/${olga}`, 'olga', { role: 'developer' })).status, 200);
+        assert.equal((await call('PATCH', `/v1/accounts/${accountId}/members/${olga}`, 'dev', { role: 'owner' })).status, 200);
+    });
+
+    test("removing a Member drops their and their keys' Postgres roles; a role given back is a new one", async () => {
+        const database = (await (await call('POST', `/v1/projects/${projectId}/databases`, 'olga', { name: 'main', memoryMb: 256, storageGb: 1 })).json()) as DatabaseDetails;
+        const proxyPath = `/v1/projects/${projectId}/databases/${database.id}/proxy`;
+        const before = (await (await call('POST', proxyPath, 'nobody', { access: 'write' })).json()) as DatabaseProxy;
+        assert.equal((await withKey('madauth_nobody_write_k9', 'POST', proxyPath, { access: 'read' })).status, 201);
+        assert.equal((await call('POST', proxyPath, 'olga', { access: 'read' })).status, 201);
+
+        removedObjects.length = 0;
+        assert.equal((await call('DELETE', `/v1/accounts/${accountId}/members/${await memberId('nobody')}`, 'olga')).status, 204);
+        assert.equal((await call('GET', `/v1/projects/${projectId}`, 'nobody')).status, 404);
+        const roles = (await listDatabaseRows(db.pool)).find((row) => row.database.id === database.id)?.roles ?? [];
+        assert.equal(roles.filter((role) => role.dropped === true).length, 2);
+        assert.equal(roles.filter((role) => role.dropped !== true).length, 1, "olga's role stays");
+        assert.equal(removedObjects.filter((object) => object.kind === 'Secret' && object.namespace === `project-${projectId}`).length, 2);
+        assert.equal((await withKey('madauth_nobody_write_k9', 'POST', proxyPath, { access: 'read' })).status, 404);
+
+        await db.pool.query(`insert into members (account_id, auth_subject, email, role) values ($1, 'nobody', 'nobody@olga.test', 'developer')`, [accountId]);
+        const after = await call('POST', proxyPath, 'nobody', { access: 'write' });
+        assert.equal(after.status, 201);
+        assert.notEqual(((await after.json()) as DatabaseProxy).user, before.user);
+    });
+
+    test('anyone may leave; another Member is removed by an owner only, and only once', async () => {
+        assert.equal((await call('DELETE', `/v1/accounts/${accountId}/members/me`, 'nobody')).status, 204);
+        assert.equal((await call('DELETE', `/v1/accounts/${accountId}/members/me`, 'nobody')).status, 404);
+        const dev = await memberId('dev');
+        assert.equal((await call('DELETE', `/v1/accounts/${accountId}/members/${dev}`, 'olga')).status, 204);
+        assert.equal((await call('DELETE', `/v1/accounts/${accountId}/members/${dev}`, 'olga')).status, 404);
+        assert.deepEqual(await (await call('GET', '/v1/accounts', 'dev')).json(), []);
     });
 });
 
@@ -778,7 +906,9 @@ describe('Database proxy: a caller\'s own role and the tunnel check', () => {
         assert.equal(quiet?.roles, undefined);
         assert.equal(orders?.tunnelHostname, `pg-${projectId}.openupstream.test`);
         assert.equal(quiet?.tunnelHostname, `pg-${projectId}.openupstream.test`);
-        const elsewhere = (await listDatabaseRows(db.pool, 'openupstream.test')).filter((row) => row.project.id !== projectId);
+        const elsewhere = (await listDatabaseRows(db.pool, 'openupstream.test')).filter(
+            (row) => row.project.id !== projectId && row.project.accountId === accountA,
+        );
         assert.ok(elsewhere.every((row) => row.tunnelHostname === undefined));
         assert.ok((await listDatabaseRows(db.pool)).every((row) => row.tunnelHostname === undefined));
     });
@@ -1848,8 +1978,8 @@ describe('Holds', () => {
         );
         const [{ id, created_at }] = rows as [{ id: string; created_at: Date }];
         await db.pool.query(
-            `insert into members (account_id, auth_subject, email, created_at) values
-             ($1, 'gina', 'gina@g.test', now()), ($1, 'hal', 'hal@g.test', now() + interval '1 second')`,
+            `insert into members (account_id, auth_subject, email, role, created_at) values
+             ($1, 'gina', 'gina@g.test', 'owner', now()), ($1, 'hal', 'hal@g.test', 'developer', now() + interval '1 second')`,
             [id],
         );
         await placeHold(db.pool, id, 'payment-method');
@@ -1859,8 +1989,8 @@ describe('Holds', () => {
             createdAt: created_at.toISOString(),
             holds: ['payment-method'],
             members: [
-                { authSubject: 'gina', email: 'gina@g.test' },
-                { authSubject: 'hal', email: 'hal@g.test' },
+                { authSubject: 'gina', email: 'gina@g.test', role: 'owner' },
+                { authSubject: 'hal', email: 'hal@g.test', role: 'developer' },
             ],
         });
         const unknown = '00000000-0000-4000-8000-0000000000ff';

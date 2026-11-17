@@ -114,8 +114,17 @@ export const ROLE_GRANTS: Readonly<Record<DatabaseAccess, readonly string[]>> = 
 /** An `owner` role's connections go to the primary past the Pooler, each a Postgres backend: at most this many at once. */
 export const OWNER_CONNECTION_LIMIT = 5;
 
-/** A caller's role as CloudNativePG manages it: logs in with its Secret's password, inherits its grants. */
-export const managedRoleFor = (role: DatabaseRoleRow) => ({
+/**
+ * A caller's role as CloudNativePG manages it: logs in with its Secret's
+ * password, inherits its grants. A dropped one (decision 142) is only
+ * named, `ensure: absent`, with no Secret, which the control plane deleted.
+ */
+export const managedRoleFor = (role: DatabaseRoleRow) =>
+    role.dropped === true
+        ? { name: databaseRoleName(role), comment: `openupstream ${role.access} role ${role.id}, dropped`, ensure: 'absent' as const }
+        : presentRole(role);
+
+const presentRole = (role: DatabaseRoleRow) => ({
     name: databaseRoleName(role),
     comment: `openupstream ${role.access} role ${role.id}`,
     ensure: 'present' as const,

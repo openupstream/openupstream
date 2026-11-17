@@ -299,6 +299,37 @@ describe('Projects', () => {
         assert.equal(members.rowCount, 0);
     });
 
+    test('an Account keeps an owner: the last one is neither deleted nor demoted, even by two owners at once', async () => {
+        const accountId = await createAccount();
+        const owner = (subject: string) =>
+            insert("insert into members (account_id, auth_subject, email, role) values ($1, $2, $2 || '@example.com', 'owner')", [accountId, subject]);
+        const [a, b] = [await owner('a'), await owner('b')];
+        const developer = await insert("insert into members (account_id, auth_subject, email, role) values ($1, 'c', 'c@example.com', 'developer')", [
+            accountId,
+        ]);
+        // Each demotes the other in its own transaction; the second waits for the first and then refuses.
+        const [first, second] = [await db.pool.connect(), await db.pool.connect()];
+        try {
+            await first.query('begin');
+            await second.query('begin');
+            await first.query("update members set role = 'developer' where id = $1", [b]);
+            const waiting = second.query("update members set role = 'developer' where id = $1", [a]);
+            await first.query('commit');
+            await rejectsWith(waiting, 'OUOWN');
+            await second.query('rollback');
+        } finally {
+            first.release();
+            second.release();
+        }
+        await rejectsWith(db.pool.query('delete from members where id = $1', [a]), 'OUOWN');
+        await rejectsWith(db.pool.query("update members set role = null where id = $1", [a]), 'OUOWN');
+        await db.pool.query('delete from members where id = $1', [developer]);
+        await rejectsWith(db.pool.query("update members set role = 'owner' || 'x' where id = $1", [b]), CHECK_VIOLATION);
+        // Deleting the Account takes its last owner with it.
+        await db.pool.query('delete from accounts where id = $1', [accountId]);
+        assert.equal((await db.pool.query('select 1 from members where account_id = $1', [accountId])).rowCount, 0);
+    });
+
     test('Project names are unique within an Account', async () => {
         const accountId = await createAccount();
         await db.pool.query(`insert into projects (account_id, name) values ($1, 'staging')`, [accountId]);

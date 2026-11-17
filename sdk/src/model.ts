@@ -22,7 +22,17 @@ export interface Account {
      * empty when it may. Existing Resources keep running.
      */
     holds: string[];
+    /** The caller's role in the Account (`GET /v1/accounts`); null without one. */
+    role?: MemberRole | null;
 }
+
+/**
+ * What a Member may do in the whole Account (decision 137): `owner`
+ * everything, the Account's Members included; `developer` every Project and
+ * everything in it.
+ */
+export const MEMBER_ROLES = ['owner', 'developer'] as const;
+export type MemberRole = (typeof MEMBER_ROLES)[number];
 
 /** A person who can sign in to an Account. Sign-in is madAuth's. */
 export interface Member {
@@ -31,7 +41,14 @@ export interface Member {
     /** The madAuth subject this Member signs in as. */
     authSubject: string;
     email: string;
+    /** null: the Member reaches only what grants give them (not built yet). */
+    role: MemberRole | null;
     createdAt: Timestamp;
+}
+
+/** Changes a Member's role; only an owner may, with a session or `oup login`, never an API key. */
+export interface MemberPatch {
+    role: MemberRole;
 }
 
 /** The unit of isolation and lifecycle; deleting it deletes everything in it. */

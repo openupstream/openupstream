@@ -54,7 +54,8 @@ interface RoleRow {
 const findRole = async (pool: pg.Pool, databaseId: Id, caller: Caller, access: DatabaseAccess): Promise<RoleRow | undefined> => {
     const { rows } = await pool.query<RoleRow>(
         `select id, access, password from database_roles
-         where database_id = $1 and auth_subject = $2 and coalesce(api_key_id, '') = coalesce($3, '') and access = $4`,
+         where database_id = $1 and auth_subject = $2 and coalesce(api_key_id, '') = coalesce($3, '') and access = $4
+           and dropped_at is null`,
         [databaseId, caller.subject, caller.apiKeyId ?? null, access],
     );
     return rows[0];
@@ -119,12 +120,12 @@ async function insertRole(
     return ok(rows[0]);
 }
 
-/** Every role of the Project's live Databases, opened, for the Secrets CloudNativePG reads. */
+/** Every role of the Project's live Databases that is not dropped, opened, for the Secrets CloudNativePG reads. */
 export async function projectRoles(pool: pg.Pool, kek: KeyEncryptionKey, projectId: Id): Promise<Result<readonly DatabaseRole[], SecretStoreError>> {
     const { rows } = await pool.query<RoleRow & { database_id: string }>(
         `select r.id, r.database_id, r.access, r.password from database_roles r
          join databases d on d.id = r.database_id
-         where d.project_id = $1 and d.deleted_at is null
+         where d.project_id = $1 and d.deleted_at is null and r.dropped_at is null
          order by r.created_at, r.id`,
         [projectId],
     );
@@ -139,17 +140,22 @@ export async function projectRoles(pool: pg.Pool, kek: KeyEncryptionKey, project
     return ok(roles);
 }
 
-/** The roles of every live Database, by Database, oldest first: what the operator adds to the Clusters. */
+/**
+ * The roles of every live Database, by Database, oldest first: what the
+ * operator adds to the Clusters. Dropped ones too, for as long as the
+ * Database lives, so CloudNativePG drops them whenever it can (decision 142).
+ */
 export async function rolesByDatabase(pool: pg.Pool): Promise<ReadonlyMap<Id, readonly DatabaseRoleRow[]>> {
-    const { rows } = await pool.query<{ id: string; database_id: string; access: DatabaseAccess }>(
-        `select r.id, r.database_id, r.access from database_roles r
+    const { rows } = await pool.query<{ id: string; database_id: string; access: DatabaseAccess; dropped: boolean }>(
+        `select r.id, r.database_id, r.access, r.dropped_at is not null as dropped from database_roles r
          join databases d on d.id = r.database_id
          where d.deleted_at is null
          order by r.created_at, r.id`,
     );
     const byDatabase = new Map<Id, DatabaseRoleRow[]>();
     for (const row of rows) {
-        byDatabase.set(row.database_id, [...(byDatabase.get(row.database_id) ?? []), { id: row.id, access: row.access }]);
+        const role: DatabaseRoleRow = row.dropped ? { id: row.id, access: row.access, dropped: true } : { id: row.id, access: row.access };
+        byDatabase.set(row.database_id, [...(byDatabase.get(row.database_id) ?? []), role]);
     }
     return byDatabase;
 }
