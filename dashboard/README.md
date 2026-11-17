@@ -21,10 +21,19 @@ What it does now:
     redeploy what the tag points at now, delete. Public images only: a
     private registry's password is given to `oup service deploy`, never
     typed into the page (decision 127).
+  - Buckets: list with the S3 endpoint and the addresses Routes serve them
+    at, create, delete. A Bucket's key is not shown and never fetched
+    (decision 128): it comes from the API, and `oup site deploy` gets it
+    itself.
+  - Domains: the default Domain and custom domains, claimed with a
+    hostname, with the TXT record that proves ownership and the CNAME to
+    publish, verify, delete. Per Domain its Routes: add (path, a Bucket
+    or a Service with a port, the fallback to `index.html` for a
+    single-page app) and delete.
   - what every Resource uses now, from the API's `/usage` (decision 124):
     CPU, memory and storage against what it was given, and its instances
-    with their Site, state and restarts. Jobs and Buckets are shown this
-    way and still created with `oup` or the API.
+    with their Site, state and restarts. Jobs are shown this way and
+    still created with `oup`.
 
 - `/cli`: how to use `oup`, for anyone, signed in or not (decision 125).
   The text is the part of `cli/README.md` between its `docs` comments, read
@@ -34,7 +43,7 @@ What it does now:
   other than the hosted service the page names its own API address, in a
   note and in the example's `oup login --api …`.
 
-Forms for Buckets, Domains, Jobs and Secrets, and a Service's logs, follow.
+Forms for Jobs and Secrets, and a Service's logs, follow.
 
 ## How it reaches madAuth and the API
 

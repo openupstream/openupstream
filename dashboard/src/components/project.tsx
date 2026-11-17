@@ -2,27 +2,39 @@
 
 import {
     type ApiResult,
+    type Bucket,
     COMPUTE_SITES,
     type DatabaseDetails,
+    type Domain,
     type OpenUpstreamClient,
     type Project,
     type ProjectUsage,
     type ResourceKind,
     type ResourceUsage,
+    type Route,
     type ServiceDetails,
     type Site,
 } from '@openupstream/sdk';
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { api, refused } from '../lib/session';
 import { databaseNameProblem, databaseSizes, databaseUrlVariable, resizeOf } from '../lib/usage';
+import { servedAt, ingressOf } from '../lib/routing';
+import { BucketCard, BucketForm, DomainCard, DomainForm } from './routing';
 import { ServiceCard, ServiceForm } from './services';
 import { Usage } from './usage';
 
-/** The Project, its Databases and Services, and what its Resources use now; `usage` undefined when the API could not say. */
+/**
+ * The Project, its Databases, Services, Buckets and Domains with their
+ * Routes (by the Domain's id), and what its Resources use now; `usage`
+ * undefined when the API could not say.
+ */
 type Loaded = {
     readonly project: Project;
     readonly databases: readonly DatabaseDetails[];
     readonly services: readonly ServiceDetails[];
+    readonly buckets: readonly Bucket[];
+    readonly domains: readonly Domain[];
+    readonly routes: Readonly<Record<string, readonly Route[]>>;
     readonly usage: ProjectUsage | undefined;
 };
 
@@ -30,22 +42,52 @@ type Loaded = {
 const REFRESH_MS = 10_000;
 
 const load = async (client: OpenUpstreamClient, id: string): Promise<ApiResult<Loaded>> => {
-    const [project, databases, services, usage] = await Promise.all([client.getProject(id), client.listDatabases(id), client.listServices(id), client.getUsage(id)]);
-    return !project.ok
-        ? project
-        : !databases.ok
-          ? databases
-          : !services.ok
-            ? services
-            : { ok: true, value: { project: project.value, databases: databases.value, services: services.value, usage: usage.ok ? usage.value : undefined } };
+    const [project, databases, services, buckets, domains, usage] = await Promise.all([
+        client.getProject(id),
+        client.listDatabases(id),
+        client.listServices(id),
+        client.listBuckets(id),
+        client.listDomains(id),
+        client.getUsage(id),
+    ]);
+    if (!project.ok) {
+        return project;
+    }
+    if (!databases.ok) {
+        return databases;
+    }
+    if (!services.ok) {
+        return services;
+    }
+    if (!buckets.ok) {
+        return buckets;
+    }
+    if (!domains.ok) {
+        return domains;
+    }
+    const routes = await Promise.all(domains.value.map((domain) => client.listRoutes(id, domain.id)));
+    const failed = routes.find((result) => !result.ok);
+    return failed !== undefined && !failed.ok
+        ? failed
+        : {
+              ok: true,
+              value: {
+                  project: project.value,
+                  databases: databases.value,
+                  services: services.value,
+                  buckets: buckets.value,
+                  domains: domains.value,
+                  routes: Object.fromEntries(domains.value.map((domain, index) => [domain.id, routes[index]?.ok ? routes[index].value : []])),
+                  usage: usage.ok ? usage.value : undefined,
+              },
+          };
 };
 
 const OTHER_KINDS: readonly { readonly kind: ResourceKind; readonly title: string; readonly command: string }[] = [
     { kind: 'job', title: 'Jobs', command: 'oup job deploy' },
-    { kind: 'bucket', title: 'Buckets', command: 'the API' },
 ];
 
-/** One Project: its Databases and Services, to create, change and delete, and what every Resource uses now with its instances. */
+/** One Project: its Databases, Services, Buckets and Domains with their Routes, to create, change and delete, and what every Resource uses now with its instances. */
 export function ProjectPage({ id }: { readonly id: string }) {
     const [loaded, setLoaded] = useState<Loaded | undefined>(undefined);
     const [problem, setProblem] = useState<string | undefined>(undefined);
@@ -93,7 +135,9 @@ export function ProjectPage({ id }: { readonly id: string }) {
             </p>
         );
     }
-    const { project, databases, services, usage } = loaded;
+    const { project, databases, services, buckets, domains, routes, usage } = loaded;
+    const defaultHostname = domains.find((domain) => domain.kind === 'default')?.hostname;
+    const targets = { buckets, services };
     const usageOf = (kind: ResourceKind, resourceId: string): ResourceUsage | undefined =>
         usage?.resources.find((resource) => resource.kind === kind && resource.id === resourceId);
     return (
@@ -150,6 +194,47 @@ export function ProjectPage({ id }: { readonly id: string }) {
                 <ServiceForm existing={services} onCreate={(input) => change((client) => client.createService(project.id, input))} />
             </section>
 
+            <section>
+                <h2>Buckets</h2>
+                {buckets.length === 0 ? (
+                    <p>No Buckets yet. A Bucket is S3 object storage with a key of its own; a Route serves it as a static site.</p>
+                ) : (
+                    <ul className="resources">
+                        {buckets.map((bucket) => (
+                            <BucketCard
+                                key={bucket.id}
+                                bucket={bucket}
+                                usage={usageOf('bucket', bucket.id)}
+                                defaultHostname={defaultHostname}
+                                servedAt={servedAt('bucket', bucket.id, domains, routes)}
+                                onDelete={() => change((client) => client.deleteBucket(project.id, bucket.id))}
+                            />
+                        ))}
+                    </ul>
+                )}
+                <BucketForm existing={buckets} onCreate={(input) => change((client) => client.createBucket(project.id, input))} />
+            </section>
+
+            <section>
+                <h2>Domains</h2>
+                <ul className="resources">
+                    {domains.map((domain) => (
+                        <DomainCard
+                            key={domain.id}
+                            domain={domain}
+                            routes={routes[domain.id] ?? []}
+                            targets={targets}
+                            ingress={defaultHostname === undefined ? undefined : ingressOf(defaultHostname)}
+                            onVerify={() => change((client) => client.verifyDomain(project.id, domain.id))}
+                            onDelete={() => change((client) => client.deleteDomain(project.id, domain.id))}
+                            onCreateRoute={(input) => change((client) => client.createRoute(project.id, domain.id, input))}
+                            onDeleteRoute={(route) => change((client) => client.deleteRoute(project.id, domain.id, route.id))}
+                        />
+                    ))}
+                </ul>
+                <DomainForm existing={domains} onCreate={(input) => change((client) => client.createDomain(project.id, input))} />
+            </section>
+
             {OTHER_KINDS.map(({ kind, title, command }) => {
                 const resources = usage?.resources.filter((resource) => resource.kind === kind) ?? [];
                 return (
@@ -159,13 +244,9 @@ export function ProjectPage({ id }: { readonly id: string }) {
                             <p>
                                 <small>
                                     None. They are created with{' '}
-                                    {command === 'the API' ? (
-                                        command
-                                    ) : (
-                                        <a href="/cli">
-                                            <code>{command}</code>
-                                        </a>
-                                    )}{' '}
+                                    <a href="/cli">
+                                        <code>{command}</code>
+                                    </a>{' '}
                                     for now.
                                 </small>
                             </p>
