@@ -476,6 +476,8 @@ async function pgProxy(
     if (!listening.ok) {
         return fail(listening.error);
     }
+    // Once listening, an error of the server (too many open files) is said, and the proxy goes on.
+    server.on('error', (error) => console.error(`oup: ${error.message}`));
     console.log(`${database.name} (${access.value}) on ${LISTEN_HOST}:${port.value}. Connect with:`);
     console.log(`  ${connectionUrl(proxy.value, port.value)}`);
     console.log('Press Ctrl-C to stop.');

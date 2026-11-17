@@ -115,6 +115,7 @@ test('a Project with a tunnel host gets its tunnel after its namespace and polic
                 'NetworkPolicy/database-tunnel-egress',
                 'Deployment/database-tunnel',
                 'Service/database-tunnel',
+                'Middleware/database-tunnel-rate-limit',
                 'Middleware/database-tunnel-auth',
                 'IngressRoute/database-tunnel',
             ],
@@ -173,8 +174,10 @@ test('Traefik serves the tunnel host with the default certificate and asks the c
     const route = find(objects!, 'IngressRoute').spec;
     assert.deepEqual(route.entryPoints, ['websecure']);
     assert.equal(route.routes[0].match, `Host(\`${hostname}\`)`);
-    assert.deepEqual(route.routes[0].middlewares, [{ name: 'database-tunnel-auth' }]);
+    assert.deepEqual(route.routes[0].middlewares, [{ name: 'database-tunnel-rate-limit' }, { name: 'database-tunnel-auth' }]);
     assert.deepEqual(route.routes[0].services, [{ name: 'database-tunnel', port: 8080 }]);
     assert.deepEqual(route.tls, {});
-    assert.deepEqual(find(objects!, 'Middleware').spec, { forwardAuth: { address: tunnel.authUrl, authRequestHeaders: ['Authorization'] } });
+    const middleware = (name: string) => (objects!.find((object) => object.metadata.name === name) as KubeObject & { spec: unknown }).spec;
+    assert.deepEqual(middleware('database-tunnel-rate-limit'), { rateLimit: { average: 10, period: '1s', burst: 50 } });
+    assert.deepEqual(middleware('database-tunnel-auth'), { forwardAuth: { address: tunnel.authUrl, authRequestHeaders: ['Authorization'] } });
 });

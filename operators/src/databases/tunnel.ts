@@ -16,9 +16,11 @@
  * - `database-tunnel-egress`, which lets it reach DNS and its Project's
  *   Databases on 5432 and nothing else. project-isolation already admits
  *   Traefik to it and it to the Databases;
- * - a ForwardAuth Middleware that asks the control plane about every
- *   tunnel before Traefik opens it, with the caller's Authorization header
- *   and nothing else of the request;
+ * - a per-IP rate limit in front of it, as the platform's API has, since
+ *   every request costs a call to the control plane, and a ForwardAuth
+ *   Middleware that asks the control plane about every tunnel before
+ *   Traefik opens it, with the caller's Authorization header and nothing
+ *   else of the request;
  * - an IngressRoute at the tunnel host, served with the default TLS
  *   store's wildcard certificate for the customer domain.
  */
@@ -38,6 +40,9 @@ import {
 export const TUNNEL_COMPONENT = 'database-tunnel';
 export const TUNNEL_NAME = 'database-tunnel';
 export const TUNNEL_AUTH_MIDDLEWARE = 'database-tunnel-auth';
+export const TUNNEL_RATE_LIMIT_MIDDLEWARE = 'database-tunnel-rate-limit';
+/** Tunnels a client IP may open: a GUI opens several connections at once, a flood of bad tokens is cut before the control plane. */
+export const TUNNEL_RATE_LIMIT = { average: 10, period: '1s', burst: 50 } as const;
 export const TUNNEL_EGRESS_POLICY = 'database-tunnel-egress';
 /** Where the forwarder listens in its pod, and its Service's port. */
 export const FORWARDER_PORT = 8080;
@@ -133,6 +138,13 @@ const egressPolicy = (projectId: Id): KubeObject => ({
     },
 });
 
+const rateLimitMiddleware = (projectId: Id): KubeObject => ({
+    apiVersion: TRAEFIK,
+    kind: 'Middleware',
+    metadata: meta(projectId, TUNNEL_RATE_LIMIT_MIDDLEWARE),
+    spec: { rateLimit: { ...TUNNEL_RATE_LIMIT } },
+});
+
 const authMiddleware = (projectId: Id, settings: TunnelSettings): KubeObject => ({
     apiVersion: TRAEFIK,
     kind: 'Middleware',
@@ -153,7 +165,7 @@ const ingressRoute = (projectId: Id, hostname: string): KubeObject => ({
             {
                 match: `Host(\`${hostname}\`)`,
                 kind: 'Rule',
-                middlewares: [{ name: TUNNEL_AUTH_MIDDLEWARE }],
+                middlewares: [{ name: TUNNEL_RATE_LIMIT_MIDDLEWARE }, { name: TUNNEL_AUTH_MIDDLEWARE }],
                 services: [{ name: TUNNEL_NAME, port: FORWARDER_PORT }],
             },
         ],
@@ -167,6 +179,7 @@ export const tunnelObjects = (projectId: Id, hostname: string, settings: TunnelS
     egressPolicy(projectId),
     deployment(projectId, settings),
     service(projectId),
+    rateLimitMiddleware(projectId),
     authMiddleware(projectId, settings),
     ingressRoute(projectId, hostname),
 ];

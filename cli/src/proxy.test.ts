@@ -125,6 +125,9 @@ test('a taken port is reported before anything else', async () => {
     assert.deepEqual(free, { ok: false, error: `port ${port.value} is taken (a Postgres of your own?); choose another with --port` });
     taken.close();
     assert.deepEqual(await portFree(port.value), { ok: true, value: undefined });
+    // Neither of listen's own listeners stays behind to swallow a later error.
+    assert.equal(taken.listenerCount('error'), 0);
+    assert.equal(taken.listenerCount('listening'), 0);
 });
 
 test('preparing the role stops at once when the tunnel refuses the caller', async () => {

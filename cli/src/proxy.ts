@@ -103,15 +103,24 @@ export function serveTunnel(server: Server, deps: TunnelDeps): void {
     });
 }
 
-/** Listens on `port` of LISTEN_HOST; an error when it is taken. */
-export async function listen(server: Server, port: number): Promise<Result<number, string>> {
-    const failed = once(server, 'error').then(([error]) => {
-        const { code, message } = error as NodeJS.ErrnoException;
-        return err(code === 'EADDRINUSE' ? `port ${port} is taken (a Postgres of your own?); choose another with --port` : message);
+/**
+ * Listens on `port` of LISTEN_HOST; an error when it is taken. Only the
+ * outcome of listening is handled here: neither listener stays behind.
+ */
+export function listen(server: Server, port: number): Promise<Result<number, string>> {
+    return new Promise((resolve) => {
+        const failed = (error: NodeJS.ErrnoException) => {
+            server.off('listening', listening);
+            resolve(err(error.code === 'EADDRINUSE' ? `port ${port} is taken (a Postgres of your own?); choose another with --port` : error.message));
+        };
+        const listening = () => {
+            server.off('error', failed);
+            resolve(ok((server.address() as AddressInfo).port));
+        };
+        server.once('error', failed);
+        server.once('listening', listening);
+        server.listen(port, LISTEN_HOST);
     });
-    server.listen(port, LISTEN_HOST);
-    const listening = once(server, 'listening').then(() => ok((server.address() as AddressInfo).port));
-    return Promise.race([failed, listening]);
 }
 
 /** Whether `port` is free now: listened on and let go at once, so a taken port is reported before any waiting. */

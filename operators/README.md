@@ -20,8 +20,8 @@ Traefik already implements is configured, not reimplemented.
   ADR-0005), applied with its namespace once a row names its tunnel host
   and only with `FORWARDER_IMAGE` and `TUNNEL_AUTH_URL` set: the forwarder
   Deployment and Service `database-tunnel` under gVisor, its egress policy
-  (DNS and the Databases on 5432), a ForwardAuth Middleware to the control
-  plane's tunnel check and an IngressRoute at `pg-<project id>.<customer
+  (DNS and the Databases on 5432), a per-IP rate limit and a ForwardAuth
+  Middleware to the control plane's tunnel check and an IngressRoute at `pg-<project id>.<customer
   domain>`. Never deleted by the operator.
 - `src/forwarder/`: the forwarder, another entry point of the image
   (`node operators/dist/forwarder/main.js`): an HTTP server that upgrades

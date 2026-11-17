@@ -124,3 +124,11 @@ test('Jobs from the control plane: only rows with an image pinned by digest, a c
     assert.equal(parseJobRows([{ ...row, job: { ...row.job, command: [1] } }]).ok, false);
     assert.equal(parseJobRows([{ ...row, job: { ...row.job, schedule: 5 } }]).ok, false);
 });
+
+test('rows whose roles or tunnel host have the wrong shape are refused as a whole, before any pass', () => {
+    const row = { project: { id: 'p' }, database: { id: 'd' } };
+    assert.equal(parseRows([{ ...row, roles: [{ id: 'r', access: 'read' }], tunnelHostname: 'pg-p.example' }]).ok, true);
+    assert.equal(parseRows([{ ...row, roles: {} }]).ok, false);
+    assert.equal(parseRows([{ ...row, roles: [{ id: 1, access: 'read' }] }]).ok, false);
+    assert.equal(parseRows([{ ...row, tunnelHostname: 7 }]).ok, false);
+});
