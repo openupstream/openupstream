@@ -6,6 +6,12 @@ description: Install oup, create a Project, a Database and a Service, and serve 
 This guide takes you from signing in to a Service that runs with a
 Database. You need Node.js and a container image in a registry.
 
+:::note
+The hosted service is not open for sign-up yet. Until it is, the steps
+work on an installation of your own: sign in with
+`oup login --api https://<its platform domain>/api`.
+:::
+
 ## Install oup and sign in
 
 ```sh

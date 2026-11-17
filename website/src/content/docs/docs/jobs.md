@@ -41,11 +41,12 @@ oup job run migrate
 succeeded and 1 when it failed or timed out, so a CI step fails with it.
 
 ```sh
-oup job run migrate --env DRY_RUN=1 -- npm run migrate -- --step 1
+oup job run migrate --env DRY_RUN=1 -- --step 1
 ```
 
-`--env` adds variables to the Run's environment, and the arguments after
-`--` replace the Job's.
+`--env` adds variables to the Run's environment. The arguments after `--`
+replace the Job's arguments and are handed to its command, here
+`npm run migrate --step 1`.
 
 ## How Runs behave
 

@@ -1,6 +1,6 @@
 ---
 title: Static sites
-description: Static site hosting in Germany. A Bucket served at your domain with automatic TLS, SPA fallback, compression and one command to deploy.
+description: Static sites served from Germany. A Bucket at your domain with automatic TLS, SPA fallback, compression and one command to deploy.
 ---
 
 A static site is a Bucket served at a Domain. It is a feature of

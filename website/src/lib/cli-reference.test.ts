@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { cliReference, DOCS_END, DOCS_START } from './cli-reference.js';
+import { DOCS_END, DOCS_START } from '../../../dashboard/src/lib/docs.ts';
+import { cliReference } from './cli-reference.ts';
 
 test('takes what is between the markers and puts frontmatter before it', () => {
     const page = cliReference(`# cli\n\nfor contributors\n\n${DOCS_START}\n\n- \`oup login\`: signs in.\n\n${DOCS_END}\n\n## Releasing\n`);

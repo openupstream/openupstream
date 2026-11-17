@@ -14,8 +14,11 @@ import { cliReference } from './src/lib/cli-reference.ts';
 const cliReferencePage: AstroIntegration = {
     name: 'cli-reference',
     hooks: {
-        'astro:config:setup': () => {
-            const page = cliReference(readFileSync(new URL('../cli/README.md', import.meta.url), 'utf8'));
+        'astro:config:setup': ({ addWatchFile }) => {
+            const readme = new URL('../cli/README.md', import.meta.url);
+            // `astro dev` starts again, and so writes the page again, when the README changes.
+            addWatchFile(readme);
+            const page = cliReference(readFileSync(readme, 'utf8'));
             if (!page.ok) {
                 throw new Error(page.error);
             }

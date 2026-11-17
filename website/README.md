@@ -16,8 +16,9 @@ question 24).
 ## Writing
 
 - Plain Markdown (`.md`) with YAML frontmatter; `title` and `description`
-  are required by convention, and the build fails on frontmatter the
-  schema does not know.
+  are required by convention. The build fails on frontmatter that does not
+  fit the schema (no `title`, a value of the wrong kind); a key the schema
+  does not know is ignored, so check the spelling of optional ones.
 - Use the terms of `GLOSSARY.md`. Product pages speak to someone deciding,
   the docs to someone already using the product; neither points into
   `ARCHITECTURE.md`, which a reader of the site does not have.

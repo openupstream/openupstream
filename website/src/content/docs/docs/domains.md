@@ -30,7 +30,9 @@ with its Project.
 3. Ask for verification:
 
    ```ts
-   await client.verifyDomain(projectId, domain.value.id);
+   if (domain.ok) {
+       await client.verifyDomain(projectId, domain.value.id);
+   }
    ```
 
    The record is looked up once, now. A missing record is remembered for up
