@@ -2,7 +2,13 @@
 # on the hosted service is closed, at a host of its own: WAITLIST_DOMAIN is
 # `openupstream.com` for the hosted service, whose dashboard, madAuth and
 # API are at `console.openupstream.com` (platform-routes.yaml). Every path
-# of the host goes to the control plane's waitlist port. Applied by
+# of the host goes to the control plane's waitlist port, unless a Route of
+# the website's Project serves it (decision 132): the Routes operator's
+# rules have priorities from 1000 (operators/src/routes/manifests.ts),
+# above the two catch-all rules here, whose priority is their length. The
+# waitlist's own paths (`/waitlist…`, `/privacy`, `/imprint`) stay the
+# control plane's whatever Routes there are, with priorities far above
+# what a Route's prefix reaches. Applied by
 # infra/dev-cluster/platform.sh with SIGNUP=closed only, and removed again
 # with SIGNUP=open. It uses the hsts, retry and madAuth rate-limit Middlewares and
 # the ServersTransport of platform-routes.yaml; CLUSTER_ISSUER as there.
@@ -38,6 +44,16 @@ metadata:
 spec:
   entryPoints: [websecure]
   routes:
+    - match: Host(`WAITLIST_DOMAIN`) && (PathPrefix(`/waitlist`) || Path(`/privacy`) || Path(`/imprint`)) && (Method(`GET`) || Method(`HEAD`))
+      kind: Rule
+      priority: 1000001
+      middlewares: [{name: hsts}, {name: madauth-rate-limit}, {name: retry-other-pod}]
+      services: [{name: control-plane, port: 8082, serversTransport: fail-fast}]
+    - match: Host(`WAITLIST_DOMAIN`) && (PathPrefix(`/waitlist`) || Path(`/privacy`) || Path(`/imprint`))
+      kind: Rule
+      priority: 1000000
+      middlewares: [{name: hsts}, {name: waitlist-rate-limit}]
+      services: [{name: control-plane, port: 8082, serversTransport: fail-fast}]
     - match: Host(`WAITLIST_DOMAIN`) && (Method(`GET`) || Method(`HEAD`))
       kind: Rule
       middlewares: [{name: hsts}, {name: madauth-rate-limit}, {name: retry-other-pod}]

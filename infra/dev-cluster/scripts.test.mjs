@@ -172,6 +172,15 @@ test('platform.sh with SIGNUP=closed needs a waitlist host other than the platfo
     }
 });
 
+test("platform.sh refuses a WEBSITE_PROJECT_ID that is not a Project's id, before it changes anything", () => {
+    for (const id of ['website', '7b0c1c0e-5d0a-4a43-9f3e']) {
+        const { status, stderr, log } = run('./platform.sh', { LAYOUT_STUB: 'multi-node', WEBSITE_PROJECT_ID: id });
+        assert.notEqual(status, 0);
+        assert.match(stderr, /WEBSITE_PROJECT_ID must be the website Project's id/);
+        assert.equal(log, '');
+    }
+});
+
 test('install-multi-node.sh refuses a cluster without a node in every Site', () => {
     for (const sites of ['hetzner-fsn1', 'hetzner-fsn1 ovh-lim']) {
         const { status, stderr, log } = run('./install-multi-node.sh', { SITES_STUB: sites });

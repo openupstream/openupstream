@@ -104,6 +104,8 @@ export interface ApiDeps {
     readonly platformDomain: string;
     /** The waitlist's host, when it is served (decision 123): ours as well. */
     readonly waitlistDomain?: string;
+    /** The one Project that may claim the waitlist's host, with the TXT proof like any claim: the website's (decision 132). */
+    readonly websiteProjectId?: string;
     /** The platform's Prometheus, for what Resources use now (decision 124); without it nothing is measured. */
     readonly prometheus?: PrometheusQuery;
     /** How to read a Database's disk use (config.ts, `databaseVolumes`); `dedicated` when not given. */
@@ -740,7 +742,8 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         const { hostname } = input.data;
         const ours = [deps.customerDomain, deps.platformDomain, ...(deps.waitlistDomain === undefined ? [] : [deps.waitlistDomain])];
-        if (isReserved(hostname, ours)) {
+        const website = hostname === deps.waitlistDomain && project.id === deps.websiteProjectId;
+        if (isReserved(hostname, ours) && !website) {
             return c.json({ error: `hostnames under ${deps.customerDomain} and ${deps.platformDomain} are the platform's` }, 400);
         }
         const created = await createCustomDomain(pool, project.id, hostname);

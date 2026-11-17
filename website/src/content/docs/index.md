@@ -5,9 +5,12 @@ template: splash
 hero:
   tagline: Open source cloud infrastructure, hosted in the EU. Postgres, object storage, static sites and containers, in three sites in Germany.
   actions:
+    - text: Join the waitlist
+      link: /waitlist
+      icon: right-arrow
     - text: Read the docs
       link: /docs/
-      icon: right-arrow
+      variant: secondary
     - text: Source on GitHub
       link: https://github.com/openupstream/openupstream
       icon: external
@@ -15,7 +18,8 @@ hero:
 ---
 
 :::note[Status: pre-alpha]
-The hosted service is not open for sign-up yet. These pages describe
+The hosted service is not open for sign-up yet.
+[Join the waitlist](/waitlist) to hear when it opens. These pages describe
 version 1 as it is being built.
 :::
 

@@ -844,7 +844,7 @@ async function secret(args: string[]): Promise<void> {
 /**
  * `oup bucket`: the linked Project's Buckets. Only `show-access-key` prints
  * the Bucket's secret, and `export-env` writes it into a file without
- * showing it (decision 132).
+ * showing it (decision 133).
  */
 async function bucket(args: string[]): Promise<void> {
     const [verb, ...rest] = args;

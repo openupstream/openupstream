@@ -411,7 +411,7 @@ To close it, as the hosted service does until it can invoice:
    compute nodes and requests its certificate.
    `SIGNUP_ALLOW` takes addresses and `@domains`, comma-separated. madAuth
    now refuses everyone else, with a message that points to
-   `https://$WAITLIST_DOMAIN`, where the waitlist page takes e-mail
+   `https://$WAITLIST_DOMAIN/waitlist`, where the waitlist page takes e-mail
    addresses (double opt-in, through SES as in section 6; `MAIL=log`
    writes the confirmation links to the control plane's log instead). It
    rolls out madAuth and the control plane when their settings changed.
@@ -424,6 +424,13 @@ waitlist route and its certificate; remove its DNS record with
 `DNS_DOMAIN=$WAITLIST_DOMAIN DNS_NAMES=@ infra/dev-cluster/dns.sh --delete`). The addresses stay in the table
 `waitlist` of the control plane's Database: write to the confirmed ones
 once, then delete them, as the privacy notice promises.
+
+Where the website is served at that host (section 11), keep the DNS
+record: deleting it takes the website down. The waitlist's route goes with
+`SIGNUP=open`, and with it `/waitlist`, `/privacy` and `/imprint`, which
+the website links to: give the website an Impressum and a privacy notice
+of its own first, and change its links and its "Join the waitlist" button
+(`website/README.md`).
 
 ## 10. Monitoring: alerts and the dead man's switch
 
@@ -470,6 +477,51 @@ sent at all.
    Grafana is at `kubectl -n monitoring port-forward
    svc/kube-prometheus-stack-grafana 3000:80`, user `admin`, with the
    password the script prints how to read.
+
+## 11. The website
+
+Only for the hosted service: `website/` is `openupstream.com`, with pages
+that name its hostnames. It is served at the waitlist's host from a Bucket
+of an ordinary Project, and the waitlist keeps `/waitlist`, `/privacy` and
+`/imprint` (ARCHITECTURE.md, decisions 130 and 132). It needs section 9
+done with `SIGNUP=closed`. Unlike the sections above, these steps were
+written with the change and have not been done for the hosted service
+yet; correct them when they are.
+
+1. **A Project and a Bucket**, signed in as a Member of an Account of
+   yours that may create Resources:
+
+   ```bash
+   oup project create website --link
+   ```
+
+   Create a Bucket on the dashboard's Project page; its name is unique
+   across all Projects. `oup project list` shows the Project's id.
+2. **Name the Project to the control plane**, so that it alone may claim
+   the waitlist's host, by running `platform.sh` again with the settings of
+   section 9 and `WEBSITE_PROJECT_ID=<the Project's id>`.
+3. **Claim the host** on the dashboard's Project page (Domains), publish
+   the TXT record it names at `_openupstream.<WAITLIST_DOMAIN>` in the
+   bunny.net zone, and verify. The host already points at the compute
+   nodes, so it needs no CNAME.
+4. **Add a Route** for `/` to the Bucket, without SPA fallback. The Domain
+   gets a certificate of its own with it.
+5. **On GitHub**, in the repository's settings: the variables
+   `WEBSITE_PROJECT` (the Project's id) and `WEBSITE_BUCKET`; an
+   Environment `website` that accepts only the branch `main`, with the
+   secret `WEBSITE_API_KEY`, an API key of that Member with the scope
+   `openupstream:write`. Create the key in madAuth and paste it into the
+   secret's field; it is shown once.
+6. **Deploy**: run the workflow "Website" by hand once (Actions → Website →
+   Run workflow). From then on it runs on every merge to main that changes
+   the site.
+7. **Check it**: `https://<WAITLIST_DOMAIN>/` shows the website,
+   `/waitlist` the form, and a path the site does not have a 404.
+
+   ```bash
+   curl -sI https://openupstream.com/ | head -1
+   curl -s https://openupstream.com/waitlist | grep -c 'action="/waitlist"'
+   ```
 
 ## Coming with build step 2
 
