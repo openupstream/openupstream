@@ -60,6 +60,14 @@ test('with instances, every running copy below its Resource', () => {
     ]);
 });
 
+test('the instances of all Resources share their columns', () => {
+    const replica = { ...usage.resources[0]!.instances[0]!, name: 'a', role: 'replica' as const, storageBytes: null };
+    const both: ProjectUsage = { ...usage, resources: [usage.resources[0]!, { ...usage.resources[0]!, kind: 'service', name: 'web', instances: [replica] }] };
+    const lines = formatUsage(both, 'shop', { instances: true });
+    assert.equal(lines[2], '    database 1       hetzner-fsn1  running                 0.01 CPU  80.0 MB  167 MB');
+    assert.equal(lines[5], '    replica a        hetzner-fsn1  running                 0.01 CPU  80.0 MB  -');
+});
+
 test('nothing to show, and nothing measured', () => {
     assert.deepEqual(formatUsage({ ...usage, resources: [] }, 'shop', { instances: false }), ['No Resources in shop.']);
     assert.match(formatUsage({ ...usage, measured: false }, 'shop', { instances: false }).at(-1) ?? '', /not measured right now/);

@@ -65,8 +65,14 @@ export const formatUsage = (usage: ProjectUsage, project: string, options: { rea
     }
     const header = ['KIND', 'NAME', 'CPU', 'MEMORY', 'STORAGE'];
     const rows = table([header, ...usage.resources.map(resourceRow)]);
+    // One table for the instances of all Resources, so their columns line up down the page.
+    const instanceLines = table(usage.resources.flatMap((resource) => resource.instances.map(instanceRow)), '    ');
+    const firstOf = usage.resources.map((_, index) => usage.resources.slice(0, index).reduce((sum, resource) => sum + resource.instances.length, 0));
     const lines = options.instances
-        ? [rows[0] ?? '', ...usage.resources.flatMap((resource, index) => [rows[index + 1] ?? '', ...table(resource.instances.map(instanceRow), '    ')])]
+        ? [
+              rows[0] ?? '',
+              ...usage.resources.flatMap((resource, index) => [rows[index + 1] ?? '', ...instanceLines.slice(firstOf[index] ?? 0, (firstOf[index] ?? 0) + resource.instances.length)]),
+          ]
         : rows;
     return [
         ...lines,
