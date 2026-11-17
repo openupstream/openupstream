@@ -11,6 +11,7 @@
     "operators",
     "cli",
     "dashboard",
+    "website",
     "examples"
   ],
   "scripts": {
@@ -20,6 +21,7 @@
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "dev:control-plane": "npm run dev -w control-plane",
-    "dev:dashboard": "npm run dev -w dashboard"
+    "dev:dashboard": "npm run dev -w dashboard",
+    "dev:website": "npm run dev -w website"
   }
 }

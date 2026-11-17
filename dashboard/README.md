@@ -29,7 +29,7 @@ What it does now:
     arguments and variables are given to `oup` (decision 129).
   - Secrets: names with the time their value was set, delete. A value is
     set with `oup secret set`, never typed into the page (decision 129).
-  - Logs of a Service and of a run: a live tail (decision 130), open only
+  - Logs of a Service and of a run: a live tail (decision 131), open only
     while its "Logs" is and the tab is looked at; the newest 2000 lines.
   - Buckets: list with the S3 endpoint and the addresses Routes serve them
     at, create, delete. A Bucket's key is not shown and never fetched

@@ -25,7 +25,7 @@ type State = 'following' | 'ended' | 'waiting' | 'paused' | string;
 
 /**
  * The last lines of a log and then the new ones as they are written (a
- * live tail, decision 130), for as long as this is shown and the tab is
+ * live tail, decision 131), for as long as this is shown and the tab is
  * looked at. Nothing is kept by the platform (decision 21): what a pod
  * wrote before it was replaced is gone.
  *
