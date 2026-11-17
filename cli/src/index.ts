@@ -21,13 +21,15 @@
  *   oup job logs <name> [<run>] [--tail <n>] [-f] [--timestamps]   the newest run by default
  *   oup secret list | set <NAME> | delete <NAME>   a value is read from stdin
  *   oup bucket list | create <name> | show <name> | show-access-key <name> | export-env <name> [--file <path>] | delete <name>
+ *   oup domain list | add <hostname> | verify <hostname> | delete <hostname>
+ *   oup route list | add <address> --bucket <name> [--spa] | add <address> --service <name> | delete <address>
  *   oup site deploy <dir> --bucket <name> [--keep] [--force]
  *   oup version
  *
- * Database, service, job, secret and bucket commands act on the linked Project; `--project`
+ * Database, service, job, secret, bucket, domain and route commands act on the linked Project; `--project`
  * or `OUP_PROJECT` names another.
  *
- * Planned (ARCHITECTURE.md build order): oup routes, oup usage.
+ * Planned (ARCHITECTURE.md build order): oup usage.
  *
  * `OUP_API_KEY` (a madAuth API key) replaces `oup login`, e.g. in CI, with
  * `OUP_API_URL` for another API than https://console.openupstream.com/api.
@@ -46,12 +48,15 @@ import {
     type ApiResult,
     type Bucket,
     type BucketDetails,
+    type Domain,
     type JobDetails,
     type LogEntry,
     OpenUpstreamClient,
     type Project,
     type RegistryAuth,
+    type Route,
     SDK_VERSION,
+    type ServiceDetails,
     type Site,
     cliLogin,
 } from '@openupstream/sdk';
@@ -76,6 +81,7 @@ import { formatLogEntry, parseTail } from './logs.js';
 import { DATABASE_DEFAULTS, formatDatabases, growthOf, growthSettings, planRestore } from './databases.js';
 import { type DesiredService, formatServices, planServiceDeploy, waitUntilRunning } from './services.js';
 import { LISTEN_HOST, connectionUrl, listen, parseAccess, parsePort, portFree, prepareRole, serveTunnel } from './proxy.js';
+import { dnsRecords, domainNamed, formatDomains, formatRoutes, hostnameOf, hostnameProblem, ingressOf, parseAddress, routeInput } from './routes.js';
 import { apiAccess } from './session.js';
 import { readSecretValue } from './stdin.js';
 import { waitUntil } from './wait.js';
@@ -119,10 +125,19 @@ const USAGE = `usage:
   oup bucket show-access-key <name>           (prints the Bucket's secret access key)
   oup bucket export-env <name> [--file <path>] (writes it into an env file, default .env)
   oup bucket delete <name>
+  oup domain list
+  oup domain add <hostname>                    (a custom domain; prints the DNS records to publish)
+  oup domain verify <hostname>
+  oup domain delete <hostname>                 (and its Routes)
+  oup route list
+  oup route add <address> --bucket <name> [--spa]
+  oup route add <address> --service <name>
+  oup route delete <address>
+               <address> is <hostname>/<path>, or /<path> alone for the Project's default Domain
   oup site deploy <dir> --bucket <name> [--keep] [--force]
   oup version
 
-Database, service, job, secret and bucket commands take --project <name|id>; without
+Database, service, job, secret, bucket, domain and route commands take --project <name|id>; without
 it, the Project linked to this directory (oup link) or OUP_PROJECT.
 
 pg create gives a Database 256 MB and 1 GB unless told otherwise. pg restore
@@ -999,6 +1014,113 @@ async function bucket(args: string[]): Promise<void> {
     }
 }
 
+/** `oup domain`: the linked Project's Domains; a custom one is claimed, proven with a DNS record, and deleted (decision 135). */
+async function domain(args: string[]): Promise<void> {
+    const [verb, ...rest] = args;
+    const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { project: { type: 'string' } } });
+    const [typed] = positionals;
+    if (verb === undefined || !['list', 'add', 'verify', 'delete'].includes(verb) || (verb !== 'list' && typed === undefined)) {
+        return fail(USAGE);
+    }
+    const { client, project } = await inProject(values.project);
+    const listed = await client.listDomains(project.id);
+    const domains = listed.ok ? listed.value : fail(listed.error.message);
+    if (verb === 'list') {
+        console.log(formatDomains(domains).join('\n'));
+        return;
+    }
+    const hostname = hostnameOf(typed as string);
+    const records = (claimed: Domain): string => dnsRecords(claimed, ingressOf(domains)).join('\n');
+    if (verb === 'add') {
+        const problem = hostnameProblem(hostname);
+        if (problem !== undefined) {
+            return fail(problem);
+        }
+        const created = await client.createDomain(project.id, { hostname });
+        if (!created.ok) {
+            return fail(created.error.message);
+        }
+        console.log(`Added ${hostname} to ${project.name}. Publish these DNS records, then run: oup domain verify ${hostname}\n${records(created.value)}`);
+        console.log('The TXT record proves the domain is yours; the CNAME brings its traffic here. Publish the CNAME before the first Route: the certificate is requested then.');
+        return;
+    }
+    const found = domainNamed(domains, hostname, project.name);
+    if (!found.ok) {
+        return fail(found.error);
+    }
+    if (verb === 'verify') {
+        if (found.value.kind === 'default' || found.value.verification.state === 'verified') {
+            console.log(`${hostname} is ${found.value.kind === 'default' ? "the Project's default Domain and needs no proof" : 'verified already'}.`);
+            return;
+        }
+        const verified = await client.verifyDomain(project.id, found.value.id);
+        return verified.ok ? console.log(`${hostname} is verified: its Routes are served.`) : fail(`${verified.error.message}\n${records(found.value)}`);
+    }
+    const deleted = await client.deleteDomain(project.id, found.value.id);
+    return deleted.ok ? console.log(`Deleted ${hostname} and its Routes from ${project.name}.`) : fail(deleted.error.message);
+}
+
+/** `oup route`: what is served where. A Route is named by its address, `<hostname>/<path>`, or `/<path>` on the default Domain. */
+async function route(args: string[]): Promise<void> {
+    const [verb, ...rest] = args;
+    const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { project: { type: 'string' }, bucket: { type: 'string' }, service: { type: 'string' }, spa: { type: 'boolean' } },
+    });
+    const [address] = positionals;
+    const target = values.bucket !== undefined || values.service !== undefined || values.spa !== undefined;
+    if (verb === undefined || !['list', 'add', 'delete'].includes(verb) || (verb !== 'list' && address === undefined) || (verb !== 'add' && target)) {
+        return fail(USAGE);
+    }
+    const { client, project } = await inProject(values.project);
+    const listed = await client.listDomains(project.id);
+    const domains = listed.ok ? listed.value : fail(listed.error.message);
+    const routesOf = async (domainId: string): Promise<Route[]> => {
+        const routes = await client.listRoutes(project.id, domainId);
+        return routes.ok ? routes.value : fail(routes.error.message);
+    };
+    const buckets = async (): Promise<Bucket[]> => {
+        const all = await client.listBuckets(project.id);
+        return all.ok ? all.value : fail(all.error.message);
+    };
+    const services = async (): Promise<ServiceDetails[]> => {
+        const all = await client.listServices(project.id);
+        return all.ok ? all.value : fail(all.error.message);
+    };
+    if (verb === 'list') {
+        const [routes, allBuckets, allServices] = await Promise.all([Promise.all(domains.map((each) => routesOf(each.id))), buckets(), services()]);
+        const lines = formatRoutes(domains, Object.fromEntries(domains.map((each, index) => [each.id, routes[index] ?? []])), allBuckets, allServices);
+        console.log(lines.length === 0 ? `No Routes in ${project.name}: every path answers 404.` : lines.join('\n'));
+        return;
+    }
+    const named = parseAddress(address as string, domains, project.name);
+    if (!named.ok) {
+        return fail(named.error);
+    }
+    const { domain: at, pathPrefix } = named.value;
+    const where = `${at.hostname}${pathPrefix}`;
+    if (verb === 'add') {
+        const input = routeInput(pathPrefix, values, await buckets(), await services(), project.name);
+        if (!input.ok) {
+            return fail(input.error);
+        }
+        const created = await client.createRoute(project.id, at.id, input.value);
+        if (!created.ok) {
+            return fail(created.error.message);
+        }
+        const pending = at.kind === 'custom' && at.verification.state === 'pending';
+        console.log(pending ? `Added the Route ${where}. It is served once the Domain is verified: oup domain verify ${at.hostname}` : `Added the Route: https://${where} is served within a minute.`);
+        return;
+    }
+    const existing = (await routesOf(at.id)).find((candidate) => candidate.pathPrefix === pathPrefix);
+    if (existing === undefined) {
+        return fail(`no Route ${where} in ${project.name}; oup route list shows them`);
+    }
+    const deleted = await client.deleteRoute(project.id, at.id, existing.id);
+    return deleted.ok ? console.log(`Deleted the Route ${where}; what it went to stays.`) : fail(deleted.error.message);
+}
+
 async function siteDeploy(args: string[]): Promise<void> {
     const { values, positionals } = parseArgs({
         args,
@@ -1061,6 +1183,10 @@ const run = async (): Promise<void> => {
             return secret(rest);
         case 'bucket':
             return bucket(rest);
+        case 'domain':
+            return domain(rest);
+        case 'route':
+            return route(rest);
         case 'site':
             return rest[0] === 'deploy' ? siteDeploy(rest.slice(1)) : fail(USAGE);
         case 'version':

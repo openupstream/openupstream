@@ -6,7 +6,9 @@ description: Use a Project's default hostname, add a custom domain with a TXT re
 A **Domain** is a hostname that serves a Project. A **Route** sends
 everything below a path prefix of a Domain to a Bucket or a Service of the
 same Project. Domains and Routes are managed on the dashboard's Project
-page, or through the API, here with the [SDK](/docs/reference/sdk/).
+page, with `oup domain` and `oup route`
+([command line reference](/docs/reference/cli/)), or through the API, shown
+here with the [SDK](/docs/reference/sdk/) next to the commands.
 
 ## The default hostname
 
@@ -16,7 +18,7 @@ with its Project.
 
 ## Add a custom domain
 
-1. Claim the hostname:
+1. Claim the hostname, with `oup domain add www.example.com` or:
 
    ```ts
    const domain = await client.createDomain(projectId, { hostname: 'www.example.com' });
@@ -27,7 +29,7 @@ with its Project.
 2. Publish that TXT record at `_openupstream.www.example.com`, and a CNAME
    from `www.example.com` to `ingress.openupstream.app`.
 
-3. Ask for verification:
+3. Ask for verification, with `oup domain verify www.example.com` or:
 
    ```ts
    if (domain.ok) {
@@ -56,6 +58,15 @@ Things to know:
   record.
 
 ## Routes
+
+```sh
+oup route add www.example.com --bucket my-site --spa
+oup route add www.example.com/api --service api
+oup route add /docs --bucket my-docs
+```
+
+An address is the hostname with the path; a path alone, as in the last
+line, means the Project's default Domain. The same through the API:
 
 ```ts
 await client.createRoute(projectId, domainId, { pathPrefix: '/', bucketId, spaFallback: true });
