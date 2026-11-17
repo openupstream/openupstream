@@ -16,10 +16,15 @@ What it does now:
   while it is in front:
   - Databases: list with state, create (name, memory, storage, Site),
     connection details, resize, delete
+  - Services: list with state, image and digest; deploy (name, image,
+    port or none for a worker, replicas, memory, CPU, Site), change,
+    redeploy what the tag points at now, delete. Public images only: a
+    private registry's password is given to `oup service deploy`, never
+    typed into the page (decision 127).
   - what every Resource uses now, from the API's `/usage` (decision 124):
     CPU, memory and storage against what it was given, and its instances
-    with their Site, state and restarts. Services, Jobs and Buckets are
-    shown this way and still created with `oup` or the API.
+    with their Site, state and restarts. Jobs and Buckets are shown this
+    way and still created with `oup` or the API.
 
 - `/cli`: how to use `oup`, for anyone, signed in or not (decision 125).
   The text is the part of `cli/README.md` between its `docs` comments, read
@@ -29,7 +34,7 @@ What it does now:
   other than the hosted service the page names its own API address, in a
   note and in the example's `oup login --api …`.
 
-Forms for Buckets, Domains, Services, Jobs and Secrets follow.
+Forms for Buckets, Domains, Jobs and Secrets, and a Service's logs, follow.
 
 ## How it reaches madAuth and the API
 
