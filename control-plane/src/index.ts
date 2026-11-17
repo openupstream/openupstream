@@ -135,7 +135,7 @@ async function main(): Promise<void> {
         routesCallers: config.value.routesCallers,
         servicesCallers: config.value.servicesCallers,
         jobsCallers: config.value.jobsCallers,
-        listDatabaseRows: () => listDatabaseRows(pool),
+        listDatabaseRows: () => listDatabaseRows(pool, config.value.customerDomain),
         listDomainRoutings: () => listDomainRoutings(pool),
         listServiceRows: () => listServiceRows(pool),
         listJobRows: () => listJobRows(pool),

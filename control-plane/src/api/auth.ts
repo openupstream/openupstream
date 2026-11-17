@@ -26,6 +26,8 @@ export interface Identity {
     readonly email: string | undefined;
     /** An API key's scopes; undefined for a session, which may do everything. */
     readonly scopes: readonly string[] | undefined;
+    /** madAuth's id of the API key, the same for the key's life; only for an API key. */
+    readonly apiKeyId?: string;
 }
 
 export type AuthError =
@@ -98,7 +100,7 @@ export const keysFrom = (source: { readonly jwksUrl?: string; readonly jwks?: st
 
 interface VerifiedKey {
     readonly user?: { readonly id?: unknown; readonly email?: unknown };
-    readonly apiKey?: { readonly scopes?: unknown };
+    readonly apiKey?: { readonly id?: unknown; readonly scopes?: unknown };
 }
 
 /** How long an answer from madAuth is reused, like madAuth's own verifier. */
@@ -139,10 +141,12 @@ export function apiKeyVerifier(
         if (response.value.status !== 200 || typeof subject !== 'string' || !Array.isArray(scopes)) {
             return err({ kind: 'unavailable', reason: `madAuth answered ${response.value.status}` });
         }
+        const keyId = body?.apiKey?.id;
         const identity: Identity = {
             subject,
             email: typeof body?.user?.email === 'string' ? body.user.email : undefined,
             scopes: scopes.filter((scope): scope is string => typeof scope === 'string'),
+            ...(typeof keyId === 'string' && keyId !== '' ? { apiKeyId: keyId } : {}),
         };
         if (cache.size >= CACHE_LIMIT) {
             cache.clear();

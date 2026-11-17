@@ -22,6 +22,7 @@ import {
     databaseManifests,
     restoredDatabaseManifests,
 } from './manifests.js';
+import { type TunnelSettings, tunnelObjects } from './tunnel.js';
 
 export type { DatabaseRow };
 
@@ -31,7 +32,8 @@ export type ApplyChain = readonly KubeObject[];
 export interface DatabasePlan {
     /**
      * Per Project: its namespace and NetworkPolicy, the policy that lets
-     * Prometheus scrape its Databases, then its backup credentials. Applied first.
+     * Prometheus scrape its Databases, then its backup credentials, and its
+     * database tunnel once a caller has a role there. Applied first.
      */
     readonly projects: readonly ApplyChain[];
     /** Per Database: ObjectStore, Cluster, Pooler, ScheduledBackup. */
@@ -68,23 +70,29 @@ const uniqueBy = <T>(items: readonly T[], key: (item: T) => string): T[] => [
  */
 const manifestsFor = (row: DatabaseRow, config: DatabaseConfig): Result<DatabaseManifests, RestoreError[]> => {
     const restore = row.database.restoredFrom;
+    const roles = row.roles ?? [];
     return restore === undefined || row.restoring !== true
-        ? databaseManifests(row.project, row.database, config)
-        : restoredDatabaseManifests(row.project, row.database, config, {
-              database: { id: restore.databaseId, projectId: row.project.id },
-              targetTime: restore.targetTime,
-          });
+        ? databaseManifests(row.project, row.database, config, roles)
+        : restoredDatabaseManifests(
+              row.project,
+              row.database,
+              config,
+              { database: { id: restore.databaseId, projectId: row.project.id }, targetTime: restore.targetTime },
+              roles,
+          );
 };
 
 /**
  * What to apply so the cluster runs every Database in `rows`.
  * `backupCredentials` is the `data` of the platform's backup credentials
- * Secret.
+ * Secret. Without `tunnel` no Project gets a database tunnel; the roles
+ * are added to the Clusters all the same.
  */
 export function planDatabases(
     rows: readonly DatabaseRow[],
     config: DatabaseConfig,
     backupCredentials: Readonly<Record<string, string>>,
+    tunnel?: TunnelSettings,
 ): DatabasePlan {
     const results = rows.map((row) => ({ row, result: manifestsFor(row, config) }));
     const valid = results.flatMap(({ row, result }) => (result.ok ? [{ row, manifests: result.value }] : []));
@@ -92,12 +100,17 @@ export function planDatabases(
         valid.map(({ row }) => row.project),
         (project) => project.id,
     );
+    const tunnelHosts = new Map(rows.flatMap((row) => (row.tunnelHostname === undefined ? [] : [[row.project.id, row.tunnelHostname] as const])));
     return {
-        projects: projects.map((project) => [
-            ...projectObjectsFor(project),
-            databaseMetricsPolicyFor(project.id),
-            backupSecretFor(project, config, backupCredentials),
-        ]),
+        projects: projects.map((project) => {
+            const hostname = tunnelHosts.get(project.id);
+            return [
+                ...projectObjectsFor(project),
+                databaseMetricsPolicyFor(project.id),
+                backupSecretFor(project, config, backupCredentials),
+                ...(tunnel === undefined || hostname === undefined ? [] : tunnelObjects(project.id, hostname, tunnel)),
+            ];
+        }),
         databases: valid.map(({ manifests }) => [
             manifests.objectStore,
             manifests.cluster,
@@ -131,6 +144,8 @@ export interface ReconcileOptions {
     readonly backupCredentials: { readonly namespace: string; readonly name: string };
     /** Server-side dry run: the API server validates everything, nothing is stored. */
     readonly dryRun?: boolean;
+    /** Where Projects' database tunnels run from (decision 126); without it, none is applied. */
+    readonly tunnel?: TunnelSettings;
 }
 
 /** One pass: read the backup credentials, plan, apply. Never throws. */
@@ -152,7 +167,7 @@ export async function reconcileDatabases(
     if (missingKeys.length > 0) {
         return err({ kind: 'incomplete-backup-credentials', namespace, name, missingKeys });
     }
-    const plan = planDatabases(rows, config, credentials.value);
+    const plan = planDatabases(rows, config, credentials.value, options.tunnel);
     const dryRun = options.dryRun ?? false;
 
     // Chains run side by side, each in order: a namespace exists before its

@@ -35,7 +35,7 @@ const verified = (scopes: string[]) =>
 test('a key madAuth knows acts for its user with the scopes that count now', async () => {
     const { calls, fetcher } = fakeMadauth(() => verified(['openupstream:read']));
     const result = await apiKeyVerifier(MADAUTH, { fetch: fetcher })(KEY);
-    assert.deepEqual(result, { ok: true, value: { subject: 'usr_abc', email: 'a@b.test', scopes: ['openupstream:read'] } });
+    assert.deepEqual(result, { ok: true, value: { subject: 'usr_abc', email: 'a@b.test', scopes: ['openupstream:read'], apiKeyId: 'key_1' } });
     assert.deepEqual(calls, [{ url: `${MADAUTH}/auth/api-keys/verify`, method: 'POST', authorization: `Bearer ${KEY}` }]);
 });
 

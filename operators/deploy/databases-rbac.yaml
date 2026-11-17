@@ -4,7 +4,11 @@
 # Database is the control plane's explicit step (ARCHITECTURE.md, decision 48).
 #
 # Secrets are cluster-wide because Project namespaces are created at run
-# time and RBAC cannot select namespaces by name pattern.
+# time and RBAC cannot select namespaces by name pattern. The same goes for
+# a Project's database tunnel (decision 126, src/databases/tunnel.ts): its
+# forwarder's Deployment and Service, and the Traefik IngressRoute and
+# ForwardAuth Middleware in front of it. The operator never reads the
+# callers' role Secrets; the control plane writes them.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -17,7 +21,13 @@ metadata:
   name: openupstream-databases-operator
 rules:
   - apiGroups: [""]
-    resources: [namespaces, secrets]
+    resources: [namespaces, secrets, services]
+    verbs: [create, patch]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [create, patch]
+  - apiGroups: [traefik.io]
+    resources: [ingressroutes, middlewares]
     verbs: [create, patch]
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]

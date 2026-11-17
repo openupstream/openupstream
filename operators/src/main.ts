@@ -12,7 +12,9 @@
  * - INTERVAL_SECONDS: time between passes, default 30
  * - for `databases`: DATABASE_CONFIG_PATH, a DatabaseConfig as JSON (a
  *   ConfigMap), and BACKUP_CREDENTIALS, `<namespace>/<name>` of the backup
- *   credentials Secret
+ *   credentials Secret; for Projects' database tunnels (decision 126) both
+ *   FORWARDER_IMAGE, this image pinned by digest, and TUNNEL_AUTH_URL, the
+ *   control plane's tunnel check. Without them no tunnel is applied
  * - for `routes`: CLUSTER_ISSUER, the ClusterIssuer of custom domains'
  *   certificates
  */
@@ -69,9 +71,19 @@ const databases = async (): Promise<() => Promise<PassLog>> => {
     }
     const config: DatabaseConfig = JSON.parse(await readFile(required('DATABASE_CONFIG_PATH'), 'utf8'));
     const fetchRows = controlPlaneRows(controlPlaneUrl, token);
+    const [forwarderImage, authUrl] = [process.env['FORWARDER_IMAGE'] ?? '', process.env['TUNNEL_AUTH_URL'] ?? ''];
+    if ((forwarderImage === '') !== (authUrl === '')) {
+        log({ msg: 'FORWARDER_IMAGE and TUNNEL_AUTH_URL go together' });
+        process.exit(1);
+    }
+    const tunnel = forwarderImage === '' ? undefined : { forwarderImage, authUrl };
+    if (tunnel === undefined) {
+        log({ msg: 'no FORWARDER_IMAGE: Projects get no database tunnel' });
+    }
     return () =>
         databasesPass(fetchRows, kube, config, {
             backupCredentials: { namespace: credentialsNamespace, name: credentialsName },
+            ...(tunnel === undefined ? {} : { tunnel }),
         });
 };
 const routes = (): (() => Promise<PassLog>) => {

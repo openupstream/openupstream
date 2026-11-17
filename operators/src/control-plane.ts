@@ -31,7 +31,8 @@ const describe = (error: unknown): string =>
         : String(error);
 
 /**
- * Only the shape: each entry has a project and a database object with ids.
+ * Only the shape: each entry has a project and a database object with ids,
+ * and its roles, if any, are objects with an id and a level as strings.
  * Whether a row can run is databaseManifests' to decide, per row.
  */
 const isRow = (value: unknown): value is DatabaseRow =>
@@ -39,7 +40,11 @@ const isRow = (value: unknown): value is DatabaseRow =>
     isObject(value['project']) &&
     isObject(value['database']) &&
     typeof value['project']['id'] === 'string' &&
-    typeof value['database']['id'] === 'string';
+    typeof value['database']['id'] === 'string' &&
+    (value['roles'] === undefined ||
+        (Array.isArray(value['roles']) &&
+            value['roles'].every((role: unknown) => isObject(role) && typeof role['id'] === 'string' && typeof role['access'] === 'string'))) &&
+    (value['tunnelHostname'] === undefined || typeof value['tunnelHostname'] === 'string');
 
 export const parseRows = (body: unknown): Result<DatabaseRow[], FetchRowsError> =>
     Array.isArray(body) && body.every(isRow)

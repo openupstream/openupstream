@@ -1,10 +1,11 @@
 # ADR-0005: Database access from outside the cluster
 
 Date: 2026-11-17
-Status: proposed
+Status: accepted
 
-Proposed until a session on a dev cluster has checked the points under
-"To verify". Nothing of it is built.
+Built on 2026-11-17 (SDK 0.5.0, `oup` 0.4.0), run end to end against
+Postgres 17 and PgBouncer in Docker and then on the Hetzner dev cluster the
+same day; see "Verified" for what each showed and what is still open.
 
 ## Context
 
@@ -72,8 +73,15 @@ Three ways to make a Member's role act as `app` were considered:
    to the Database. The Member points any Postgres client at `localhost`.
    Nothing is installed besides `oup`, and nothing changes in the machine's
    network settings.
-2. **The tunnel is a WebSocket through Traefik on port 443.** No new port
-   is opened on the nodes. `oup` sends the token it uses for the API.
+2. **The tunnel is a WebSocket through Traefik on port 443**, at a host
+   of the Project's own under the customer domain,
+   `pg-<project id>.<customer domain>`. No new port is opened on the
+   nodes, and the wildcard DNS record and certificate of the default
+   Domains cover the host. `oup` sends the token it uses for the API and
+   learns the address from the API. No default Domain may take a name of
+   that form. The platform's host keeps to the platform's namespace, and
+   a Project's data stays under the customer domain, as with its Routes
+   and Buckets.
 3. **One forwarder pod per Project**, in the Project's namespace, created
    when the Project first needs it. It copies bytes between the WebSocket
    and a Database's Pooler or primary (point 5) and does nothing else: it
@@ -85,10 +93,9 @@ Three ways to make a Member's role act as `app` were considered:
    the Project's Poolers, its Databases' instances on port 5432 and DNS.
 4. **Traefik asks the control plane before it forwards.** A ForwardAuth
    middleware on the tunnel's route calls the control plane, which checks
-   that the token belongs to a Member of the Project's Account (a caller
-   with an API key: see "To verify"). A request that fails the check
-   never reaches the Project's namespace. The check happens once, when
-   the WebSocket opens.
+   that the token belongs to a Member of the Project's Account, or is an
+   API key of one. A request that fails the check never reaches the
+   Project's namespace. The check happens once, when the WebSocket opens.
 5. **The Pooler for `read` and `write`, the primary for `owner`.** At
    `read` and `write` the tunnel reaches a Database the way a Service
    does, through PgBouncer in transaction mode. At `owner` it reaches the
@@ -97,9 +104,10 @@ Three ways to make a Member's role act as `app` were considered:
    picks the target from the level. An `owner` role may hold five
    connections at a time (the role's connection limit), since each is a
    Postgres backend.
-6. **Postgres roles per Member, Database and access level**, not the
-   `app` password. `oup pg proxy --access read|write|owner` picks the
-   level, `read` when nothing is given:
+6. **Postgres roles per caller, Database and access level**, not the
+   `app` password. The caller is a Member, or an API key, which gets
+   roles of its own (point 8). `oup pg proxy --access read|write|owner`
+   picks the level, `read` when nothing is given:
    - `read` may read every table (Postgres's `pg_read_all_data`);
    - `write` may also insert, update and delete rows
      (`pg_write_all_data` on top of `read`'s), but not change the schema;
@@ -112,24 +120,46 @@ Three ways to make a Member's role act as `app` were considered:
      the platform is involved. Postgres still records the Member's role
      as the session's user (`pg_stat_activity`).
 
-   A Member has at most three roles per Database, one per level. The
-   first `oup pg proxy` of a Member for a Database at a level records the
-   role in the control plane; the Databases operator adds it to the
-   Cluster with a generated password, and `oup` prints the connection
-   URL. A role is dropped with the Database and when the Member leaves
-   the Account. Decision 61 stands: the `app` password is still never
-   returned.
+   A caller has at most three roles per Database, one per level. The
+   first `oup pg proxy` of a caller for a Database at a level records the
+   role in the control plane, which generates its password and keeps it
+   encrypted, as it keeps a Project's Secrets. The control plane also
+   writes the Kubernetes Secret in the Project's namespace that
+   CloudNativePG reads the password from, as it writes the Project's
+   other Secrets; the Databases operator adds the role to the Cluster
+   and names that Secret, without seeing the password. `oup` prints the
+   connection URL. The control plane returns the password on every later
+   run, to the role's own caller and no one else, so the URL is the same
+   on every machine and a connection saved in a client keeps working. A
+   role is dropped with the Database and when the Member, or the Member
+   an API key belongs to, leaves the Account. Decision 61 stands: the
+   `app` password is still never returned.
 7. **Every Member picks their own level.** Nothing stops a Member from
    asking for `owner`: the levels guard against mistakes, such as a
    stray `DELETE` while looking at production, not against a colleague.
    Limiting what a given Member may pick needs Member roles (Open
    question 9), which are not part of this decision.
+8. **An API key gets roles of its own**, not those of the Member it
+   belongs to, so a CI run and a person stay apart in Postgres. Asking
+   for a role records one, so a key needs `openupstream:write` at every
+   level, `read` included (decision 64): a key with only
+   `openupstream:read` opens no tunnel.
 
 ## Consequences
 
 - A Member reaches a Database from a laptop with `oup` and a Postgres
-  client. Who connected is known twice: the token at the tunnel, the role
-  in Postgres.
+  client, and a CI run with an API key runs migrations. Who connected is
+  known twice: the token at the tunnel, the role in Postgres.
+- The control plane holds a readable password per role, which the
+  role's own caller can ask for again: a Member gets no other Member's
+  and no key's. It is also in a Secret of the Project's namespace, as
+  the `app` password is. By itself it opens nothing from outside:
+  Postgres is reached only through the tunnel, which wants a token.
+  Inside the cluster it works from the Project's own pods alone.
+- A revoked API key opens no tunnel, but madAuth does not say when a key
+  is revoked, so its roles stay in the Database, unreachable from
+  outside, until the Database goes or a cleanup that asks madAuth is
+  built.
 - Nothing new faces the internet. An attacker without a valid token gets
   an HTTP 401 from Traefik and no Postgres login to guess at.
 - Tools that cannot run `oup` cannot connect: a hosted BI tool, another
@@ -168,7 +198,7 @@ Three ways to make a Member's role act as `app` were considered:
   Who pays for it, and whether a Hold removes it, is open.
 - PgBouncer keeps a pool per role, so every `read` and `write` role can
   hold server connections of its own, at a 256 MB floor: up to two per
-  Member per Database.
+  Member and per API key per Database.
 - Roles have no names and cannot be listed or revoked one by one. Named
   credentials, which could also serve a public endpoint or CI, would be
   a later step.
@@ -182,7 +212,7 @@ Three ways to make a Member's role act as `app` were considered:
   IngressRoute with its middleware, a NetworkPolicy) need an operator to
   apply them and a ClusterRole that grants exactly those.
 
-## To verify
+## Verified
 
 Tried on 2026-11-17 with Postgres 17.11 and CloudNativePG's PgBouncer
 image (1.24.1, transaction mode, `auth_query`) in Docker, without
@@ -201,29 +231,68 @@ CloudNativePG:
   `app` gets a warning at login and stays itself.
 - Acting as `app`, the role changed `app`'s password and `app`'s session
   defaults.
+
+Built, and run on 2026-11-17 against the same images with the forwarder
+(`operators/src/forwarder`) and `oup`'s proxy code (`cli/src/proxy.ts`)
+on this machine, Traefik and the control plane left out:
+
+- An `owner` role added four seconds after `oup` first tried to log in:
+  `oup` waited, set the default and checked it. The session then acted as
+  `app`; a new table belonged to `app`, which read it; an advisory lock a
+  client took and left behind was free for the next one, through the
+  primary. A second start left `app`'s own settings alone (`oup` sets the
+  default only while the role does not act as `app` yet, since
+  `ALTER ROLE CURRENT_USER` would otherwise change `app`).
+- A `read` role through PgBouncer read a table made after it and could
+  not insert; a wrong password was refused.
+- madAuth's answer to an API key (`/auth/api-keys/verify`, 0.7.0-beta.2)
+  names the key with its id, which a role per key needs.
 - Through PgBouncer the setting only reaches server connections opened
   after it, and an advisory lock taken by a client that then left was
   still held by its idle server connection, so another role could not
   take it. Directly, the lock went with the session.
 
-To settle before this is accepted, on a dev cluster where it can be tried:
+On the Hetzner dev cluster on 2026-11-17 (k3s 1.36.5, three Sites, the
+images of the pull request's commit, Traefik 3.7 with Let's Encrypt
+staging), with a user signed up through madAuth, an API key that may
+write and one that may only read, and `oup pg proxy` run from this
+machine:
 
-- CloudNativePG adds a role to a running Cluster and its Pooler accepts
-  it; reconciling the role leaves its default role alone, and the
-  connection limit holds.
-- The primary accepts the forwarder's password login on the read-write
-  Service (CloudNativePG's `pg_hba`), with TLS as a Service's connection
-  has it.
+- The tunnel's objects came with the first role: the forwarder ran under
+  gVisor, CloudNativePG added the role to the running Cluster
+  (`managedRolesStatus` reconciled) and its Pooler accepted it, and the
+  IngressRoute at `pg-<project id>.<customer domain>` was served with the
+  default wildcard certificate.
+- Traefik's ForwardAuth reached the control plane and passed the upgrade
+  through: 101 for the write key at the primary and for a session at the
+  Pooler, 401 without a token, 403 for the read-only key, before the
+  request reached the Project's namespace.
+- At `owner` the session acted as `app` on the primary, not PgBouncer,
+  with a password login and no TLS between forwarder and Postgres (the
+  tunnel has TLS up to Traefik): a new table belonged to `app`, which read
+  it, and an advisory lock left by one session was free for the next. The
+  role had `app` as its only grant and the connection limit 5.
+- The default role stayed after CloudNativePG's operator restarted and
+  reconciled every role again, and after a third role made the instance
+  manager reconcile the roles in the database.
+- A `read` role, whose first start waited 14 s for the operator, read a
+  table created after it and could not insert. A connection through it
+  answered after 5½ minutes idle.
+- Deleting the forwarder's pod ended its tunnels; new ones opened again
+  after 6 s (503 meanwhile, which `oup` retries).
+- Found and fixed: the first `oup pg proxy` in a Project asked before the
+  operator had applied the tunnel's route, got Traefik's own 404 and took
+  it for a refusal. The control plane's check now refuses with 403 only,
+  and `oup` waits out a 404; in a new Project the first start then
+  listened after 18 s.
+- Traefik counts each tunnel as a request (status 0) with 0 bytes, so
+  tunnel traffic is not metered as Egress (decision 16); the forwarder
+  logs each tunnel's bytes.
+
+Still open, outside this decision:
+
 - Whether CloudNativePG sets `app`'s password back to its Secret's after
   a Member at `owner` changed it, and how soon.
-- Which hostname the tunnel's route lives on: the API's or one per
-  Project. Traefik does not route across namespaces.
-- Traefik keeps a WebSocket open for hours, and whether its bytes are
-  counted as Egress like HTTP responses (decision 16).
-- The forwarder runs under the `gvisor` RuntimeClass.
-- How `oup` gets the role's password on a later run. Returning it every
-  time means the control plane keeps it readable; setting a new one per
-  run breaks a second `oup pg proxy` that is still open; keeping it in
-  `oup`'s credentials file ties it to one machine.
-- What a caller with an API key instead of a Member's sign-in gets (a CI
-  run with `OUP_API_KEY`): a role per key, or no tunnel.
+- Tunnels open for hours (5½ minutes idle were tried), and a longest
+  lifetime for one.
+- Metering the tunnel's traffic, and who pays for the forwarder pod.
