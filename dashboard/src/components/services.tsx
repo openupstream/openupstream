@@ -78,7 +78,7 @@ export function ServiceCard(props: {
                 />
             )}
             {usage !== undefined && <Usage usage={usage} />}
-            <Logs source={(client, query, signal) => client.serviceLogs(service.projectId, service.id, query, signal)} />
+            <Logs waits source={(client, query, signal) => client.serviceLogs(service.projectId, service.id, query, signal)} />
         </li>
     );
 }

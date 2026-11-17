@@ -8,24 +8,32 @@ import { api, refused } from '../lib/session';
 /** Opens a log stream: a Service's, or a run's. */
 export type LogSource = (client: OpenUpstreamClient, query: LogQuery, signal: AbortSignal) => Promise<ApiResult<AsyncIterable<LogEntry>>>;
 
+/** How long a log that waits for something to run leaves between two tries. */
+const WAIT_MS = 5_000;
+
 /** How often the lines that arrived are put on the page: a busy container writes more often than is worth drawing. */
 const DRAW_MS = 250;
 
 /**
  * - `following`: the stream is open, new lines appear
  * - `ended`: the API ended it (every pod is gone, or an hour has passed)
+ * - `waiting`: the same for a log that `waits`; it follows again by itself
  * - `paused`: the tab is hidden; it follows again when it is looked at
  * - a string: what the API refused, or why the stream broke
  */
-type State = 'following' | 'ended' | 'paused' | string;
+type State = 'following' | 'ended' | 'waiting' | 'paused' | string;
 
 /**
  * The last lines of a log and then the new ones as they are written (a
  * live tail, decision 130), for as long as this is shown and the tab is
  * looked at. Nothing is kept by the platform (decision 21): what a pod
  * wrote before it was replaced is gone.
+ *
+ * With `waits`, the end of the stream is not the end of the log: a Service
+ * is always on, so when nothing runs (it is being deployed) or an hour has
+ * passed, the log follows again by itself. A run's log ends with the run.
  */
-export function LogView({ source }: { readonly source: LogSource }) {
+export function LogView({ source, waits = false }: { readonly source: LogSource; readonly waits?: boolean }) {
     // The lines shown, and how many older ones were dropped: together a line's number, which stays its own.
     const [{ lines, dropped }, setLog] = useState<{ readonly lines: readonly LogEntry[]; readonly dropped: number }>({ lines: [], dropped: 0 });
     // Whether lines are shown: following again then adds to them and reads only what is written from then on.
@@ -77,13 +85,18 @@ export function LogView({ source }: { readonly source: LogSource }) {
 
     useEffect(() => {
         const controller = new AbortController();
+        let retry: number | undefined;
         const start = () => {
             // What is shown stays: nothing is kept anywhere else. Only what is written from now on is added to it.
             setResumed(shown.current);
             setState('following');
             void follow(controller.signal, shown.current ? { follow: true, tail: 0 } : { follow: true }).then((problem) => {
-                if (!controller.signal.aborted) {
-                    setState(problem ?? 'ended');
+                if (controller.signal.aborted) {
+                    return;
+                }
+                setState(problem ?? (waits ? 'waiting' : 'ended'));
+                if (problem === undefined && waits) {
+                    retry = window.setTimeout(() => setAgain((count) => count + 1), WAIT_MS);
                 }
             });
         };
@@ -92,8 +105,11 @@ export function LogView({ source }: { readonly source: LogSource }) {
             return undefined;
         }
         start();
-        return () => controller.abort();
-    }, [follow, again]);
+        return () => {
+            controller.abort();
+            window.clearTimeout(retry);
+        };
+    }, [follow, again, waits]);
 
     // A hidden tab holds no stream: there are only so many per Account.
     useEffect(() => {
@@ -113,7 +129,7 @@ export function LogView({ source }: { readonly source: LogSource }) {
         <div className="logs">
             <pre ref={box} tabIndex={0}>
                 {lines.length === 0
-                    ? state === 'following'
+                    ? state === 'following' || state === 'waiting'
                         ? 'Nothing written yet.'
                         : 'Nothing was written.'
                     : lines.map((line, index) => (
@@ -124,15 +140,17 @@ export function LogView({ source }: { readonly source: LogSource }) {
                           </span>
                       ))}
             </pre>
-            <small role={state === 'following' || state === 'ended' || state === 'paused' ? undefined : 'alert'}>
+            <small role={state === 'following' || state === 'ended' || state === 'waiting' || state === 'paused' ? undefined : 'alert'}>
                 {state === 'following'
                     ? `Following: new lines appear as they are written.${resumed ? ' What was written while it was not following is not shown.' : ''}`
                     : state === 'paused'
                       ? 'Paused while the tab is hidden.'
-                      : state === 'ended'
-                        ? 'The stream has ended: nothing runs any more, or an hour has passed.'
-                        : state}{' '}
-                {state !== 'following' && state !== 'paused' && (
+                      : state === 'waiting'
+                        ? 'Nothing runs right now. Following again as soon as something does.'
+                        : state === 'ended'
+                          ? 'The stream has ended: nothing runs any more, or an hour has passed.'
+                          : state}{' '}
+                {state !== 'following' && state !== 'paused' && state !== 'waiting' && (
                     <button type="button" className="link" onClick={() => setAgain(again + 1)}>
                         Follow again
                     </button>
@@ -143,12 +161,12 @@ export function LogView({ source }: { readonly source: LogSource }) {
 }
 
 /** A log behind a "Logs" line that opens it: the stream is open only while it is. */
-export function Logs({ source }: { readonly source: LogSource }) {
+export function Logs({ source, waits = false }: { readonly source: LogSource; readonly waits?: boolean }) {
     const [open, setOpen] = useState(false);
     return (
         <details open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
             <summary>Logs</summary>
-            {open && <LogView source={source} />}
+            {open && <LogView source={source} waits={waits} />}
         </details>
     );
 }
