@@ -333,3 +333,23 @@ test('k3s-single-node.sh refuses a NODE_ADDRESS that an installed k3s does not h
     const reinstall = k3s({ K3S_INSTALLED_STUB: '1', EXTERNAL_IP_STUB: '192.168.1.50', NODE_ADDRESS: '100.101.102.103', REINSTALL: '1' });
     assert.match(reinstall.log, /get\.k3s\.io.*--node-external-ip 100\.101\.102\.103/s);
 });
+
+test('S3 requests from Traefik go to nginx in the Garage pods, which gives a request without a body its Content-Length', () => {
+    const garage = readFileSync(join(here, '..', 'garage', 'garage.yaml'), 'utf8');
+    const route = readFileSync(join(here, '..', 'garage', 's3-route.yaml'), 'utf8');
+    // Every rule of the route, and no rule to Garage's own port.
+    const targets = [...route.matchAll(/services: \[\{name: garage, port: (\d+)/g)].map((match) => match[1]);
+    assert.deepEqual(targets, ['3905', '3905']);
+    // That port is nginx: on the Service, on the container, and what nginx listens on.
+    assert.match(garage, /\{name: s3-public, port: 3905, targetPort: s3-public\}/);
+    assert.match(garage, /\{name: s3-public, containerPort: 3905\}/);
+    assert.match(garage, /listen \[::\]:3905 /);
+    assert.match(garage, /server 127\.0\.0\.1:3900;/);
+    // Neither a length nor a transfer encoding: 0. Otherwise what came, which is nothing for a chunked body.
+    assert.match(garage, /map "\$http_content_length\$http_transfer_encoding" \$garage_content_length \{\s+"" +0;\s+default \$http_content_length;\s+\}/);
+    assert.match(garage, /proxy_set_header Content-Length \$garage_content_length;/);
+    // A signature covers the Host and the URI as the client sent them, and a body is not held back.
+    assert.match(garage, /proxy_set_header Host \$http_host;/);
+    assert.match(garage, /proxy_pass http:\/\/garage;/);
+    assert.match(garage, /proxy_request_buffering off;/);
+});

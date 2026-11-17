@@ -87,6 +87,76 @@ data:
     [admin]
     api_bind_addr = "[::]:3903"
 ---
+# nginx in front of Garage's S3 API for requests that come through Traefik
+# (ARCHITECTURE.md, "Object storage"; decision 134). Traefik, as every
+# proxy built on Go's HTTP client, leaves out `Content-Length: 0` when a
+# request has no body. Clients that sign the header (`aws s3 rm`, `aws s3
+# sync --delete`, the MinIO client) are then refused by Garage, which wants
+# every signed header present. nginx puts it back: a request without
+# Content-Length and without Transfer-Encoding has no body, so its length
+# is 0, signed or not. Everything else passes as it came: the URI in its
+# original form (no URI on proxy_pass), the Host, every header, bodies
+# unbuffered. Retries and timeouts stay Traefik's.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: garage-s3-proxy
+  namespace: garage
+data:
+  nginx.conf: |
+    worker_processes 2;
+    pid /tmp/nginx.pid;
+    error_log /dev/stderr warn;
+    events {
+      worker_connections 1024;
+    }
+    http {
+      access_log off;
+      server_tokens off;
+      client_body_temp_path /tmp/client_body;
+      proxy_temp_path /tmp/proxy;
+      fastcgi_temp_path /tmp/fastcgi;
+      uwsgi_temp_path /tmp/uwsgi;
+      scgi_temp_path /tmp/scgi;
+
+      # No Content-Length and no Transfer-Encoding: no body, length 0.
+      # With a Transfer-Encoding the value is empty, and nginx sets no header.
+      map "$http_content_length$http_transfer_encoding" $garage_content_length {
+        ""      0;
+        default $http_content_length;
+      }
+
+      upstream garage {
+        server 127.0.0.1:3900;
+        keepalive 32;
+      }
+
+      server {
+        listen [::]:3905 ipv6only=off;
+        # Longer than Traefik keeps an idle connection (90 s), so it is
+        # Traefik that closes one, never nginx under a request on its way.
+        keepalive_timeout 300s;
+        # Headers and sizes are Garage's to judge, not nginx's.
+        client_max_body_size 0;
+        ignore_invalid_headers off;
+        underscores_in_headers on;
+        large_client_header_buffers 4 32k;
+
+        location / {
+          proxy_pass http://garage;
+          proxy_http_version 1.1;
+          proxy_set_header Connection "";
+          proxy_set_header Host $http_host;
+          proxy_set_header Content-Length $garage_content_length;
+          proxy_request_buffering off;
+          proxy_buffering off;
+          # Traefik cuts a request after 60 s (its readTimeout); these are above it.
+          proxy_read_timeout 120s;
+          proxy_send_timeout 120s;
+        }
+      }
+    }
+---
 # The nodes' stable names, for the StatefulSet.
 apiVersion: v1
 kind: Service
@@ -101,7 +171,9 @@ spec:
 ---
 # The S3 API and the website endpoint (behind Traefik) and the admin API
 # (for the control plane only), on any node: every node answers for every
-# bucket.
+# bucket. `s3-public` is the S3 API through nginx, for Traefik's S3 route;
+# `s3` is Garage itself, for the control plane and Loki, whose clients come
+# through no proxy.
 apiVersion: v1
 kind: Service
 metadata:
@@ -111,6 +183,7 @@ spec:
   selector: {app.kubernetes.io/name: garage}
   ports:
     - {name: s3, port: 3900, targetPort: s3}
+    - {name: s3-public, port: 3905, targetPort: s3-public}
     - {name: web, port: 3902, targetPort: web}
     - {name: admin, port: 3903, targetPort: admin}
 ---
@@ -130,6 +203,8 @@ spec:
   template:
     metadata:
       labels: {app.kubernetes.io/name: garage}
+      # `kubectl exec` and `logs` mean Garage unless they name the other container.
+      annotations: {kubectl.kubernetes.io/default-container: garage}
     spec:
       serviceAccountName: garage
       # One node per Site, the third Site included.
@@ -170,9 +245,33 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
+        # See the ConfigMap garage-s3-proxy above. Ready only with Garage:
+        # the Service's endpoints are per pod, so a pod whose Garage is not
+        # ready gets no S3 requests on either port.
+        - name: s3-proxy
+          image: nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
+          ports:
+            - {name: s3-public, containerPort: 3905}
+          readinessProbe:
+            tcpSocket: {port: s3-public}
+            periodSeconds: 10
+          volumeMounts:
+            - {name: s3-proxy, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf}
+            - {name: s3-proxy-tmp, mountPath: /tmp}
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {memory: 128Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
       volumes:
         - name: config
           configMap: {name: garage-config}
+        - name: s3-proxy
+          configMap: {name: garage-s3-proxy}
+        - name: s3-proxy-tmp
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata: {name: meta}
       spec:

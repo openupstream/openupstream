@@ -10,9 +10,15 @@ storage" and "Static sites"; decisions 81 to 84).
   configuration and a StatefulSet with one node per Site, the third Site
   included. Replication factor 3, `consistent` mode: every object is stored
   once in each Site. Its website endpoint (port 3902) serves static sites;
-  only the Routes operator's IngressRoutes reach it.
+  only the Routes operator's IngressRoutes reach it. Each pod has a second
+  container, nginx on port 3905, between Traefik and Garage's S3 API: it
+  restores the `Content-Length: 0` that Traefik leaves out of requests
+  without a body, which some S3 clients sign (decision 134). Its
+  configuration is the ConfigMap `garage-s3-proxy`, mounted by `subPath`:
+  restart the pods after changing it.
 - `s3-route.yaml`: the public S3 endpoint, `https://<bucket>.s3.<customer
-  domain>` through Traefik, with one wildcard certificate.
+  domain>` through Traefik, with one wildcard certificate. It goes to port
+  3905, never to Garage's own 3900.
 
 Both have placeholders that `infra/dev-cluster/garage.sh` fills in
 (`CUSTOMER_DOMAIN`, `GARAGE_DATA_SIZE`, `GARAGE_NODES`, `CLUSTER_ISSUER`).
