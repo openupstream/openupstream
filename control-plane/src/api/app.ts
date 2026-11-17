@@ -689,17 +689,21 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     // for. Any answer but a 2xx goes back to the caller instead, so nothing
     // reaches the Project's namespace without a Member of its Account, or a
     // key of one that may write. The role's password guards the login.
+    // Every refusal is a 403, never a 404: Traefik answers 404 itself while
+    // a new Project's tunnel route does not exist yet, which `oup` waits
+    // out, and a refusal must end its wait.
     app.get('/v1/database-tunnel', async (c) => {
         if (!scopeAllows(c.get('identity').scopes, 'POST')) {
             return c.json({ error: `this API key lacks the scope ${API_KEY_SCOPES.write}` }, 403);
         }
         const projectId = tunnelProjectOf(c.req.header('x-forwarded-host') ?? '', deps.customerDomain);
         const path = TUNNEL_PATH.exec((c.req.header('x-forwarded-uri') ?? '').split('?')[0] ?? '');
+        const refused = { error: 'no such Database tunnel for this caller' };
         if (projectId === undefined || path?.[1] === undefined || (c.req.header('x-forwarded-method') ?? 'GET') !== 'GET') {
-            return c.json(notFound, 404);
+            return c.json(refused, 403);
         }
         const database = await databaseOf(c.get('accountIds'), projectId, path[1]);
-        return database === undefined ? c.json(notFound, 404) : c.body(null, 204);
+        return database === undefined ? c.json(refused, 403) : c.body(null, 204);
     });
 
     /** The Bucket without its Garage ids, which are ours. */

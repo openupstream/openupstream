@@ -1,11 +1,11 @@
 # ADR-0005: Database access from outside the cluster
 
 Date: 2026-11-17
-Status: proposed
+Status: accepted
 
-Proposed until a session on a dev cluster has checked the points under
-"To verify". Built on 2026-11-17 (SDK 0.5.0, `oup` 0.3.0) and run end to
-end against Postgres 17 and PgBouncer in Docker, not yet on a cluster.
+Built on 2026-11-17 (SDK 0.5.0, `oup` 0.3.0), run end to end against
+Postgres 17 and PgBouncer in Docker and then on the Hetzner dev cluster the
+same day; see "Verified" for what each showed and what is still open.
 
 ## Context
 
@@ -212,7 +212,7 @@ Three ways to make a Member's role act as `app` were considered:
   IngressRoute with its middleware, a NetworkPolicy) need an operator to
   apply them and a ClusterRole that grants exactly those.
 
-## To verify
+## Verified
 
 Tried on 2026-11-17 with Postgres 17.11 and CloudNativePG's PgBouncer
 image (1.24.1, transaction mode, `auth_query`) in Docker, without
@@ -252,22 +252,47 @@ on this machine, Traefik and the control plane left out:
   still held by its idle server connection, so another role could not
   take it. Directly, the lock went with the session.
 
-To settle before this is accepted, on a dev cluster where it can be tried:
+On the Hetzner dev cluster on 2026-11-17 (k3s 1.36.5, three Sites, the
+images of the pull request's commit, Traefik 3.7 with Let's Encrypt
+staging), with a user signed up through madAuth, an API key that may
+write and one that may only read, and `oup pg proxy` run from this
+machine:
 
-- CloudNativePG adds a role to a running Cluster and its Pooler accepts
-  it; reconciling the role leaves its default role alone, and the
-  connection limit holds.
-- The primary accepts the forwarder's password login on the read-write
-  Service (CloudNativePG's `pg_hba`), with TLS as a Service's connection
-  has it.
+- The tunnel's objects came with the first role: the forwarder ran under
+  gVisor, CloudNativePG added the role to the running Cluster
+  (`managedRolesStatus` reconciled) and its Pooler accepted it, and the
+  IngressRoute at `pg-<project id>.<customer domain>` was served with the
+  default wildcard certificate.
+- Traefik's ForwardAuth reached the control plane and passed the upgrade
+  through: 101 for the write key at the primary and for a session at the
+  Pooler, 401 without a token, 403 for the read-only key, before the
+  request reached the Project's namespace.
+- At `owner` the session acted as `app` on the primary, not PgBouncer,
+  with a password login and no TLS between forwarder and Postgres (the
+  tunnel has TLS up to Traefik): a new table belonged to `app`, which read
+  it, and an advisory lock left by one session was free for the next. The
+  role had `app` as its only grant and the connection limit 5.
+- The default role stayed after CloudNativePG's operator restarted and
+  reconciled every role again, and after a third role made the instance
+  manager reconcile the roles in the database.
+- A `read` role, whose first start waited 14 s for the operator, read a
+  table created after it and could not insert. A connection through it
+  answered after 5½ minutes idle.
+- Deleting the forwarder's pod ended its tunnels; new ones opened again
+  after 6 s (503 meanwhile, which `oup` retries).
+- Found and fixed: the first `oup pg proxy` in a Project asked before the
+  operator had applied the tunnel's route, got Traefik's own 404 and took
+  it for a refusal. The control plane's check now refuses with 403 only,
+  and `oup` waits out a 404; in a new Project the first start then
+  listened after 18 s.
+- Traefik counts each tunnel as a request (status 0) with 0 bytes, so
+  tunnel traffic is not metered as Egress (decision 16); the forwarder
+  logs each tunnel's bytes.
+
+Still open, outside this decision:
+
 - Whether CloudNativePG sets `app`'s password back to its Secret's after
   a Member at `owner` changed it, and how soon.
-- A Project's IngressRoute at `pg-<project id>.<customer domain>` is
-  served with the default certificate, and the ForwardAuth middleware in
-  the Project's namespace reaches the control plane.
-- Traefik keeps a WebSocket open for hours, and whether its bytes are
-  counted as Egress like HTTP responses (decision 16).
-- The forwarder runs under the `gvisor` RuntimeClass.
-- Traefik passes the WebSocket upgrade through after ForwardAuth's 204,
-  and its ForwardAuth request carries `X-Forwarded-Host` and
-  `X-Forwarded-Uri` as the control plane's check reads them.
+- Tunnels open for hours (5½ minutes idle were tried), and a longest
+  lifetime for one.
+- Metering the tunnel's traffic, and who pays for the forwarder pod.

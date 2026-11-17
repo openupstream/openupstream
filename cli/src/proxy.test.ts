@@ -61,11 +61,11 @@ after(() => {
     tunnelServer.close();
 });
 
-test('a refused tunnel says why and is final; another status is worth a retry', async () => {
+test('a refused tunnel says why and is final; another status, a 404 from a route not there yet included, is worth a retry', async () => {
     for (const [code, kind] of [
         [401, 'refused'],
         [403, 'refused'],
-        [404, 'refused'],
+        [404, 'unavailable'],
         [502, 'unavailable'],
     ] as const) {
         status = code;
@@ -140,7 +140,10 @@ test('preparing the role stops at once when the tunnel refuses the caller', asyn
         report: (message) => reports.push(message),
         proxy: { access: 'owner', user: 'oup_owner_x', password: 'p', database: 'app', tunnelUrl },
     });
-    assert.deepEqual(prepared, { ok: false, error: 'the tunnel refused you (403): an API key needs openupstream:write' });
+    assert.deepEqual(prepared, {
+        ok: false,
+        error: "the tunnel refused you (403): you are not a Member of this Project's Account, or your API key lacks openupstream:write",
+    });
     assert.deepEqual(reports, []);
 });
 

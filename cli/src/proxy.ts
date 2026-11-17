@@ -43,9 +43,13 @@ export const connectionUrl = (proxy: Pick<DatabaseProxy, 'user' | 'password' | '
     `postgres://${proxy.user}:${proxy.password}@${LISTEN_HOST}:${port}/${proxy.database}?sslmode=disable`;
 
 export type TunnelError =
-    /** The platform said no (401, 403, 404): retrying changes nothing. */
+    /** The platform said no (401, 403): retrying changes nothing. */
     | { readonly kind: 'refused'; readonly status: number }
-    /** Not reachable now (no forwarder yet, a restart, the network): worth another try. */
+    /**
+     * Not reachable now, worth another try: a 404 while a new Project's
+     * tunnel route does not exist yet (the control plane refuses with 403
+     * only), a 502 or 503 while the forwarder starts or moves, the network.
+     */
     | { readonly kind: 'unavailable'; readonly message: string };
 
 export const tunnelErrorMessage = (error: TunnelError): string =>
@@ -53,9 +57,7 @@ export const tunnelErrorMessage = (error: TunnelError): string =>
         ? `the tunnel is not reachable: ${error.message}`
         : error.status === 401
           ? 'the tunnel refused your sign-in (401): run oup login again'
-          : error.status === 403
-            ? 'the tunnel refused you (403): an API key needs openupstream:write'
-            : `the tunnel refused you (${error.status})`;
+          : `the tunnel refused you (${error.status}): you are not a Member of this Project's Account, or your API key lacks openupstream:write`;
 
 /** Opens one WebSocket to the tunnel with `token`. */
 export function openTunnel(url: string, token: string): Promise<Result<WebSocket, TunnelError>> {
@@ -65,7 +67,7 @@ export function openTunnel(url: string, token: string): Promise<Result<WebSocket
         ws.once('unexpected-response', (_request, response) => {
             const status = response.statusCode ?? 0;
             ws.terminate();
-            resolve(err(status === 401 || status === 403 || status === 404 ? { kind: 'refused', status } : { kind: 'unavailable', message: `HTTP ${status}` }));
+            resolve(err(status === 401 || status === 403 ? { kind: 'refused', status } : { kind: 'unavailable', message: `HTTP ${status}` }));
         });
         ws.once('error', (error) => resolve(err({ kind: 'unavailable', message: error.message })));
     });

@@ -786,21 +786,21 @@ describe('Database proxy: a caller\'s own role and the tunnel check', () => {
         assert.equal((await tunnel(at(database.id), 'madauth_alice_write_k1')).status, 204);
     });
 
-    test('and for nobody else, nor for a host, path or method that is not a tunnel', async () => {
+    test('and for nobody else, nor for a host, path or method that is not a tunnel: always 403, never 404', async () => {
         assert.equal((await tunnel(at(database.id))).status, 401);
         assert.equal((await tunnel(at(database.id), 'not-a-token')).status, 401);
-        assert.equal((await tunnel(at(database.id), await token('bob'))).status, 404);
+        assert.equal((await tunnel(at(database.id), await token('bob'))).status, 403);
         assert.equal((await tunnel(at(database.id), 'madauth_alice_read_k1')).status, 403);
-        assert.equal((await tunnel(at(database.id, 'pooler', `pg-${projectId}.elsewhere.test`), await token('alice'))).status, 404);
-        assert.equal((await tunnel(at(database.id, 'replica'), await token('alice'))).status, 404);
-        assert.equal((await tunnel({ ...at(database.id), 'x-forwarded-uri': `/databases/${database.id}/pooler/x` }, await token('alice'))).status, 404);
-        assert.equal((await tunnel({ ...at(database.id), 'x-forwarded-method': 'POST' }, await token('alice'))).status, 404);
-        assert.equal((await tunnel({}, await token('alice'))).status, 404);
+        assert.equal((await tunnel(at(database.id, 'pooler', `pg-${projectId}.elsewhere.test`), await token('alice'))).status, 403);
+        assert.equal((await tunnel(at(database.id, 'replica'), await token('alice'))).status, 403);
+        assert.equal((await tunnel({ ...at(database.id), 'x-forwarded-uri': `/databases/${database.id}/pooler/x` }, await token('alice'))).status, 403);
+        assert.equal((await tunnel({ ...at(database.id), 'x-forwarded-method': 'POST' }, await token('alice'))).status, 403);
+        assert.equal((await tunnel({}, await token('alice'))).status, 403);
     });
 
     test('a deleted Database has no tunnel and no roles in the rows', async () => {
         assert.equal((await call('DELETE', `/v1/projects/${projectId}/databases/${other.id}`, 'alice')).status, 202);
-        assert.equal((await tunnel(at(other.id), await token('alice'))).status, 404);
+        assert.equal((await tunnel(at(other.id), await token('alice'))).status, 403);
         assert.equal((await proxy('alice', {}, other.id)).status, 404);
     });
 
