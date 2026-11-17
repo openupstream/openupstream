@@ -411,7 +411,7 @@ To close it, as the hosted service does until it can invoice:
    compute nodes and requests its certificate.
    `SIGNUP_ALLOW` takes addresses and `@domains`, comma-separated. madAuth
    now refuses everyone else, with a message that points to
-   `https://$WAITLIST_DOMAIN`, where the waitlist page takes e-mail
+   `https://$WAITLIST_DOMAIN/waitlist`, where the waitlist page takes e-mail
    addresses (double opt-in, through SES as in section 6; `MAIL=log`
    writes the confirmation links to the control plane's log instead). It
    rolls out madAuth and the control plane when their settings changed.
@@ -424,6 +424,13 @@ waitlist route and its certificate; remove its DNS record with
 `DNS_DOMAIN=$WAITLIST_DOMAIN DNS_NAMES=@ infra/dev-cluster/dns.sh --delete`). The addresses stay in the table
 `waitlist` of the control plane's Database: write to the confirmed ones
 once, then delete them, as the privacy notice promises.
+
+Where the website is served at that host (section 11), keep the DNS
+record: deleting it takes the website down. The waitlist's route goes with
+`SIGNUP=open`, and with it `/waitlist`, `/privacy` and `/imprint`, which
+the website links to: give the website an Impressum and a privacy notice
+of its own first, and change its links and its "Join the waitlist" button
+(`website/README.md`).
 
 ## 10. Monitoring: alerts and the dead man's switch
 
