@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bucketEnv, mergeEnv, s3Endpoint } from './buckets.js';
+import { bucketEnv, bucketIn, mergeEnv, s3Endpoint } from './buckets.js';
 
 const access = { endpoint: 'https://acme-site.s3.openupstream.app', region: 'garage', accessKeyId: 'GK123', secretAccessKey: 'abc/+=' };
 
@@ -38,6 +38,14 @@ test('an env file gets the variables and keeps what else it holds', () => {
     assert.equal(mergeEnv('PORT=8080', entries), 'PORT=8080\nAWS_REGION=garage\nBUCKET_NAME=acme-site\n');
     // Twice gives the same file.
     assert.equal(mergeEnv(mergeEnv('PORT=8080\n', entries), entries), mergeEnv('PORT=8080\n', entries));
+});
+
+test('a file keeps its line endings, and says which Bucket its variables are for', () => {
+    assert.equal(mergeEnv('PORT=8080\r\nAWS_REGION=old\r\n', [{ name: 'AWS_REGION', value: 'garage' }, { name: 'BUCKET_NAME', value: 'site' }]), 'PORT=8080\r\nAWS_REGION=garage\r\nBUCKET_NAME=site\r\n');
+    assert.equal(bucketIn('PORT=8080\nBUCKET_NAME=site\n'), 'site');
+    assert.equal(bucketIn('export BUCKET_NAME = "site"\r\n'), 'site');
+    assert.equal(bucketIn('PORT=8080\n'), undefined);
+    assert.equal(bucketIn(''), undefined);
 });
 
 test('a value with other than plain characters is quoted', () => {

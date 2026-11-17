@@ -47,7 +47,9 @@ const assigns = (line: string, name: string): boolean => new RegExp(`^\\s*(expor
  * the end, and every other line stays as it is.
  */
 export const mergeEnv = (text: string, entries: readonly EnvEntry[]): string => {
-    const lines = text === '' ? [] : text.replace(/\n$/, '').split('\n');
+    // The file's own line ending, for the lines it gets too.
+    const eol = text.includes('\r\n') ? '\r\n' : '\n';
+    const lines = text === '' ? [] : text.replace(/\r?\n$/, '').split(/\r?\n/);
     const kept = lines.flatMap((line, index) => {
         const entry = entries.find(({ name }) => assigns(line, name));
         return entry === undefined
@@ -57,5 +59,14 @@ export const mergeEnv = (text: string, entries: readonly EnvEntry[]): string => 
               : [];
     });
     const added = entries.filter(({ name }) => !lines.some((line) => assigns(line, name))).map(({ name, value }) => `${name}=${quoted(value)}`);
-    return `${[...kept, ...added].join('\n')}\n`;
+    return `${[...kept, ...added].join(eol)}${eol}`;
 };
+
+/** The Bucket a file's variables are for, when it has them: the value of its `BUCKET_NAME` line. */
+export const bucketIn = (text: string): string | undefined =>
+    text
+        .split(/\r?\n/)
+        .find((line) => assigns(line, 'BUCKET_NAME'))
+        ?.replace(/^[^=]*=\s*/, '')
+        .replace(/^(['"])(.*)\1$/, '$2')
+        .trim();

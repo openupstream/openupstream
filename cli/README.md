@@ -128,7 +128,8 @@ oup site deploy dist --bucket my-site
   `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`,
   `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3` and `BUCKET_NAME`. Lines that
   set them already are replaced and the rest of the file stays; a new file
-  can be read by you alone. Keep it out of git. Recent AWS SDKs read all
+  can be read by you alone. Keep it out of git. A file holds one Bucket's
+  variables: for a second Bucket, name another file with `--file`. Recent AWS SDKs read all
   but `BUCKET_NAME` by themselves; the AWS CLI also needs
   `aws configure set default.s3.addressing_style virtual`, since a Bucket
   is reached at its own hostname only.

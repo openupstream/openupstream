@@ -41,6 +41,7 @@ import {
     DEFAULT_API_URL,
     type Account,
     type ApiResult,
+    type Bucket,
     type BucketDetails,
     type JobDetails,
     type LogEntry,
@@ -51,7 +52,7 @@ import {
     type Site,
     cliLogin,
 } from '@openupstream/sdk';
-import { bucketEnv, mergeEnv, s3Endpoint } from './buckets.js';
+import { bucketEnv, bucketIn, mergeEnv, s3Endpoint } from './buckets.js';
 import { credentialsPath, readCredentials, removeCredentials, writeCredentials } from './credentials.js';
 import { deploy } from './deploy.js';
 import { discover, emailOf, startDeviceSignIn, waitForApproval } from './oidc.js';
@@ -853,23 +854,23 @@ async function bucket(args: string[]): Promise<void> {
         return fail(USAGE);
     }
     const { client, project } = await inProject(values.project);
-    const buckets = await client.listBuckets(project.id);
-    if (!buckets.ok) {
-        return fail(buckets.error.message);
-    }
-    /** The Bucket `name` with its access, for the verbs that act on one. */
+    const list = async (): Promise<Bucket[]> => {
+        const buckets = await client.listBuckets(project.id);
+        return buckets.ok ? buckets.value : fail(buckets.error.message);
+    };
+    /** The Bucket `name` of the Project, for the verbs that act on one. */
+    const named = async (): Promise<Bucket> => (await list()).find((candidate) => candidate.name === name) ?? fail(`no Bucket ${name} in ${project.name}`);
+    /** The same with its access. */
     const details = async (): Promise<BucketDetails> => {
-        const found = buckets.value.find((candidate) => candidate.name === name);
-        if (found === undefined) {
-            return fail(`no Bucket ${name} in ${project.name}`);
-        }
-        const read = await client.getBucket(project.id, found.id);
+        const read = await client.getBucket(project.id, (await named()).id);
         return read.ok ? read.value : fail(read.error.message);
     };
     switch (verb) {
-        case 'list':
-            console.log(buckets.value.length === 0 ? `No Buckets in ${project.name}.` : buckets.value.map((b) => `${b.name.padEnd(32)} ${b.createdAt}`).join('\n'));
+        case 'list': {
+            const buckets = await list();
+            console.log(buckets.length === 0 ? `No Buckets in ${project.name}.` : buckets.map((b) => `${b.name.padEnd(32)} ${b.createdAt}`).join('\n'));
             return;
+        }
         case 'create': {
             const created = await client.createBucket(project.id, { name: name as string });
             return created.ok
@@ -903,22 +904,27 @@ async function bucket(args: string[]): Promise<void> {
                 return fail(entries.error);
             }
             const path = resolve(values.file ?? '.env');
-            // A file that is not there yet reads as empty; a new one is for its owner alone.
-            const before = await readFile(path, 'utf8').catch(() => '');
+            // Only a file that is not there reads as empty: one that cannot be read is not written over.
+            const before = await readFile(path, 'utf8').catch((error: unknown) =>
+                error instanceof Error && 'code' in error && error.code === 'ENOENT' ? '' : fail(`cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`),
+            );
+            // A file holds one Bucket's variables: their names are the same for every Bucket.
+            const other = bucketIn(before);
             const written = await writeFile(path, mergeEnv(before, entries.value), { mode: 0o600 }).then(
                 () => undefined,
                 (error: unknown) => (error instanceof Error ? error.message : String(error)),
             );
-            return written === undefined
-                ? console.log(`Wrote ${entries.value.map((entry) => entry.name).join(', ')} to ${path}. It holds the Bucket's secret: keep it out of git.`)
-                : fail(`cannot write ${path}: ${written}`);
+            if (written !== undefined) {
+                return fail(`cannot write ${path}: ${written}`);
+            }
+            console.log(`Wrote ${entries.value.map((entry) => entry.name).join(', ')} to ${path}. It holds the Bucket's secret: keep it out of git.`);
+            if (other !== undefined && other !== name) {
+                console.log(`They replace those of the Bucket ${other}, which the file held: use --file for a file per Bucket.`);
+            }
+            return;
         }
         case 'delete': {
-            const found = buckets.value.find((candidate) => candidate.name === name);
-            if (found === undefined) {
-                return fail(`no Bucket ${name} in ${project.name}`);
-            }
-            const deleted = await client.deleteBucket(project.id, found.id);
+            const deleted = await client.deleteBucket(project.id, (await named()).id);
             return deleted.ok ? console.log(`Deleted ${name} and every object in it.`) : fail(deleted.error.message);
         }
         default:
