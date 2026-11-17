@@ -174,7 +174,7 @@ test('a Route to a Service: its Kubernetes Service, path unchanged, GET and HEAD
     assert.ok(!planRoutes([routing], settings).some((o) => o.kind === 'ServersTransport'), 'only Projects with Routes to Services');
 });
 
-test("on the waitlist's host its own paths win over any Route, and every Route over its catch-all (decision 131)", () => {
+test("on the waitlist's host its own paths win over any Route, and every Route over its catch-all (decision 132)", () => {
     const manifest = readFileSync(new URL('../../../infra/ingress/waitlist-route.yaml', import.meta.url), 'utf8');
     const rules = manifest
         .split('    - match: ')

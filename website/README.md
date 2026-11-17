@@ -11,7 +11,7 @@ Markdown files in `src/content/docs`. The file's path is the page's
 address: `src/content/docs/docs/databases.md` is `/docs/databases/`.
 
 The workflow `.github/workflows/website.yml` deploys it with
-`oup site deploy` on every merge to main that changes it (decision 131;
+`oup site deploy` on every merge to main that changes it (decision 132;
 docs/self-hosting.md, "The website"). `/waitlist`, `/privacy` and
 `/imprint` are not pages of this site: the control plane serves them on
 the same host while sign-up is closed, and the home page and the sidebar

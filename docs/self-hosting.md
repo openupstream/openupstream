@@ -483,7 +483,7 @@ sent at all.
 Only for the hosted service: `website/` is `openupstream.com`, with pages
 that name its hostnames. It is served at the waitlist's host from a Bucket
 of an ordinary Project, and the waitlist keeps `/waitlist`, `/privacy` and
-`/imprint` (ARCHITECTURE.md, decisions 130 and 131). It needs section 9
+`/imprint` (ARCHITECTURE.md, decisions 130 and 132). It needs section 9
 done with `SIGNUP=closed`. Unlike the sections above, these steps were
 written with the change and have not been done for the hosted service
 yet; correct them when they are.

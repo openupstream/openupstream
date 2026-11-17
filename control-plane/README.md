@@ -173,7 +173,7 @@ to; then it needs `WAITLIST_IMPRINT`, the Impressum as plain text, and
 `madauth-ses` in the cluster) or `log`.
 
 The form is at `/waitlist` and at `/`. Once the website is served at the
-host (decision 131), its Route has `/` and the ingress sends only
+host (decision 132), its Route has `/` and the ingress sends only
 `/waitlist…`, `/privacy` and `/imprint` here. `WEBSITE_PROJECT_ID` names
 the website's Project, the only one that may claim this host as a custom
 domain.

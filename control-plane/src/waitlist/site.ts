@@ -209,7 +209,7 @@ export function createWaitlistSite(deps: WaitlistSiteDeps): Hono {
     // A form with an address and a checkbox is far below this.
     app.use(bodyLimit({ maxSize: 4096, onError: (c) => c.html(home('That was too much to read. Try again.'), 413) }));
 
-    // `/waitlist` is the page's address once the website has the host's other paths (decision 131); `/` serves it where there is no website.
+    // `/waitlist` is the page's address once the website has the host's other paths (decision 132); `/` serves it where there is no website.
     app.get('/', (c) => c.html(home()));
     app.get('/waitlist', (c) => c.html(home()));
     app.get('/privacy', (c) => c.html(privacy(url)));

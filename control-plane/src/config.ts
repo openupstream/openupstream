@@ -67,7 +67,7 @@ export interface Config {
     readonly databaseVolumes: 'dedicated' | 'shared';
     /** The waitlist page while hosted sign-up is closed (decision 86); undefined: not served. */
     readonly waitlist?: WaitlistConfig;
-    /** The Project that may claim the waitlist's host as a custom domain, to serve the website there (decision 131). */
+    /** The Project that may claim the waitlist's host as a custom domain, to serve the website there (decision 132). */
     readonly websiteProjectId?: string;
 }
 

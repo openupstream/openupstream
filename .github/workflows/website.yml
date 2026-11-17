@@ -1,7 +1,7 @@
 name: Website
 
 # Deploys website/ to the Bucket that serves openupstream.com
-# (ARCHITECTURE.md, decision 131; docs/self-hosting.md, "The website"),
+# (ARCHITECTURE.md, decision 132; docs/self-hosting.md, "The website"),
 # with this commit's own `oup site deploy`, when a merge to main changes
 # what the site is built from:
 #

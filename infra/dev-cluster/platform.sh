@@ -77,7 +77,7 @@ SIGNUP_ALLOW=${SIGNUP_ALLOW:-}
 IMPRINT_FILE=${IMPRINT_FILE:-}
 WAITLIST_DOMAIN=${WAITLIST_DOMAIN:-}
 # The Project whose Routes serve the website at the waitlist's host
-# (decision 131; docs/self-hosting.md, "The website"): it alone may claim
+# (decision 132; docs/self-hosting.md, "The website"): it alone may claim
 # that host as a custom domain. Set it once the Project exists and run this
 # again; the waitlist then keeps /waitlist, /privacy and /imprint.
 WEBSITE_PROJECT_ID=${WEBSITE_PROJECT_ID:-}

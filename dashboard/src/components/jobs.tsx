@@ -5,6 +5,7 @@ import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from
 import { NEW_JOB, type JobFields, type JobWanted, jobFieldsOf, jobInput, jobNameProblem, jobPatch, jobWanted, formatSeconds, runDuration, scheduleLabel } from '../lib/jobs';
 import { shortDigest } from '../lib/services';
 import { api, refused } from '../lib/session';
+import { LogView } from './logs';
 import { Usage } from './usage';
 
 /** What a change answers: undefined when it was done, what the API refused otherwise. */
@@ -129,6 +130,8 @@ function Runs(props: { readonly projectId: string; readonly jobId: string; reado
     }, [asked]);
     const [runs, setRuns] = useState<readonly JobRun[] | undefined>(undefined);
     const [problem, setProblem] = useState<string | undefined>(undefined);
+    // The run whose output is shown, if any.
+    const [logsOf, setLogsOf] = useState<string | undefined>(undefined);
     /** Reads the runs; whether any is still going. A failure is shown, a success leaves the message alone. */
     const load = useCallback(async (): Promise<boolean> => {
         const result = await (await api()).listJobRuns(projectId, jobId);
@@ -195,6 +198,9 @@ function Runs(props: { readonly projectId: string; readonly jobId: string; reado
                                 </td>
                                 <td>{(run.state === 'pending' ? undefined : runDuration(run, Date.now())) ?? '–'}</td>
                                 <td>
+                                    <button type="button" className="link" onClick={() => setLogsOf(logsOf === run.id ? undefined : run.id)}>
+                                        {logsOf === run.id ? 'Hide logs' : 'Logs'}
+                                    </button>{' '}
                                     <button
                                         type="button"
                                         className="link danger"
@@ -212,9 +218,10 @@ function Runs(props: { readonly projectId: string; readonly jobId: string; reado
                     </tbody>
                 </table>
             )}
-            <small>
-                A run&apos;s output is read with <a href="/cli">oup job logs</a>. Runs are kept a day.
-            </small>
+            {logsOf !== undefined && runs?.some((run) => run.id === logsOf) === true && (
+                <LogView key={logsOf} source={(client, query, signal) => client.jobRunLogs(projectId, jobId, logsOf, query, signal)} />
+            )}
+            <small>Runs, and so their output, are kept a day.</small>
         </details>
     );
 }

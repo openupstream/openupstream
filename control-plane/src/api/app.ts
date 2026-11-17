@@ -104,7 +104,7 @@ export interface ApiDeps {
     readonly platformDomain: string;
     /** The waitlist's host, when it is served (decision 123): ours as well. */
     readonly waitlistDomain?: string;
-    /** The one Project that may claim the waitlist's host, with the TXT proof like any claim: the website's (decision 131). */
+    /** The one Project that may claim the waitlist's host, with the TXT proof like any claim: the website's (decision 132). */
     readonly websiteProjectId?: string;
     /** The platform's Prometheus, for what Resources use now (decision 124); without it nothing is measured. */
     readonly prometheus?: PrometheusQuery;

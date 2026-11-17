@@ -36,7 +36,7 @@ export default defineConfig({
             description: 'Open source cloud infrastructure, hosted in the EU: Postgres, object storage, static sites and containers.',
             social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/openupstream/openupstream' }],
             editLink: { baseUrl: 'https://github.com/openupstream/openupstream/edit/main/website/' },
-            // The waitlist, its privacy notice and the Impressum are the control plane's pages on the same host (ARCHITECTURE.md, decision 131).
+            // The waitlist, its privacy notice and the Impressum are the control plane's pages on the same host (ARCHITECTURE.md, decision 132).
             plugins: [starlightLinksValidator({ exclude: ['/waitlist', '/imprint', '/privacy'] }), starlightLlmsTxt()],
             sidebar: [
                 {
