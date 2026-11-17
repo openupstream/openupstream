@@ -29,6 +29,9 @@ export const usedShare = (measured: Measured): number | undefined =>
 /** What a form's number field holds, when it is a whole number; undefined otherwise. */
 export const whole = (text: string): number | undefined => (/^\d{1,7}$/.test(text.trim()) ? Number(text.trim()) : undefined);
 
+/** Whether a form's number is there and within its limits. */
+export const within = (value: number | undefined, least: number, most: number): value is number => value !== undefined && value >= least && value <= most;
+
 export interface DatabaseSizes {
     readonly memoryMb: number;
     readonly storageGb: number;
