@@ -158,6 +158,33 @@ export interface DatabaseDetails extends Database {
 }
 
 /**
+ * How much a caller's own Postgres role may do through `oup pg proxy`
+ * (decision 126, ADR-0005): read every table; also write rows; or act as
+ * `app`, the role the Project's Services connect as, so migrations work.
+ */
+export const DATABASE_ACCESS_LEVELS = ['read', 'write', 'owner'] as const;
+export type DatabaseAccess = (typeof DATABASE_ACCESS_LEVELS)[number];
+
+/** Asks for the caller's role at a level; `read` when none is given. */
+export interface DatabaseProxyInput {
+    access?: DatabaseAccess;
+}
+
+/**
+ * The caller's own role for a Database at one level, and the tunnel that
+ * reaches it: `oup pg proxy` carries local connections through `tunnelUrl`
+ * (a WebSocket, with the caller's token) and the client logs in as `user`
+ * with `password`. The same role and password every time it is asked.
+ */
+export interface DatabaseProxy {
+    access: DatabaseAccess;
+    user: string;
+    password: string;
+    database: string;
+    tunnelUrl: string;
+}
+
+/**
  * A Bucket's name: a hostname label of 3 to 63 lowercase letters, digits
  * and hyphens, neither starting nor ending with a hyphen.
  */

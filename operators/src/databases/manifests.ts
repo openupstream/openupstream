@@ -11,15 +11,23 @@
  *   archive and base backup target;
  * - a `ScheduledBackup` taking base backups into it.
  *
+ * The Cluster also carries the callers' own roles (decision 126, ADR-0005),
+ * which CloudNativePG creates with the password from each role's Secret;
+ * the control plane writes those Secrets.
+ *
  * Pure: no I/O. Invalid input is returned as errors, never thrown.
  */
 import {
     COMPUTE_SITES,
     DATABASE_MIN_MEMORY_MB,
     type Database,
+    type DatabaseAccess,
+    type DatabaseRoleRow,
     type Project,
     type Site,
     clusterName,
+    databaseRoleName,
+    databaseRoleSecret,
     poolerName,
 } from '@openupstream/sdk';
 import type { Cluster, ObjectStore, Pooler, ScheduledBackup } from '../generated/index.js';
@@ -91,6 +99,33 @@ export const POOLER_LOGIN_RETRY = { server_login_retry: '1' } as const;
  */
 export const PRIMARY_RESTART = { primaryUpdateMethod: 'restart', smartShutdownTimeout: 30 } as const;
 
+/**
+ * What a caller's role is granted at each level (decision 126): Postgres's
+ * predefined roles for reading and writing every table, or membership in
+ * `app`. An `owner` role also sets `app` as its own default role, through
+ * `oup`; nothing here can, since CloudNativePG runs no SQL after bootstrap.
+ */
+export const ROLE_GRANTS: Readonly<Record<DatabaseAccess, readonly string[]>> = {
+    read: ['pg_read_all_data'],
+    write: ['pg_read_all_data', 'pg_write_all_data'],
+    owner: ['app'],
+};
+
+/** An `owner` role's connections go to the primary past the Pooler, each a Postgres backend: at most this many at once. */
+export const OWNER_CONNECTION_LIMIT = 5;
+
+/** A caller's role as CloudNativePG manages it: logs in with its Secret's password, inherits its grants. */
+export const managedRoleFor = (role: DatabaseRoleRow) => ({
+    name: databaseRoleName(role),
+    comment: `openupstream ${role.access} role ${role.id}`,
+    ensure: 'present' as const,
+    login: true,
+    inherit: true,
+    inRoles: [...ROLE_GRANTS[role.access]],
+    passwordSecret: { name: databaseRoleSecret(role) },
+    connectionLimit: role.access === 'owner' ? OWNER_CONNECTION_LIMIT : -1,
+});
+
 /** Platform settings that are the same for every Database. */
 export interface DatabaseConfig {
     /** Our Postgres image (`images/postgres`), pinned by digest. */
@@ -133,14 +168,15 @@ export type DatabaseManifestError =
     | { readonly kind: 'not-a-compute-site'; readonly value: string }
     | { readonly kind: 'invalid-memory'; readonly memoryMb: number }
     | { readonly kind: 'memory-below-floor'; readonly memoryMb: number; readonly minimumMb: number }
-    | { readonly kind: 'invalid-storage'; readonly storageGb: number };
+    | { readonly kind: 'invalid-storage'; readonly storageGb: number }
+    | { readonly kind: 'invalid-role'; readonly id: string; readonly access: string };
 
 export { clusterName, poolerName } from '@openupstream/sdk';
 
 /** Rows come from the database as strings; the type alone does not guarantee this. */
 const isComputeSite = (value: string): value is Site => (COMPUTE_SITES as readonly string[]).includes(value);
 
-const validate = (project: Project, database: Database): DatabaseManifestError[] => {
+const validate = (project: Project, database: Database, roles: readonly DatabaseRoleRow[]): DatabaseManifestError[] => {
     const checks: [boolean, DatabaseManifestError][] = [
         [UUID.test(project.id), { kind: 'invalid-id', field: 'project.id', value: project.id }],
         [UUID.test(database.id), { kind: 'invalid-id', field: 'database.id', value: database.id }],
@@ -160,6 +196,11 @@ const validate = (project: Project, database: Database): DatabaseManifestError[]
             Number.isInteger(database.storageGb) && database.storageGb > 0,
             { kind: 'invalid-storage', storageGb: database.storageGb },
         ],
+        // A role's name and Secret are made of its id and level, so both must be what the control plane writes.
+        ...roles.map((role): [boolean, DatabaseManifestError] => [
+            UUID.test(role.id) && Object.hasOwn(ROLE_GRANTS, role.access),
+            { kind: 'invalid-role', id: role.id, access: role.access },
+        ]),
     ];
     return checks.filter(([valid]) => !valid).map(([, error]) => error);
 };
@@ -204,7 +245,7 @@ const objectStoreFor = (meta: ObjectMeta, config: DatabaseConfig): ObjectStoreMa
     },
 });
 
-const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig): ClusterManifest => ({
+const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig, roles: readonly DatabaseRoleRow[]): ClusterManifest => ({
     apiVersion: 'postgresql.cnpg.io/v1',
     kind: 'Cluster',
     metadata: meta,
@@ -251,6 +292,7 @@ const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig
         bootstrap: {
             initdb: { postInitApplicationSQL: ['CREATE EXTENSION IF NOT EXISTS vector'] },
         },
+        ...(roles.length === 0 ? {} : { managed: { roles: roles.map(managedRoleFor) } }),
         plugins: [
             {
                 name: BARMAN_CLOUD_PLUGIN,
@@ -386,6 +428,7 @@ export function restoredDatabaseManifests(
     database: Database,
     config: DatabaseConfig,
     source: RestoreSource,
+    roles: readonly DatabaseRoleRow[] = [],
 ): Result<DatabaseManifests, RestoreError[]> {
     const checks: [boolean, RestoreError][] = [
         [UUID.test(source.database.id), { kind: 'invalid-id', field: 'source.databaseId', value: source.database.id }],
@@ -400,7 +443,7 @@ export function restoredDatabaseManifests(
         ],
     ];
     const sourceErrors = checks.filter(([valid]) => !valid).map(([, error]) => error);
-    const result = databaseManifests(project, database, config);
+    const result = databaseManifests(project, database, config, roles);
     const errors = [...(result.ok ? [] : result.error), ...sourceErrors];
     if (!result.ok || errors.length > 0) {
         return err(errors);
@@ -434,13 +477,14 @@ export function restoredDatabaseManifests(
     });
 }
 
-/** The Kubernetes objects that run `database`, or every reason it cannot run. */
+/** The Kubernetes objects that run `database` with the callers' `roles`, or every reason it cannot run. */
 export function databaseManifests(
     project: Project,
     database: Database,
     config: DatabaseConfig,
+    roles: readonly DatabaseRoleRow[] = [],
 ): Result<DatabaseManifests, DatabaseManifestError[]> {
-    const errors = validate(project, database);
+    const errors = validate(project, database, roles);
     if (errors.length > 0) {
         return err(errors);
     }
@@ -450,7 +494,7 @@ export function databaseManifests(
     const cluster = clusterName(database);
     return ok({
         objectStore: objectStoreFor(meta(cluster), config),
-        cluster: clusterFor(meta(cluster), database, config),
+        cluster: clusterFor(meta(cluster), database, config, roles),
         pooler: poolerFor(meta(poolerName(database)), cluster, config),
         scheduledBackup: scheduledBackupFor(meta(cluster), config),
     });

@@ -6,7 +6,10 @@
 # Needs databases-rbac.yaml, the backup credentials Secret
 # openupstream-system/backup-s3 and the ConfigMap databases-operator-config
 # with a DatabaseConfig as database-config.json. The image is pinned by
-# digest when applied (infra/dev-cluster/platform.sh).
+# digest when applied (infra/dev-cluster/platform.sh), and so is
+# FORWARDER_IMAGE, the same image, from which every Project's database
+# tunnel runs (decision 126); Traefik asks TUNNEL_AUTH_URL, the control
+# plane's public port, before it opens a tunnel.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -38,6 +41,8 @@ spec:
             - {name: TOKEN_PATH, value: /var/run/secrets/openupstream/control-plane/token}
             - {name: DATABASE_CONFIG_PATH, value: /etc/openupstream/database-config.json}
             - {name: BACKUP_CREDENTIALS, value: openupstream-system/backup-s3}
+            - {name: FORWARDER_IMAGE, value: "ghcr.io/openupstream/operators:main"}
+            - {name: TUNNEL_AUTH_URL, value: "http://control-plane.project-00000000-0000-4000-8000-000000000002.svc.cluster.local:8080/v1/database-tunnel"}
           volumeMounts:
             - {name: control-plane-token, mountPath: /var/run/secrets/openupstream/control-plane, readOnly: true}
             - {name: config, mountPath: /etc/openupstream, readOnly: true}

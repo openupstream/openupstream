@@ -38,8 +38,8 @@ These variables win over a Secret of the same name. When a Database is
 added or deleted, the Project's Services restart to get the new variables.
 
 The URL points at PgBouncer, which follows the primary through a failover.
-A Database is reachable from its own Project only. Access from your own
-machine is planned as `oup pg proxy` and not built yet.
+From outside the Project, a Database is reachable only from your own
+machine, with `oup pg proxy` (below).
 
 ### Pooling
 
@@ -51,6 +51,36 @@ not: `LISTEN`, advisory locks and `SET`.
 
 Connections to the old primary are dropped. Your application has to
 connect again, which connection pools of most drivers do by themselves.
+
+## From your own machine
+
+```sh
+oup pg proxy main
+oup pg proxy main --access owner --port 5433
+```
+
+While it runs, `oup pg proxy` listens on `127.0.0.1:5432` and prints the
+URL to give `psql`, a database GUI or a migration tool. Each connection
+travels through a WebSocket on port 443, opened with your sign-in, so
+nothing needs installing or opening besides `oup`.
+
+You log in with a Postgres role of your own, created the first time you
+ask for it; that first start waits a minute or two. The same role and
+password come back every time, on any machine. `--access` picks what it
+may do:
+
+- `read`, the default: read every table
+- `write`: also insert, update and delete rows, not change the schema
+- `owner`: act as `app`, the role your Services use, so migrations work
+  and the tables they create belong to `app`
+
+`read` and `write` go through PgBouncer, like a Service. `owner` goes to
+the primary, so migration tools that take an advisory lock work; it
+allows 5 connections at once, which end when the primary restarts or
+fails over. Every Member of the Account may pick any level.
+
+In CI, `OUP_API_KEY` works too: the key needs `openupstream:write`, and
+gets roles of its own.
 
 ## Resize
 

@@ -11,6 +11,7 @@ import {
     BUCKET_NAME,
     COMPUTE_SITES,
     type Site,
+    DATABASE_ACCESS_LEVELS,
     DATABASE_MIN_MEMORY_MB,
     DNS_LABEL,
     HOSTNAME,
@@ -22,11 +23,13 @@ import {
     SECRETS_MAX_TOTAL_BYTES,
     SERVICE_LIMITS,
     SERVICE_ID_LABEL,
+    TUNNEL_PATH,
     UUID,
     type Bucket,
     type BucketDetails,
     type Database,
     type DatabaseDetails,
+    type DatabaseProxy,
     type DatabaseState,
     type Job,
     type JobDetails,
@@ -47,6 +50,9 @@ import {
     projectNamespace,
     serviceObjectName,
     serviceSpecVersion,
+    tunnelHostname,
+    tunnelPath,
+    tunnelTargetOf,
 } from '@openupstream/sdk';
 import { randomUUID } from 'node:crypto';
 import { type Context, Hono } from 'hono';
@@ -58,6 +64,7 @@ import { createAccount, holdsOf, listAccounts } from '../accounts/store.js';
 import { type BucketRecord, createBucket, deleteBucket, getBucket, listBuckets } from '../buckets/store.js';
 import { GiB, MiB, roomForGrowth, roomForNew } from '../databases/capacity.js';
 import { checkRestore, restoreCheckMessage } from '../databases/restore.js';
+import { roleFor, roleSecretManifest } from '../databases/roles.js';
 import { createDatabase, deleteDatabase, getDatabase, getRestoreSource, listDatabases, updateDatabase } from '../databases/store.js';
 import type { TxtLookup } from '../domains/dns.js';
 import { createCustomDomain, deleteDomain, getDomain, isReserved, listDomains, verifyDomain } from '../domains/store.js';
@@ -151,6 +158,16 @@ export const scopeAllows = (scopes: readonly string[] | undefined, method: strin
     scopes === undefined ||
     scopes.includes(API_KEY_SCOPES.write) ||
     ((method === 'GET' || method === 'HEAD') && scopes.includes(API_KEY_SCOPES.read));
+
+const proxyInput = z.strictObject({ access: z.enum(DATABASE_ACCESS_LEVELS).optional() });
+
+/** The Project a tunnel host names (`pg-<project id>.<customer domain>`, tunnelHostname), or undefined. */
+export const tunnelProjectOf = (host: string, customerDomain: string): string | undefined => {
+    const suffix = `.${customerDomain}`;
+    const label = host.toLowerCase().endsWith(suffix) ? host.toLowerCase().slice(0, -suffix.length) : '';
+    const id = label.startsWith('pg-') ? label.slice(3) : '';
+    return UUID.test(id) ? id : undefined;
+};
 
 const projectInput = z.strictObject({
     accountId: z.string().regex(UUID),
@@ -627,6 +644,68 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         const database = await databaseOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('databaseId'));
         const deleted = database !== undefined && (await deleteDatabase(pool, database.projectId, database.id));
         return deleted ? c.body(null, 202) : c.json(notFound, 404);
+    });
+
+    // The caller's own role and the tunnel to it (decision 126, ADR-0005). A
+    // POST, since the first ask creates the role: an API key needs
+    // openupstream:write at every level, `read` included (decision 64).
+    app.post('/v1/projects/:projectId/databases/:databaseId/proxy', async (c) => {
+        const database = await databaseOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('databaseId'));
+        if (database === undefined) {
+            return c.json(notFound, 404);
+        }
+        const input = proxyInput.safeParse((await body(c)) ?? {});
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const identity = c.get('identity');
+        // An API key gets roles of its own, which needs madAuth's id for it.
+        if (identity.scopes !== undefined && identity.apiKeyId === undefined) {
+            return c.json({ error: 'madAuth did not name this API key; cannot give it a role' }, 503);
+        }
+        const access = input.data.access ?? 'read';
+        const role = await roleFor(pool, deps.kek, database, { subject: identity.subject, apiKeyId: identity.apiKeyId }, access);
+        if (!role.ok) {
+            deps.log?.({ msg: 'cannot open a database role', database: database.id, error: role.error.kind });
+            return c.json({ error: 'cannot open the role now' }, 500);
+        }
+        if (role.value.created) {
+            // At once, so the operator finds it with the role; the Secrets pass writes it otherwise.
+            const written = await kube.applySecret(roleSecretManifest(database.projectId, role.value));
+            if (!written.ok) {
+                deps.log?.({ msg: 'cannot write a database role Secret; the secrets pass will', database: database.id, error: written.error });
+            }
+        }
+        const response: DatabaseProxy = {
+            access,
+            user: role.value.name,
+            password: role.value.password,
+            database: databaseConnection(database).database,
+            tunnelUrl: `wss://${tunnelHostname(database.projectId, deps.customerDomain)}${tunnelPath(database.id, tunnelTargetOf(access))}`,
+        };
+        return c.json(response, role.value.created ? 201 : 200);
+    });
+
+    // Traefik's ForwardAuth asks this before it opens a database tunnel
+    // (decision 126): the caller's token, the tunnel host and path it asked
+    // for. Any answer but a 2xx goes back to the caller instead, so nothing
+    // reaches the Project's namespace without a Member of its Account, or a
+    // key of one that may write. The role's password guards the login.
+    // Every refusal is a 403, never a 404: Traefik answers 404 itself while
+    // a new Project's tunnel route does not exist yet, which `oup` waits
+    // out, and a refusal must end its wait.
+    app.get('/v1/database-tunnel', async (c) => {
+        if (!scopeAllows(c.get('identity').scopes, 'POST')) {
+            return c.json({ error: `this API key lacks the scope ${API_KEY_SCOPES.write}` }, 403);
+        }
+        const projectId = tunnelProjectOf(c.req.header('x-forwarded-host') ?? '', deps.customerDomain);
+        const path = TUNNEL_PATH.exec((c.req.header('x-forwarded-uri') ?? '').split('?')[0] ?? '');
+        const refused = { error: 'no such Database tunnel for this caller' };
+        if (projectId === undefined || path?.[1] === undefined || (c.req.header('x-forwarded-method') ?? 'GET') !== 'GET') {
+            return c.json(refused, 403);
+        }
+        const database = await databaseOf(c.get('accountIds'), projectId, path[1]);
+        return database === undefined ? c.json(refused, 403) : c.body(null, 204);
     });
 
     /** The Bucket without its Garage ids, which are ours. */

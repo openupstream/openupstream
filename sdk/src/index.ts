@@ -8,7 +8,7 @@
  * The API surface is defined here first and implemented in control-plane/.
  */
 
-export const SDK_VERSION = '0.4.0';
+export const SDK_VERSION = '0.5.0';
 
 export * from './model.js';
 export * from './internal.js';
@@ -23,6 +23,8 @@ import type {
     DatabaseDetails,
     DatabaseInput,
     DatabasePatch,
+    DatabaseProxy,
+    DatabaseProxyInput,
     Domain,
     Id,
     JobDetails,
@@ -134,6 +136,15 @@ export class OpenUpstreamClient {
 
     createDatabase(projectId: Id, input: DatabaseInput): Promise<ApiResult<DatabaseDetails>> {
         return this.#call('POST', `/v1/projects/${encodeURIComponent(projectId)}/databases`, input);
+    }
+
+    /**
+     * The caller's own Postgres role for the Database at a level, created on
+     * the first ask, and the tunnel to reach it with (decision 126). An API
+     * key gets roles of its own and needs `openupstream:write`.
+     */
+    openDatabaseProxy(projectId: Id, databaseId: Id, input: DatabaseProxyInput = {}): Promise<ApiResult<DatabaseProxy>> {
+        return this.#call('POST', `/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/proxy`, input);
     }
 
     getDatabase(projectId: Id, databaseId: Id): Promise<ApiResult<DatabaseDetails>> {

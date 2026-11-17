@@ -14,6 +14,7 @@ import { PROJECT_REGISTRY_AUTH, PROJECT_SECRETS, type RegistryAuth, projectNames
 import type pg from 'pg';
 import type { ControlPlaneKube, SecretManifest } from '../kube.js';
 import { type Result, err, ok } from '../result.js';
+import { projectRoles, roleSecretManifest } from '../databases/roles.js';
 import { jobRegistryAuthName } from '../jobs/store.js';
 import { credentialKey, parseImageReference } from '../registry.js';
 import { registryAuthName } from '../services/store.js';
@@ -92,8 +93,8 @@ async function registryCredentials(
 
 /**
  * Writes the Project's two Secrets with what it has now, empty ones when it
- * has nothing left. `no-namespace` until an operator has created the
- * Project's namespace.
+ * has nothing left, and one per role of its Databases (decision 126).
+ * `no-namespace` until an operator has created the Project's namespace.
  */
 export async function syncProjectSecrets(
     deps: Pick<SecretsDeps, 'pool' | 'kube' | 'kek'>,
@@ -116,6 +117,16 @@ export async function syncProjectSecrets(
     const registry = await deps.kube.applySecret(registryAuthManifest(projectId, credentials.value));
     if (!registry.ok || registry.value === 'no-namespace') {
         return registry;
+    }
+    const roles = await projectRoles(deps.pool, deps.kek, projectId);
+    if (!roles.ok) {
+        return err(`cannot read the Database roles: ${roles.error.kind}`);
+    }
+    for (const role of roles.value) {
+        const written = await deps.kube.applySecret(roleSecretManifest(projectId, role));
+        if (!written.ok) {
+            return written;
+        }
     }
     // Only now may the Services roll: their pods will read these values.
     await deps.pool.query('update projects set secrets_version = $2 where id = $1 and secrets_version is distinct from $2', [projectId, version]);

@@ -7,6 +7,7 @@ import {
     type Bucket,
     type BucketDetails,
     type DatabaseDetails,
+    type DatabaseProxy,
     type Domain,
     type JobDetails,
     type JobRun,
@@ -34,19 +35,19 @@ import { err, ok } from '../result.js';
 import { cpuQuery, diskQuery, memoryQuery } from '../usage/live.js';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
 import { fakeStorage } from '../testing/storage.js';
-import { createApi } from './app.js';
+import { createApi, tunnelProjectOf } from './app.js';
 import { type Authenticate, SESSION_TOKEN_TYPE, madauthAuthenticator, sessionVerifier } from './auth.js';
 
 const ISSUER = 'https://openupstream.test';
 
-/** API keys as madAuth would verify them: `madauth_<subject>_<read|write|none>`. */
+/** API keys as madAuth would verify them: `madauth_<subject>_<read|write|none>[_<key id>]`. */
 const apiKeys: Authenticate = async (key) => {
-    const [, subject, scope] = key.split('_');
+    const [, subject, scope, keyId] = key.split('_');
     if (subject === undefined || scope === undefined) {
         return err({ kind: 'invalid', reason: 'unknown key' });
     }
     const scopes = scope === 'read' ? [API_KEY_SCOPES.read] : scope === 'write' ? [API_KEY_SCOPES.write] : [];
-    return ok({ subject, email: `${subject}@keys.test`, scopes });
+    return ok({ subject, email: `${subject}@keys.test`, scopes, ...(keyId === undefined ? {} : { apiKeyId: keyId }) });
 };
 
 let db: TestDatabase;
@@ -687,6 +688,133 @@ describe('Databases', () => {
             /is deleted/,
         );
         assert.equal((await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'db-tests' })).status, 201);
+    });
+});
+
+describe('Database proxy: a caller\'s own role and the tunnel check', () => {
+    let projectId: string;
+    let database: DatabaseDetails;
+    let other: DatabaseDetails;
+    const proxy = (subject: string, body?: unknown, databaseId = database.id) =>
+        call('POST', `/v1/projects/${projectId}/databases/${databaseId}/proxy`, subject, body);
+    const withKey = (key: string, method: string, path: string, headers: Record<string, string> = {}, body?: unknown) =>
+        api.request(path, {
+            method,
+            headers: { authorization: `Bearer ${key}`, ...headers, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+    const tunnel = (headers: Record<string, string>, bearer?: string) =>
+        api.request('/v1/database-tunnel', { headers: { ...(bearer === undefined ? {} : { authorization: `Bearer ${bearer}` }), ...headers } });
+    const at = (databaseId: string, target = 'pooler', host = `pg-${projectId}.openupstream.test`) => ({
+        'x-forwarded-host': host,
+        'x-forwarded-uri': `/databases/${databaseId}/${target}`,
+        'x-forwarded-method': 'GET',
+    });
+
+    before(async () => {
+        const response = await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'proxy-tests' });
+        projectId = ((await response.json()) as Project).id;
+        const create = async (name: string) =>
+            (await (await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name, memoryMb: 256, storageGb: 1 })).json()) as DatabaseDetails;
+        database = await create('orders');
+        other = await create('quiet');
+    });
+
+    test('the first ask creates a read role with its password Secret; later asks return the same', async () => {
+        const first = await proxy('alice');
+        assert.equal(first.status, 201);
+        const role = (await first.json()) as DatabaseProxy;
+        assert.equal(role.access, 'read');
+        assert.match(role.user, /^oup_read_[0-9a-f]{32}$/);
+        assert.match(role.password, /^[A-Za-z0-9_-]{32}$/);
+        assert.equal(role.database, 'app');
+        assert.equal(role.tunnelUrl, `wss://pg-${projectId}.openupstream.test/databases/${database.id}/pooler`);
+        const secret = appliedSecrets.filter((applied) => applied.type === 'kubernetes.io/basic-auth').at(-1);
+        assert.equal(secret?.metadata.namespace, `project-${projectId}`);
+        assert.equal(secret?.metadata.labels['cnpg.io/reload'], 'true');
+        assert.equal(Buffer.from(secret?.data['username'] ?? '', 'base64').toString(), role.user);
+        assert.equal(Buffer.from(secret?.data['password'] ?? '', 'base64').toString(), role.password);
+        const again = await proxy('alice', { access: 'read' });
+        assert.equal(again.status, 200);
+        assert.deepEqual(await again.json(), role);
+    });
+
+    test('owner reaches the primary with a role of its own; another Member gets their own roles', async () => {
+        const owner = (await (await proxy('alice', { access: 'owner' })).json()) as DatabaseProxy;
+        assert.match(owner.user, /^oup_owner_/);
+        assert.equal(owner.tunnelUrl, `wss://pg-${projectId}.openupstream.test/databases/${database.id}/primary`);
+        const write = (await (await proxy('alice', { access: 'write' })).json()) as DatabaseProxy;
+        assert.match(write.tunnelUrl, /\/pooler$/);
+        const carol = (await (await proxy('carol', { access: 'owner' })).json()) as DatabaseProxy;
+        assert.notEqual(carol.user, owner.user);
+        assert.notEqual(carol.password, owner.password);
+    });
+
+    test('input, other Accounts and unknown Databases', async () => {
+        assert.equal((await proxy('alice', { access: 'admin' })).status, 400);
+        assert.equal((await proxy('bob')).status, 404);
+        assert.equal((await proxy('alice', undefined, '00000000-0000-4000-8000-00000000abcd')).status, 404);
+    });
+
+    test('an API key needs openupstream:write and gets roles of its own, apart from its Member', async () => {
+        const path = `/v1/projects/${projectId}/databases/${database.id}/proxy`;
+        assert.equal((await withKey('madauth_alice_read_k1', 'POST', path)).status, 403);
+        const created = await withKey('madauth_alice_write_k1', 'POST', path, {}, { access: 'owner' });
+        assert.equal(created.status, 201);
+        const key = (await created.json()) as DatabaseProxy;
+        const session = (await (await proxy('alice', { access: 'owner' })).json()) as DatabaseProxy;
+        assert.notEqual(key.user, session.user);
+        const otherKey = (await (await withKey('madauth_alice_write_k2', 'POST', path, {}, { access: 'owner' })).json()) as DatabaseProxy;
+        assert.notEqual(otherKey.user, key.user);
+        assert.equal((await withKey('madauth_alice_write', 'POST', path)).status, 503);
+    });
+
+    test('the operator gets every role per Database and the tunnel host on every row of the Project', async () => {
+        const rows = (await listDatabaseRows(db.pool, 'openupstream.test')).filter((row) => row.project.id === projectId);
+        const orders = rows.find((row) => row.database.id === database.id);
+        const quiet = rows.find((row) => row.database.id === other.id);
+        assert.equal(orders?.roles?.length, 6);
+        assert.deepEqual(new Set(orders?.roles?.map((role) => role.access)), new Set(['read', 'write', 'owner']));
+        assert.equal(quiet?.roles, undefined);
+        assert.equal(orders?.tunnelHostname, `pg-${projectId}.openupstream.test`);
+        assert.equal(quiet?.tunnelHostname, `pg-${projectId}.openupstream.test`);
+        const elsewhere = (await listDatabaseRows(db.pool, 'openupstream.test')).filter((row) => row.project.id !== projectId);
+        assert.ok(elsewhere.every((row) => row.tunnelHostname === undefined));
+        assert.ok((await listDatabaseRows(db.pool)).every((row) => row.tunnelHostname === undefined));
+    });
+
+    test('Traefik may open the tunnel for a Member of the Account and for a key that may write', async () => {
+        assert.equal((await tunnel(at(database.id), await token('alice'))).status, 204);
+        assert.equal((await tunnel(at(database.id, 'primary'), await token('carol'))).status, 204);
+        assert.equal((await tunnel(at(database.id), 'madauth_alice_write_k1')).status, 204);
+    });
+
+    test('and for nobody else, nor for a host, path or method that is not a tunnel: always 403, never 404', async () => {
+        assert.equal((await tunnel(at(database.id))).status, 401);
+        assert.equal((await tunnel(at(database.id), 'not-a-token')).status, 401);
+        assert.equal((await tunnel(at(database.id), await token('bob'))).status, 403);
+        assert.equal((await tunnel(at(database.id), 'madauth_alice_read_k1')).status, 403);
+        assert.equal((await tunnel(at(database.id, 'pooler', `pg-${projectId}.elsewhere.test`), await token('alice'))).status, 403);
+        assert.equal((await tunnel(at(database.id, 'replica'), await token('alice'))).status, 403);
+        assert.equal((await tunnel({ ...at(database.id), 'x-forwarded-uri': `/databases/${database.id}/pooler/x` }, await token('alice'))).status, 403);
+        assert.equal((await tunnel({ ...at(database.id), 'x-forwarded-method': 'POST' }, await token('alice'))).status, 403);
+        assert.equal((await tunnel({}, await token('alice'))).status, 403);
+    });
+
+    test('a deleted Database has no tunnel and no roles in the rows', async () => {
+        assert.equal((await call('DELETE', `/v1/projects/${projectId}/databases/${other.id}`, 'alice')).status, 202);
+        assert.equal((await tunnel(at(other.id), await token('alice'))).status, 403);
+        assert.equal((await proxy('alice', {}, other.id)).status, 404);
+    });
+
+    test('the tunnel host names the Project: pg-<id> under the customer domain only', () => {
+        const id = '0f3c2b1a-1111-4222-8333-444455556666';
+        assert.equal(tunnelProjectOf(`pg-${id}.openupstream.test`, 'openupstream.test'), id);
+        assert.equal(tunnelProjectOf(`PG-${id.toUpperCase()}.OpenUpstream.test`, 'openupstream.test'), id);
+        assert.equal(tunnelProjectOf(`pg-${id}.x.openupstream.test`, 'openupstream.test'), undefined);
+        assert.equal(tunnelProjectOf(`app-${id}.openupstream.test`, 'openupstream.test'), undefined);
+        assert.equal(tunnelProjectOf('pg-abc.openupstream.test', 'openupstream.test'), undefined);
+        assert.equal(tunnelProjectOf(`pg-${id}.openupstream.testx`, 'openupstream.test'), undefined);
     });
 });
 

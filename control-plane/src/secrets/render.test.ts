@@ -8,6 +8,7 @@ import type { KeyEncryptionKey } from './envelope.js';
 import { registryAuthManifest, projectSecretManifest, secretsPass, syncProjectSecrets } from './render.js';
 import { deleteSecret, putSecret, sealProjectValue } from './store.js';
 import { registryAuthName } from '../services/store.js';
+import { roleFor } from '../databases/roles.js';
 
 let db: TestDatabase;
 const kek: KeyEncryptionKey = { id: 'kek-1', key: randomBytes(32) };
@@ -153,4 +154,27 @@ test('the version the Services roll on moves only once the values are written', 
     assert.equal(await version(), first);
     assert.ok((await syncProjectSecrets({ pool: db.pool, kube, kek }, projectId)).ok);
     assert.notEqual(await version(), first);
+});
+
+test("a pass writes each role's Secret of the Project's live Databases, as CloudNativePG reads it (decision 126)", async () => {
+    const projectId = await createProject();
+    const databases = await db.pool.query<{ id: string }>(
+        `insert into databases (project_id, name, memory_mb, storage_gb) values ($1, 'main', 256, 1), ($1, 'gone', 256, 1) returning id`,
+        [projectId],
+    );
+    const [live, gone] = databases.rows.map((row) => ({ id: row.id, projectId })) as [{ id: string; projectId: string }, { id: string; projectId: string }];
+    const role = await roleFor(db.pool, kek, live, { subject: 'usr_a' }, 'write');
+    assert.ok(role.ok);
+    const goneRole = await roleFor(db.pool, kek, gone, { subject: 'usr_a' }, 'read');
+    assert.ok(goneRole.ok);
+    await db.pool.query('update databases set deleted_at = now() where id = $1', [gone.id]);
+    const { kube, applied } = fakeKube();
+    await secretsPass({ pool: db.pool, kube, kek, log: () => undefined });
+    const secret = applied.get(`project-${projectId}/pg-role-${role.value.id}`);
+    assert.equal(secret?.type, 'kubernetes.io/basic-auth');
+    assert.deepEqual(secret?.data, {
+        username: Buffer.from(role.value.name).toString('base64'),
+        password: Buffer.from(role.value.password).toString('base64'),
+    });
+    assert.equal(applied.get(`project-${projectId}/pg-role-${goneRole.value.id}`), undefined);
 });
