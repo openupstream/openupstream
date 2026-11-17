@@ -105,10 +105,12 @@ metadata:
 data:
   nginx.conf: |
     worker_processes 2;
+    worker_rlimit_nofile 32768;
     pid /tmp/nginx.pid;
     error_log /dev/stderr warn;
     events {
-      worker_connections 1024;
+      # A proxied request takes two; Garage, not nginx, is to be the limit.
+      worker_connections 8192;
     }
     http {
       access_log off;
@@ -271,7 +273,8 @@ spec:
         - name: s3-proxy
           configMap: {name: garage-s3-proxy}
         - name: s3-proxy-tmp
-          emptyDir: {}
+          # The pid file and nginx's temp paths; nothing is buffered there.
+          emptyDir: {sizeLimit: 64Mi}
   volumeClaimTemplates:
     - metadata: {name: meta}
       spec:
