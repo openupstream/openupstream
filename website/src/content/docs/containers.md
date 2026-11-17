@@ -19,7 +19,7 @@ Bring a container image from any registry and run it in one of three ways:
   every Project is cut off from the others on the network.
 - **Pinned images.** A deploy resolves the tag to a digest, so a restart
   runs the same image. Rollouts start the new container before stopping
-  the old one.
+  the old one, which gets two minutes to finish its requests.
 - **Your Databases and Secrets in the environment.** `DATABASE_URL` and
   your Secrets are there when the container starts.
 - **Routing and TLS.** A Service is served at a Domain below any path
