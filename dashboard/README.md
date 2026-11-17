@@ -21,6 +21,14 @@ What it does now:
     redeploy what the tag points at now, delete. Public images only: a
     private registry's password is given to `oup service deploy`, never
     typed into the page (decision 127).
+  - Jobs: list with state, image, digest and schedule; deploy (name,
+    image, schedule, time zone, timeout, memory, CPU, Site), change,
+    redeploy, start a run, delete. Their runs of the last day, read while
+    the list is open, with stop and remove. A Job from the page runs the
+    image's own command, from a public image; another command and a run's
+    arguments and variables are given to `oup` (decision 129).
+  - Secrets: names with the time their value was set, delete. A value is
+    set with `oup secret set`, never typed into the page (decision 129).
   - Buckets: list with the S3 endpoint and the addresses Routes serve them
     at, create, delete. A Bucket's key is not shown and never fetched
     (decision 128): it comes from the API, and `oup site deploy` gets it
@@ -32,8 +40,7 @@ What it does now:
     single-page app) and delete.
   - what every Resource uses now, from the API's `/usage` (decision 124):
     CPU, memory and storage against what it was given, and its instances
-    with their Site, state and restarts. Jobs are shown this way and
-    still created with `oup`.
+    with their Site, state and restarts.
 
 - `/cli`: how to use `oup`, for anyone, signed in or not (decision 125).
   The text is the part of `cli/README.md` between its `docs` comments, read
@@ -43,7 +50,7 @@ What it does now:
   other than the hosted service the page names its own API address, in a
   note and in the example's `oup login --api …`.
 
-Forms for Jobs and Secrets, and a Service's logs, follow.
+A Service's and a run's logs follow.
 
 ## How it reaches madAuth and the API
 

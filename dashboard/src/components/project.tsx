@@ -6,12 +6,14 @@ import {
     COMPUTE_SITES,
     type DatabaseDetails,
     type Domain,
+    type JobDetails,
     type OpenUpstreamClient,
     type Project,
     type ProjectUsage,
     type ResourceKind,
     type ResourceUsage,
     type Route,
+    type Secret,
     type ServiceDetails,
     type Site,
 } from '@openupstream/sdk';
@@ -19,19 +21,23 @@ import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { api, refused } from '../lib/session';
 import { databaseNameProblem, databaseSizes, databaseUrlVariable, resizeOf } from '../lib/usage';
 import { servedAt, ingressOf } from '../lib/routing';
+import { JobCard, JobForm } from './jobs';
 import { BucketCard, BucketForm, DomainCard, DomainForm } from './routing';
+import { Secrets } from './secrets';
 import { ServiceCard, ServiceForm } from './services';
 import { Usage } from './usage';
 
 /**
- * The Project, its Databases, Services, Buckets and Domains with their
- * Routes (by the Domain's id), and what its Resources use now; `usage`
- * undefined when the API could not say.
+ * The Project, its Databases, Services, Jobs, Secrets (names only), Buckets
+ * and Domains with their Routes (by the Domain's id), and what its
+ * Resources use now; `usage` undefined when the API could not say.
  */
 type Loaded = {
     readonly project: Project;
     readonly databases: readonly DatabaseDetails[];
     readonly services: readonly ServiceDetails[];
+    readonly jobs: readonly JobDetails[];
+    readonly secrets: readonly Secret[];
     readonly buckets: readonly Bucket[];
     readonly domains: readonly Domain[];
     readonly routes: Readonly<Record<string, readonly Route[]>>;
@@ -42,10 +48,12 @@ type Loaded = {
 const REFRESH_MS = 10_000;
 
 const load = async (client: OpenUpstreamClient, id: string): Promise<ApiResult<Loaded>> => {
-    const [project, databases, services, buckets, domains, usage] = await Promise.all([
+    const [project, databases, services, jobs, secrets, buckets, domains, usage] = await Promise.all([
         client.getProject(id),
         client.listDatabases(id),
         client.listServices(id),
+        client.listJobs(id),
+        client.listSecrets(id),
         client.listBuckets(id),
         client.listDomains(id),
         client.getUsage(id),
@@ -58,6 +66,12 @@ const load = async (client: OpenUpstreamClient, id: string): Promise<ApiResult<L
     }
     if (!services.ok) {
         return services;
+    }
+    if (!jobs.ok) {
+        return jobs;
+    }
+    if (!secrets.ok) {
+        return secrets;
     }
     if (!buckets.ok) {
         return buckets;
@@ -76,6 +90,8 @@ const load = async (client: OpenUpstreamClient, id: string): Promise<ApiResult<L
                   project: project.value,
                   databases: databases.value,
                   services: services.value,
+                  jobs: jobs.value,
+                  secrets: secrets.value,
                   buckets: buckets.value,
                   domains: domains.value,
                   routes: Object.fromEntries(domains.value.map((domain, index) => [domain.id, routes[index]?.ok ? routes[index].value : []])),
@@ -84,11 +100,7 @@ const load = async (client: OpenUpstreamClient, id: string): Promise<ApiResult<L
           };
 };
 
-const OTHER_KINDS: readonly { readonly kind: ResourceKind; readonly title: string; readonly command: string }[] = [
-    { kind: 'job', title: 'Jobs', command: 'oup job deploy' },
-];
-
-/** One Project: its Databases, Services, Buckets and Domains with their Routes, to create, change and delete, and what every Resource uses now with its instances. */
+/** One Project: its Databases, Services, Jobs, Buckets and Domains with their Routes, to create, change and delete, and what every Resource uses now with its instances. */
 export function ProjectPage({ id }: { readonly id: string }) {
     const [loaded, setLoaded] = useState<Loaded | undefined>(undefined);
     const [problem, setProblem] = useState<string | undefined>(undefined);
@@ -136,7 +148,7 @@ export function ProjectPage({ id }: { readonly id: string }) {
             </p>
         );
     }
-    const { project, databases, services, buckets, domains, routes, usage } = loaded;
+    const { project, databases, services, jobs, secrets, buckets, domains, routes, usage } = loaded;
     const defaultHostname = domains.find((domain) => domain.kind === 'default')?.hostname;
     const targets = { buckets, services };
     const allRoutes = Object.values(routes).flat();
@@ -197,6 +209,33 @@ export function ProjectPage({ id }: { readonly id: string }) {
             </section>
 
             <section>
+                <h2>Jobs</h2>
+                {jobs.length === 0 ? (
+                    <p>No Jobs yet. A Job is a container that runs to its end: on a schedule, or when started.</p>
+                ) : (
+                    <ul className="resources">
+                        {jobs.map((job) => (
+                            <JobCard
+                                key={job.id}
+                                job={job}
+                                usage={usageOf('job', job.id)}
+                                onChange={(patch) => change((client) => client.updateJob(project.id, job.id, patch))}
+                                onRedeploy={() => change((client) => client.deployJob(project.id, job.id))}
+                                onRun={() => change((client) => client.startJobRun(project.id, job.id))}
+                                onDelete={() => change((client) => client.deleteJob(project.id, job.id))}
+                            />
+                        ))}
+                    </ul>
+                )}
+                <JobForm existing={jobs} onCreate={(input) => change((client) => client.createJob(project.id, input))} />
+            </section>
+
+            <section>
+                <h2>Secrets</h2>
+                <Secrets secrets={secrets} onDelete={(name) => change((client) => client.deleteSecret(project.id, name))} />
+            </section>
+
+            <section>
                 <h2>Buckets</h2>
                 {buckets.length === 0 ? (
                     <p>No Buckets yet. A Bucket is S3 object storage with a key of its own; a Route serves it as a static site.</p>
@@ -238,36 +277,6 @@ export function ProjectPage({ id }: { readonly id: string }) {
                 <DomainForm existing={domains} onCreate={(input) => change((client) => client.createDomain(project.id, input))} />
             </section>
 
-            {OTHER_KINDS.map(({ kind, title, command }) => {
-                const resources = usage?.resources.filter((resource) => resource.kind === kind) ?? [];
-                return (
-                    <section key={kind}>
-                        <h2>{title}</h2>
-                        {resources.length === 0 ? (
-                            <p>
-                                <small>
-                                    None. They are created with{' '}
-                                    <a href="/cli">
-                                        <code>{command}</code>
-                                    </a>{' '}
-                                    for now.
-                                </small>
-                            </p>
-                        ) : (
-                            <ul className="resources">
-                                {resources.map((resource) => (
-                                    <li key={resource.id}>
-                                        <div className="resource-head">
-                                            <strong>{resource.name}</strong>
-                                        </div>
-                                        <Usage usage={resource} />
-                                    </li>
-                                ))}
-                            </ul>
-                        )}
-                    </section>
-                );
-            })}
         </>
     );
 }
