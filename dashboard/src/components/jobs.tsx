@@ -10,8 +10,9 @@ import { Usage } from './usage';
 /** What a change answers: undefined when it was done, what the API refused otherwise. */
 type Change = Promise<string | undefined>;
 
-/** How often an open list of runs asks again. */
+/** How often an open list of runs asks again while a run is going, and while none is. */
 const RUNS_REFRESH_MS = 5_000;
+const IDLE_REFRESH_MS = 30_000;
 
 /** A Job: what it runs and when, its state and runs, and the ways to change it. */
 export function JobCard(props: {
@@ -105,36 +106,58 @@ export function JobCard(props: {
             )}
             {/* Nothing is given to a Job between its runs, so there is nothing to show then. */}
             {usage !== undefined && usage.instances.length > 0 && <Usage usage={usage} />}
-            <Runs key={started} projectId={job.projectId} jobId={job.id} open={started > 0} />
+            <Runs projectId={job.projectId} jobId={job.id} asked={started} />
         </li>
     );
 }
 
-/** A Job's runs of the last day, read only while the list is open. */
-function Runs(props: { readonly projectId: string; readonly jobId: string; readonly open: boolean }) {
-    const { projectId, jobId } = props;
-    const [open, setOpen] = useState(props.open);
+const going = (run: Pick<JobRun, 'state'>): boolean => run.state === 'pending' || run.state === 'running';
+
+/**
+ * A Job's runs of the last day, read while the list is open: often while a
+ * run is going, otherwise at the page's own pace, which is enough to see a
+ * scheduled run appear. `asked` changes when a run was started here.
+ */
+function Runs(props: { readonly projectId: string; readonly jobId: string; readonly asked: number }) {
+    const { projectId, jobId, asked } = props;
+    const [open, setOpen] = useState(false);
+    // A run started here opens the list.
+    useEffect(() => {
+        if (asked > 0) {
+            setOpen(true);
+        }
+    }, [asked]);
     const [runs, setRuns] = useState<readonly JobRun[] | undefined>(undefined);
     const [problem, setProblem] = useState<string | undefined>(undefined);
-    const load = useCallback(async () => {
+    /** Reads the runs; whether any is still going. A failure is shown, a success leaves the message alone. */
+    const load = useCallback(async (): Promise<boolean> => {
         const result = await (await api()).listJobRuns(projectId, jobId);
-        setProblem(result.ok ? undefined : refused(result.error));
-        if (result.ok) {
-            setRuns(result.value);
+        if (!result.ok) {
+            setProblem(refused(result.error));
+            return false;
         }
+        setRuns(result.value);
+        return result.value.some(going);
     }, [projectId, jobId]);
     useEffect(() => {
         if (!open) {
             return undefined;
         }
-        void load();
-        const timer = window.setInterval(() => {
-            if (document.visibilityState === 'visible') {
-                void load();
+        // One request after the other, the next one sooner while a run is going.
+        let timer: number | undefined;
+        let closed = false;
+        const ask = async () => {
+            const busy = document.visibilityState === 'visible' ? await load() : false;
+            if (!closed) {
+                timer = window.setTimeout(() => void ask(), busy ? RUNS_REFRESH_MS : IDLE_REFRESH_MS);
             }
-        }, RUNS_REFRESH_MS);
-        return () => window.clearInterval(timer);
-    }, [open, load]);
+        };
+        void ask();
+        return () => {
+            closed = true;
+            window.clearTimeout(timer);
+        };
+    }, [open, load, asked]);
     const stop = async (run: JobRun) => {
         const result = await (await api()).deleteJobRun(projectId, jobId, run.id);
         setProblem(result.ok ? undefined : refused(result.error));
@@ -165,7 +188,7 @@ function Runs(props: { readonly projectId: string; readonly jobId: string; reado
                         {runs.map((run) => (
                             <tr key={run.id}>
                                 <td>{new Date(run.startedAt ?? run.createdAt).toLocaleString()}</td>
-                                <td>{run.trigger === 'schedule' ? 'schedule' : 'hand'}</td>
+                                <td>{run.trigger === 'schedule' ? 'schedule' : 'started'}</td>
                                 <td>
                                     <span className={`state ${run.state}`}>{run.state}</span>
                                     {run.reason !== null && <small> {run.reason === 'DeadlineExceeded' ? 'stopped at the timeout' : run.reason === 'BackoffLimitExceeded' ? 'exited with an error' : run.reason}</small>}
@@ -176,13 +199,12 @@ function Runs(props: { readonly projectId: string; readonly jobId: string; reado
                                         type="button"
                                         className="link danger"
                                         onClick={() => {
-                                            const going = run.state === 'pending' || run.state === 'running';
-                                            if (window.confirm(going ? 'Stop this run and remove it?' : 'Remove this run from the list?')) {
+                                            if (window.confirm(going(run) ? 'Stop this run and remove it?' : 'Remove this run from the list?')) {
                                                 void stop(run);
                                             }
                                         }}
                                     >
-                                        {run.state === 'pending' || run.state === 'running' ? 'Stop' : 'Remove'}
+                                        {going(run) ? 'Stop' : 'Remove'}
                                     </button>
                                 </td>
                             </tr>

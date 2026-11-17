@@ -1,5 +1,5 @@
 import { COMPUTE_SITES, DNS_LABEL, JOB_LIMITS, type Job, type JobInput, type JobPatch, type JobRun, type Site } from '@openupstream/sdk';
-import { whole } from './usage';
+import { whole, within } from './usage';
 
 /** What a Job form holds, as typed. `schedule` empty: started only by hand; `timeZone` empty: UTC; `homeSite` empty: wherever the Project's data is. */
 export interface JobFields {
@@ -42,8 +42,6 @@ export const jobFieldsOf = (job: JobWanted): JobFields => ({
     cpuMillicores: String(job.cpuMillicores),
     homeSite: job.homeSite ?? '',
 });
-
-const within = (value: number | undefined, least: number, most: number): value is number => value !== undefined && value >= least && value <= most;
 
 /** The fields as values; what is wrong with them otherwise. The API checks the same and more (the image, the schedule's syntax, the time zone). */
 export const jobWanted = (fields: JobFields): JobWanted | string => {

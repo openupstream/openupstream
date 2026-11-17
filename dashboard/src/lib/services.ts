@@ -1,5 +1,5 @@
 import { COMPUTE_SITES, DNS_LABEL, SERVICE_LIMITS, type Service, type ServiceInput, type ServicePatch, type Site } from '@openupstream/sdk';
-import { whole } from './usage';
+import { whole, within } from './usage';
 
 /** What a Service form holds, as typed. `port` empty: a worker; `homeSite` empty: wherever the Project's data is. */
 export interface ServiceFields {
@@ -31,8 +31,6 @@ export const fieldsOf = (service: Pick<Service, 'image' | 'port' | 'replicas' | 
     cpuMillicores: String(service.cpuMillicores),
     homeSite: service.homeSite ?? '',
 });
-
-const within = (value: number | undefined, least: number, most: number): value is number => value !== undefined && value >= least && value <= most;
 
 /** The fields as values; what is wrong with them otherwise. The API checks the same and more (that the image exists). */
 export const serviceWanted = (fields: ServiceFields): ServiceWanted | string => {
