@@ -156,3 +156,14 @@ test('the key-encryption key with its id; a malformed key is reported', () => {
     const bad = configFrom({ ...env, SECRETS_KEK: 'too short' });
     assert.deepEqual(bad.ok ? [] : bad.error, ['SECRETS_KEK: the key-encryption key must be 32 bytes in standard base64']);
 });
+
+test("WEBSITE_PROJECT_ID names the Project that may claim the waitlist's host; it must be an id", () => {
+    const config = configFrom({ ...waitlistEnv, WEBSITE_PROJECT_ID: '7b0c1c0e-5d0a-4a43-9f3e-2f6f2b7f7a11' });
+    assert.ok(config.ok);
+    assert.equal(config.value.websiteProjectId, '7b0c1c0e-5d0a-4a43-9f3e-2f6f2b7f7a11');
+    const without = configFrom(waitlistEnv);
+    assert.ok(without.ok);
+    assert.equal(without.value.websiteProjectId, undefined);
+    const bad = configFrom({ ...waitlistEnv, WEBSITE_PROJECT_ID: 'website' });
+    assert.deepEqual(bad.ok ? [] : bad.error, ['WEBSITE_PROJECT_ID must be the id of a Project']);
+});

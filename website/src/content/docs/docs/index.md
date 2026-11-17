@@ -9,7 +9,8 @@ know before you choose it, is on the product pages:
 [Static sites](/static-sites/) and [Containers](/containers/).
 
 :::note[Status: pre-alpha]
-The hosted service is not open for sign-up yet. The docs describe
+The hosted service is not open for sign-up yet;
+[join the waitlist](/waitlist) to hear when it opens. The docs describe
 version 1 as it is being built, and say where something is planned and not
 built.
 :::

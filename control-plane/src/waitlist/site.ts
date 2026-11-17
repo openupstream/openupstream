@@ -129,7 +129,7 @@ const linkGone = (): Page =>
         'Link expired: openupstream',
         html`<h1>This link no longer works</h1>
 <p>A confirmation link works for 48 hours. If your address was removed, it is gone already.</p>
-<p><a href="/">Join the waitlist again</a></p>`,
+<p><a href="/waitlist">Join the waitlist again</a></p>`,
     );
 
 /** The two e-mails: confirm a new address; or, for one on the list already, how to remove it. */
@@ -162,7 +162,7 @@ const privacy = (url: string): Page =>
     layout(
         'Privacy: openupstream',
         html`<h1>Privacy notice</h1>
-<p>This notice covers this page and the waitlist. The hosted service itself is not open yet.</p>
+<p>This notice covers this website, with its product pages and documentation where they are served here, and the waitlist. The hosted service itself is not open yet.</p>
 <h2>Who is responsible</h2>
 <p>The person named in the <a href="/imprint">imprint</a> is the controller under the GDPR. Write to the address given there for anything below.</p>
 <h2>What we store, and why</h2>
@@ -175,8 +175,8 @@ const privacy = (url: string): Page =>
 <li>The list is stored in our database on rented servers in Germany (Hetzner and OVHcloud), with backups at Hetzner in Nuremberg.</li>
 <li>The e-mails are sent through Amazon Simple Email Service in its Frankfurt region, by Amazon Web Services EMEA SARL, Luxembourg, as our processor. Amazon is a US group, so a transfer to the US cannot be ruled out; it is covered by the EU–US Data Privacy Framework and the EU standard contractual clauses in AWS's data processing addendum.</li>
 </ul>
-<h2>Visiting this page</h2>
-<p>This page sets no cookies and loads nothing from anyone else. To deliver it and protect it from abuse, our servers process your IP address, and the request is written to our server logs (Art. 6(1)(f) GDPR).</p>
+<h2>Visiting this website</h2>
+<p>Its pages set no cookies and load nothing from anyone else. The product pages and the documentation keep your choice of a light or dark theme and the state of the navigation in your browser's own storage, so the pages look the same on your next visit; neither is sent to us. To deliver the pages and protect them from abuse, our servers process your IP address, and the request is written to our server logs (Art. 6(1)(f) GDPR).</p>
 <h2>Your rights</h2>
 <p>You have the right to access, rectification, erasure, restriction of processing and data portability, and to object to processing based on legitimate interests. You may also complain to a data protection supervisory authority.</p>
 <p class="muted">${url}/privacy, version ${CONSENT.version}</p>`,
@@ -209,7 +209,9 @@ export function createWaitlistSite(deps: WaitlistSiteDeps): Hono {
     // A form with an address and a checkbox is far below this.
     app.use(bodyLimit({ maxSize: 4096, onError: (c) => c.html(home('That was too much to read. Try again.'), 413) }));
 
+    // `/waitlist` is the page's address once the website has the host's other paths (decision 132); `/` serves it where there is no website.
     app.get('/', (c) => c.html(home()));
+    app.get('/waitlist', (c) => c.html(home()));
     app.get('/privacy', (c) => c.html(privacy(url)));
     app.get('/imprint', (c) => c.html(imprint(deps.imprint)));
 
