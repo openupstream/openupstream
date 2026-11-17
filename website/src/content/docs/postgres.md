@@ -31,8 +31,10 @@ standby runs in the Frankfurt region.
   90 seconds.
 - **Session features need a direct connection.** `LISTEN`, advisory locks
   and `SET` do not work through transaction pooling.
-- **A Database is reachable from its own Project only**: its Services and
-  Jobs. Access from your own machine is planned, and not built yet.
+- **A Database is reachable from its own Project**, its Services and Jobs,
+  **and from your own machine with `oup pg proxy`**, through a tunnel on
+  port 443. Nothing faces the internet on Postgres's port, so tools that
+  cannot run `oup`, such as a hosted BI tool, cannot connect.
 - **Storage only grows.** It cannot be made smaller again.
 - **Changing memory restarts both instances** one after the other. Writes
   pause for seconds.
