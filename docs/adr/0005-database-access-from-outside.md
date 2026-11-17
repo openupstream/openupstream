@@ -105,8 +105,8 @@ Three ways to make a Member's role act as `app` were considered:
    Postgres backend.
 6. **Postgres roles per caller, Database and access level**, not the
    `app` password. The caller is a Member, or an API key, which gets
-   roles of its own (point 8). `oup pg proxy --access read|write|owner` picks the
-   level, `read` when nothing is given:
+   roles of its own (point 8). `oup pg proxy --access read|write|owner`
+   picks the level, `read` when nothing is given:
    - `read` may read every table (Postgres's `pg_read_all_data`);
    - `write` may also insert, update and delete rows
      (`pg_write_all_data` on top of `read`'s), but not change the schema;
@@ -122,32 +122,39 @@ Three ways to make a Member's role act as `app` were considered:
    A caller has at most three roles per Database, one per level. The
    first `oup pg proxy` of a caller for a Database at a level records the
    role in the control plane, which generates its password and keeps it
-   encrypted, as it keeps a Project's Secrets. The Databases operator
-   adds the role to the Cluster, and `oup` prints the connection URL. The
-   control plane returns the password on every later run, so the URL is
-   the same on every machine and a connection saved in a client keeps
-   working. A role is dropped with the Database and when the Member,
-   or the Member an API key belongs to, leaves the Account. Decision 61 stands: the `app` password is still
-   never returned.
+   encrypted, as it keeps a Project's Secrets. The control plane also
+   writes the Kubernetes Secret in the Project's namespace that
+   CloudNativePG reads the password from, as it writes the Project's
+   other Secrets; the Databases operator adds the role to the Cluster
+   and names that Secret, without seeing the password. `oup` prints the
+   connection URL. The control plane returns the password on every later
+   run, to the role's own caller and no one else, so the URL is the same
+   on every machine and a connection saved in a client keeps working. A
+   role is dropped with the Database and when the Member, or the Member
+   an API key belongs to, leaves the Account. Decision 61 stands: the
+   `app` password is still never returned.
 7. **Every Member picks their own level.** Nothing stops a Member from
    asking for `owner`: the levels guard against mistakes, such as a
    stray `DELETE` while looking at production, not against a colleague.
    Limiting what a given Member may pick needs Member roles (Open
    question 9), which are not part of this decision.
 8. **An API key gets roles of its own**, not those of the Member it
-   belongs to, so a CI run and a person stay apart in Postgres. A key
-   with only `openupstream:read` may ask for `read`; `write` and `owner`
-   need `openupstream:write`.
+   belongs to, so a CI run and a person stay apart in Postgres. Asking
+   for a role records one, so a key needs `openupstream:write` at every
+   level, `read` included (decision 64): a key with only
+   `openupstream:read` opens no tunnel.
 
 ## Consequences
 
 - A Member reaches a Database from a laptop with `oup` and a Postgres
   client, and a CI run with an API key runs migrations. Who connected is
   known twice: the token at the tunnel, the role in Postgres.
-- The control plane holds a readable password per role, which anyone who
-  may open the tunnel can ask for again. By itself it opens nothing from
-  outside: Postgres is reached only through the tunnel, which wants a
-  token. Inside the cluster it works from the Project's own pods alone.
+- The control plane holds a readable password per role, which the
+  role's own caller can ask for again: a Member gets no other Member's
+  and no key's. It is also in a Secret of the Project's namespace, as
+  the `app` password is. By itself it opens nothing from outside:
+  Postgres is reached only through the tunnel, which wants a token.
+  Inside the cluster it works from the Project's own pods alone.
 - A revoked API key opens no tunnel, but madAuth does not say when a key
   is revoked, so its roles stay in the Database, unreachable from
   outside, until the Database goes or a cleanup that asks madAuth is
