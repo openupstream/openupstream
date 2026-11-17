@@ -44,20 +44,22 @@ test('a Route goes to a Bucket, or to a Service that has a port', () => {
         { value: 'bucket:b2', label: 'Bucket files' },
         { value: 'service:s1', label: 'Service api' },
     ]);
-    assert.deepEqual(routeInput({ pathPrefix: ' / ', target: 'bucket:b1', spaFallback: true }, [], targets), { pathPrefix: '/', bucketId: 'b1', spaFallback: true });
-    assert.deepEqual(routeInput({ pathPrefix: '/api', target: 'service:s1', spaFallback: true }, [], targets), { pathPrefix: '/api', serviceId: 's1' });
+    assert.deepEqual(routeInput({ pathPrefix: ' / ', target: 'bucket:b1', spaFallback: true }, [], targets, []), { pathPrefix: '/', bucketId: 'b1', spaFallback: true });
+    assert.deepEqual(routeInput({ pathPrefix: '/api', target: 'service:s1', spaFallback: true }, [], targets, []), { pathPrefix: '/api', serviceId: 's1' });
 });
 
 test('what is wrong with a Route', () => {
     const routes = [{ pathPrefix: '/', target: { kind: 'bucket' as const, bucketId: 'b1', spaFallback: true } }];
-    assert.equal(routeInput(NEW_ROUTE, [], targets), 'Choose what the Route goes to.');
-    assert.equal(routeInput({ ...NEW_ROUTE, target: 'service:s2' }, [], targets), 'Choose what the Route goes to.');
-    assert.equal(routeInput({ ...NEW_ROUTE, target: 'bucket:gone' }, [], targets), 'Choose what the Route goes to.');
-    assert.match(String(routeInput({ ...NEW_ROUTE, pathPrefix: '/docs/', target: 'bucket:b1' }, [], targets)), /no slash at its end/);
-    assert.match(String(routeInput({ ...NEW_ROUTE, pathPrefix: 'docs', target: 'bucket:b1' }, [], targets)), /starts with a slash/);
-    assert.equal(routeInput({ ...NEW_ROUTE, target: 'bucket:b2' }, routes, targets), 'This Domain has a Route at /. Delete it first.');
-    assert.match(String(routeInput({ pathPrefix: '/old', target: 'bucket:b1', spaFallback: false }, routes, targets)), /^The Route \/ serves this Bucket with the fallback/);
-    assert.deepEqual(routeInput({ pathPrefix: '/old', target: 'bucket:b1', spaFallback: true }, routes, targets), { pathPrefix: '/old', bucketId: 'b1', spaFallback: true });
+    assert.equal(routeInput(NEW_ROUTE, [], targets, []), 'Choose what the Route goes to.');
+    assert.equal(routeInput({ ...NEW_ROUTE, target: 'service:s2' }, [], targets, []), 'Choose what the Route goes to.');
+    assert.equal(routeInput({ ...NEW_ROUTE, target: 'bucket:gone' }, [], targets, []), 'Choose what the Route goes to.');
+    assert.match(String(routeInput({ ...NEW_ROUTE, pathPrefix: '/docs/', target: 'bucket:b1' }, [], targets, [])), /no slash at its end/);
+    assert.match(String(routeInput({ ...NEW_ROUTE, pathPrefix: 'docs', target: 'bucket:b1' }, [], targets, [])), /starts with a slash/);
+    assert.equal(routeInput({ ...NEW_ROUTE, target: 'bucket:b2' }, routes, targets, routes), 'This Domain has a Route at /. Delete it first.');
+    assert.match(String(routeInput({ pathPrefix: '/old', target: 'bucket:b1', spaFallback: false }, routes, targets, routes)), /^Another Route \(\/\) serves this Bucket with the fallback/);
+    // The other Route may be on another Domain: the path is free here, the fallback is the Bucket's all the same.
+    assert.match(String(routeInput({ pathPrefix: '/', target: 'bucket:b1', spaFallback: false }, [], targets, routes)), /^Another Route \(\/\) serves this Bucket with the fallback/);
+    assert.deepEqual(routeInput({ pathPrefix: '/old', target: 'bucket:b1', spaFallback: true }, routes, targets, routes), { pathPrefix: '/old', bucketId: 'b1', spaFallback: true });
 });
 
 test('what a Route goes to, in words', () => {

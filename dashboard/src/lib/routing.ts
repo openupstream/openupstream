@@ -59,13 +59,21 @@ export const targetOptions = ({ buckets, services }: Targets): readonly { readon
     ...services.filter((service) => service.port !== null).map((service) => ({ value: `service:${service.id}`, label: `Service ${service.name}` })),
 ];
 
-/** The form as a Route for the API; what is wrong with it otherwise. */
-export const routeInput = (fields: RouteFields, routes: readonly Pick<Route, 'pathPrefix' | 'target'>[], targets: Targets): RouteInput | string => {
+/**
+ * The form as a Route for the API; what is wrong with it otherwise. `routes`
+ * are the Domain's, `all` those of every Domain of the Project.
+ */
+export const routeInput = (
+    fields: RouteFields,
+    routes: readonly Pick<Route, 'pathPrefix'>[],
+    targets: Targets,
+    all: readonly Pick<Route, 'pathPrefix' | 'target'>[],
+): RouteInput | string => {
     const pathPrefix = fields.pathPrefix.trim();
     const [kind, id] = fields.target.split(':');
     const chosen = targetOptions(targets).some((option) => option.value === fields.target);
-    // Every Route to one Bucket has the same fallback: the Bucket's website settings are one.
-    const other = routes.find((route) => route.target.kind === 'bucket' && route.target.bucketId === id);
+    // Every Route to one Bucket has the same fallback, on whichever Domain: the Bucket's website settings are one.
+    const other = all.find((route) => route.target.kind === 'bucket' && route.target.bucketId === id);
     return !PATH_PREFIX.test(pathPrefix)
         ? 'The path is / or starts with a slash and has no slash at its end, e.g. /docs.'
         : routes.some((route) => route.pathPrefix === pathPrefix)
@@ -75,7 +83,7 @@ export const routeInput = (fields: RouteFields, routes: readonly Pick<Route, 'pa
             : kind === 'service'
               ? { pathPrefix, serviceId: id }
               : other !== undefined && other.target.kind === 'bucket' && other.target.spaFallback !== fields.spaFallback
-                ? `The Route ${other.pathPrefix} serves this Bucket ${other.target.spaFallback ? 'with' : 'without'} the fallback to index.html; every Route to one Bucket has the same.`
+                ? `Another Route (${other.pathPrefix}) serves this Bucket ${other.target.spaFallback ? 'with' : 'without'} the fallback to index.html; every Route to one Bucket has the same.`
                 : { pathPrefix, bucketId: id, spaFallback: fields.spaFallback };
 };
 

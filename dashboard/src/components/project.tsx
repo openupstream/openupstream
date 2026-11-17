@@ -66,7 +66,8 @@ const load = async (client: OpenUpstreamClient, id: string): Promise<ApiResult<L
         return domains;
     }
     const routes = await Promise.all(domains.value.map((domain) => client.listRoutes(id, domain.id)));
-    const failed = routes.find((result) => !result.ok);
+    // A 404 is a Domain deleted since the list: it has no Routes, and the next load no longer has it.
+    const failed = routes.find((result) => !result.ok && result.error.status !== 404);
     return failed !== undefined && !failed.ok
         ? failed
         : {
@@ -138,6 +139,7 @@ export function ProjectPage({ id }: { readonly id: string }) {
     const { project, databases, services, buckets, domains, routes, usage } = loaded;
     const defaultHostname = domains.find((domain) => domain.kind === 'default')?.hostname;
     const targets = { buckets, services };
+    const allRoutes = Object.values(routes).flat();
     const usageOf = (kind: ResourceKind, resourceId: string): ResourceUsage | undefined =>
         usage?.resources.find((resource) => resource.kind === kind && resource.id === resourceId);
     return (
@@ -223,6 +225,7 @@ export function ProjectPage({ id }: { readonly id: string }) {
                             key={domain.id}
                             domain={domain}
                             routes={routes[domain.id] ?? []}
+                            allRoutes={allRoutes}
                             targets={targets}
                             ingress={defaultHostname === undefined ? undefined : ingressOf(defaultHostname)}
                             onVerify={() => change((client) => client.verifyDomain(project.id, domain.id))}

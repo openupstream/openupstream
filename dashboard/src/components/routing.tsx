@@ -68,7 +68,9 @@ export function BucketCard(props: {
 }) {
     const { bucket, usage, defaultHostname, servedAt } = props;
     const [busy, setBusy] = useState(false);
-    const [problem, setProblem] = useState<string | undefined>(undefined);
+    // A refusal is about the Routes there were then: gone once they differ.
+    const [problem, setProblem] = useState<Problem>(undefined);
+    const about = servedAt.join(' ');
     return (
         <li>
             <div className="resource-head">
@@ -82,7 +84,7 @@ export function BucketCard(props: {
                             if (window.confirm(`Delete the Bucket ${bucket.name} and every object in it? Nothing is kept.`)) {
                                 setBusy(true);
                                 void props.onDelete().then((refusal) => {
-                                    setProblem(refusal);
+                                    setProblem(refusal === undefined ? undefined : { text: refusal, about });
                                     setBusy(false);
                                 });
                             }
@@ -105,7 +107,7 @@ export function BucketCard(props: {
                     </>
                 )}
             </small>
-            {problem !== undefined && <p role="alert">{problem}</p>}
+            {problem !== undefined && problem.about === about && <p role="alert">{problem.text}</p>}
             {usage !== undefined && <Usage usage={usage} />}
         </li>
     );
@@ -138,6 +140,8 @@ export function BucketForm(props: { readonly existing: readonly Bucket[]; readon
 export function DomainCard(props: {
     readonly domain: Domain;
     readonly routes: readonly Route[];
+    /** The Routes of every Domain of the Project. */
+    readonly allRoutes: readonly Route[];
     readonly targets: Targets;
     /** Where a custom domain's CNAME points; undefined when the page does not know. */
     readonly ingress: string | undefined;
@@ -149,13 +153,16 @@ export function DomainCard(props: {
     const { domain, routes, targets } = props;
     const [adding, setAdding] = useState(false);
     const [busy, setBusy] = useState(false);
-    const [problem, setProblem] = useState<string | undefined>(undefined);
+    const pending = domain.kind === 'custom' && domain.verification.state === 'pending' ? domain.verification.txtRecord : undefined;
+    // A refusal is about the Domain as it was then: gone once its Routes or its verification differ.
+    const [problem, setProblem] = useState<Problem>(undefined);
+    const about = JSON.stringify([routes.map((route) => route.id), pending === undefined]);
     const act = async (run: () => Change) => {
         setBusy(true);
-        setProblem(await run());
+        const refusal = await run();
+        setProblem(refusal === undefined ? undefined : { text: refusal, about });
         setBusy(false);
     };
-    const pending = domain.kind === 'custom' && domain.verification.state === 'pending' ? domain.verification.txtRecord : undefined;
     return (
         <li>
             <div className="resource-head">
@@ -214,7 +221,7 @@ export function DomainCard(props: {
                     </button>
                 </div>
             )}
-            {problem !== undefined && <p role="alert">{problem}</p>}
+            {problem !== undefined && problem.about === about && <p role="alert">{problem.text}</p>}
             {routes.length === 0 ? (
                 <small>No Routes: every path answers 404.</small>
             ) : (
@@ -255,6 +262,7 @@ export function DomainCard(props: {
             {adding && (
                 <RouteForm
                     routes={routes}
+                    allRoutes={props.allRoutes}
                     targets={targets}
                     onCreate={async (input) => {
                         const refusal = await props.onCreateRoute(input);
@@ -269,7 +277,12 @@ export function DomainCard(props: {
     );
 }
 
-function RouteForm(props: { readonly routes: readonly Route[]; readonly targets: Targets; readonly onCreate: (input: RouteInput) => Change }) {
+function RouteForm(props: {
+    readonly routes: readonly Route[];
+    readonly allRoutes: readonly Route[];
+    readonly targets: Targets;
+    readonly onCreate: (input: RouteInput) => Change;
+}) {
     const [fields, setFields] = useState(NEW_ROUTE);
     const [busy, setBusy] = useState(false);
     const [problem, setProblem] = useState<Problem>(undefined);
@@ -277,7 +290,7 @@ function RouteForm(props: { readonly routes: readonly Route[]; readonly targets:
     const typed = JSON.stringify(fields);
     const submit = async (event: FormEvent) => {
         event.preventDefault();
-        const input = routeInput(fields, props.routes, props.targets);
+        const input = routeInput(fields, props.routes, props.targets, props.allRoutes);
         if (typeof input === 'string') {
             setProblem({ text: input, about: typed });
             return;
