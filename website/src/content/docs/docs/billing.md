@@ -40,9 +40,10 @@ Not billed:
 ## What a Project uses now
 
 The dashboard's Project page shows every Resource with its instances and
-what each uses now: CPU, memory and, for a Database, disk. The API has the
-same as `GET /v1/projects/{id}/usage`, `getUsage` in the
-[SDK](/docs/reference/sdk/).
+what each uses now: CPU, memory and, for a Database, disk. `oup usage`
+prints the same as a table, with `--instances` every running copy too.
+The API has it as `GET /v1/projects/{id}/usage`, `getUsage` in the
+[SDK](/docs/reference/sdk/). It is the use right now, not what is billed.
 
 ## Paying
 

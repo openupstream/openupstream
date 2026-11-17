@@ -165,6 +165,12 @@ oup site deploy dist --bucket my-site
   path without the prefix, and with `--spa` a path without an object
   serves `index.html`; a Service gets the path as it came. Deleting a Route
   leaves what it went to.
+- `oup usage [--instances] [--json]`: what the Project's Resources use
+  now of what they were given: CPU (the last two minutes' average), memory
+  and storage per Database, Service, Job and Bucket. `--instances` adds
+  every running copy below its Resource, with its Site, its state and its
+  restarts; `--json` prints what the API answers. This is the use right
+  now, not what is billed.
 - `oup site deploy <dir> --bucket <name> [--keep] [--force]`: makes the
   Bucket mirror the directory (decision 88): changed files only, `index.html`
   files last, then deletes what the directory no longer has, unless
