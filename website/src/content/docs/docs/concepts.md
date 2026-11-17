@@ -16,7 +16,8 @@ has a role:
 
 `oup member` lists the Members, changes their roles and removes them;
 anyone may leave an Account. A removed Member loses their Postgres roles
-in the Account's Databases at once.
+in the Account's Databases within about a minute; a connection open
+at that moment may keep running until it closes.
 
 An Account can have a **Hold**: a reason it may not create Resources now,
 such as a missing payment method. Its existing Resources keep running.
