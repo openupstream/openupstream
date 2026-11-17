@@ -21,10 +21,11 @@ context) and put them into the cluster as Kubernetes Secrets.
 | Node.js 24 and npm (`nvm use` reads `.nvmrc`) | building and testing, the scripts in `operators/scripts` |
 | Docker (Docker Desktop or Colima) | the control plane's tests, building images locally |
 | `hcloud` | creating and deleting the Hetzner dev cluster's VMs (not needed for a single node) |
+| `incus` (the client) | creating the Incus dev cluster's VMs from your machine (not needed otherwise) |
 | `kubectl` | everything on the cluster |
 | AWS CLI (`aws`) | the backup bucket (it speaks S3), and SES later |
 | `helm` | the Helm releases on the cluster (Traefik, monitoring) |
-| `jq`, `curl`, `ssh`, `openssl` | the scripts in `infra/dev-cluster` and `infra/dev-cluster-hetzner` |
+| `jq`, `curl`, `ssh`, `openssl` | the scripts in `infra/dev-cluster`, `infra/dev-cluster-hetzner` and `infra/dev-cluster-incus` |
 | `dig` | checking DNS delegations (section 5) |
 
 On macOS: `brew install hcloud kubectl helm awscli jq`.
@@ -104,6 +105,70 @@ Three `cpx32` VMs cost about €0.20 an hour together, the two 40 GB volumes
 of the compute VMs about €0.005; `infra/dev-cluster-hetzner/down.sh` deletes
 everything `up.sh` created. A volume left behind by an interrupted run
 shows in `hcloud volume list --selector openupstream=dev`.
+
+### Incus: one node per Site on one machine at home
+
+Three Incus VMs on one x86_64 machine in your home network (#137); see
+[infra/dev-cluster-incus](../infra/dev-cluster-incus/README.md). The
+defaults need 32 GB of RAM and about 260 GB of disk, allocated as used.
+Nothing needs to be reachable from the internet.
+
+1. Install Ubuntu Server 24.04 on the machine and give it a fixed address
+   in the router (a DHCP reservation).
+2. Put its network port on a bridge, so the VMs get addresses from the
+   router. Find the port's name with `ip -br link` (e.g. `enp2s0`), then
+   replace the netplan file the installer wrote
+   (`/etc/netplan/50-cloud-init.yaml`) with one like this and apply it
+   with `sudo netplan try` (it rolls back unless confirmed):
+
+   ```yaml
+   network:
+     version: 2
+     ethernets:
+       enp2s0:
+         dhcp4: false
+     bridges:
+       br0:
+         interfaces: [enp2s0]
+         dhcp4: true
+   ```
+
+   The bridge takes over the machine's address; the router may see it
+   with a new MAC address, so check the reservation.
+3. Install Incus and set it up. A btrfs pool gives instant snapshots;
+   use a disk or partition of its own if there is one
+   (`source=/dev/nvme1n1`), otherwise a file of the size given:
+
+   ```bash
+   sudo apt install incus btrfs-progs && sudo adduser $USER incus-admin
+   ```
+
+   ```bash
+   sudo incus admin init --minimal && sudo incus storage create oup btrfs size=300GiB
+   ```
+
+   Pass `POOL=oup` to the scripts then. No Incus network is needed: the
+   VMs use `br0`.
+4. To run the scripts from your machine instead of the host, let the host
+   listen and trust your machine; the token is printed once and is only
+   for `remote add`:
+
+   ```bash
+   sudo incus config set core.https_address :8443 && sudo incus config trust add my-laptop
+   ```
+
+   On your machine (`brew install incus` brings the client), paste the
+   token when asked:
+
+   ```bash
+   incus remote add mini <host address>
+   ```
+
+5. Pick two domains and add them to your router's DNS rebinding
+   exceptions, as for a single node below (steps 3 and 4).
+6. Run `up.sh` and `install-multi-node.sh` as the
+   [infra/dev-cluster-incus](../infra/dev-cluster-incus/README.md) README
+   shows, then give the three VMs DHCP reservations.
 
 ### A single-node dev cluster
 

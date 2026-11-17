@@ -53,7 +53,7 @@ When done:
 ./down.sh
 ```
 
-It deletes the DNS records in both zones (through `../dev-cluster/dns.sh`;
+It deletes the DNS records in both zones (through `../dev-cluster/dns-delete-all.sh`;
 `PLATFORM_DOMAIN` and `CUSTOMER_DOMAIN` if you set others), the VMs and
 their volumes, the firewall, the SSH key and `.state/`. Backups the session wrote stay in the
 bucket; Buckets lived on the VMs and are gone with them.
