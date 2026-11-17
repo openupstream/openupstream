@@ -17,7 +17,7 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present && npm run test:infra",
-    "test:infra": "node --test infra/dev-cluster/scripts.test.mjs",
+    "test:infra": "node --test infra/dev-cluster/scripts.test.mjs infra/dev-cluster-incus/scripts.test.mjs",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "dev:control-plane": "npm run dev -w control-plane",

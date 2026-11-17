@@ -6,7 +6,7 @@ layouts (ARCHITECTURE.md, "Dev clusters"; decision 112,
 
 | Layout | Nodes | For | The cluster comes from |
 | --- | --- | --- | --- |
-| `multi-node` | one per Site, carrying the Site names | everything, failover included; the layout of production | [`infra/dev-cluster-hetzner`](../dev-cluster-hetzner/README.md): three Hetzner Cloud VMs per working session |
+| `multi-node` | one per Site, carrying the Site names | everything, failover included; the layout of production | [`infra/dev-cluster-hetzner`](../dev-cluster-hetzner/README.md): three Hetzner Cloud VMs per working session; [`infra/dev-cluster-incus`](../dev-cluster-incus/README.md): three Incus VMs on one machine at home, long-lived |
 | `single-node` | one, standing in for every Site | development on one machine; one copy of everything, no failover | `k3s-single-node.sh`: any x86_64 Linux machine you can reach over SSH |
 
 `install-multi-node.sh` and `install-single-node.sh` record the layout in
@@ -132,7 +132,9 @@ credentials Secret in `openupstream-system`.
 `ingress.sh` installs cert-manager's DNS-01 webhook for bunny.net, the
 Let's Encrypt issuers and Traefik on the compute nodes, and points
 `PLATFORM_DOMAIN` at them as a bunny.net record
-(`dns.sh`), health-checked when there are two to choose from.
+(`dns.sh`), health-checked when there are two to choose from and they are
+public addresses (private ones, as on the Incus dev cluster, cannot be
+checked from outside).
 
 `garage.sh` runs Garage with one node per Site, or one node with one copy
 (`infra/garage`), generates its RPC

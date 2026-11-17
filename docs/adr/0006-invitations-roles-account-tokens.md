@@ -3,7 +3,7 @@
 Date: 2026-11-17
 Status: accepted
 
-Designed on 2026-11-17; nothing of it is built yet. Decisions 137 to 144
+Designed on 2026-11-17; nothing of it is built yet. Decisions 138 to 145
 in `ARCHITECTURE.md` index it. It settles Open question 9 and the
 invitation part of Open question 16.
 
@@ -68,7 +68,7 @@ as a `pg_read_all_data` role) tie them together.
 
 ## Decision
 
-### 1. Two roles, or none (decision 137)
+### 1. Two roles, or none (decision 138)
 
 A Member has one of two roles in an Account, or none:
 
@@ -92,7 +92,7 @@ owner: the last owner cannot leave, be removed or lose the role through
 the API, which the schema enforces like the data model's other
 invariants. The one exception is a madAuth user who is deleted (point 6).
 
-### 2. Grants on single Resources (decision 138)
+### 2. Grants on single Resources (decision 139)
 
 A grant gives one Member, or one Account token (point 7), access to one
 Resource at a level. Databases come first, at `read`, `write` or `owner`
@@ -106,7 +106,7 @@ resize or delete the Database, read the Project's Secrets, logs or usage,
 or see the Project's other Resources. A Member with a role needs no
 grants; a grant to them changes nothing. A grant goes with its Resource.
 
-### 3. Database access levels (decision 139)
+### 3. Database access levels (decision 140)
 
 - owners and developers may pick any level, as today: they can delete the
   Database through the API anyway, and migrations from a laptop or CI need
@@ -119,7 +119,7 @@ the Account: the primary, which only `owner` reaches, needs a role or an
 `owner` grant. This replaces point 7 of ADR-0005 ("every Member picks
 their own level").
 
-### 4. Personal API keys (decision 140)
+### 4. Personal API keys (decision 141)
 
 A Member's madAuth API key may do what both its scopes and its Member's
 role or grants allow now. Both are checked on every request, so a changed
@@ -132,7 +132,7 @@ need a session or `oup`'s access token. A leaked CI key cannot let anyone
 in. Leaving an Account needs a session or `oup`'s access token too;
 accepting an invitation needs a session, whose address it checks.
 
-### 5. Invitations (decision 141)
+### 5. Invitations (decision 142)
 
 - **Only owners invite**, by e-mail address, with a role or with grants.
   An address has at most one pending invitation per Account; inviting it
@@ -171,7 +171,7 @@ accepting an invitation needs a session, whose address it checks.
   team. On the hosted service, behind the waitlist, owners can bring in
   people too.
 
-### 6. Leaving, removing, changing roles (decision 142)
+### 6. Leaving, removing, changing roles (decision 143)
 
 - An owner removes any Member and changes any Member's role and grants;
   every Member may leave on their own. Both are refused for the last owner
@@ -200,7 +200,7 @@ accepting an invitation needs a session, whose address it checks.
   control plane logs it as an error, and the operator of the installation
   gives it a new owner by hand.
 
-### 7. Account tokens (decision 143)
+### 7. Account tokens (decision 144)
 
 An Account token is a named secret that belongs to the Account, not to a
 person, for CI, BI tools, scripts and other platforms' functions: whatever
@@ -238,7 +238,7 @@ runs outside the platform and needs the API or a Database.
 Account tokens do not wait for invitations: they need the roles and
 grants of points 1 and 2 only.
 
-### 8. Tokens from CI without a stored secret (decision 144)
+### 8. Tokens from CI without a stored secret (decision 145)
 
 Designed now, built after the static Account tokens. An Account token may
 carry trust rules: an OIDC issuer (GitHub Actions, GitLab CI) and the
@@ -305,7 +305,7 @@ work.
   invite their team instead of keeping an allow-list.
 - Cross-Account access (a grant to another Account's Member or token) is
   not part of this; a person can already be a Member of several Accounts
-  (Open question 26).
+  (Open question 27).
 
 ## Implementation order
 

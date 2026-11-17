@@ -99,23 +99,15 @@ for i in 0 1; do
   "${SSH[@]}" "root@${IPS[$i]}" bash -s -- "$device" <../topolvm/vgcreate.sh
 done
 
-# A dark node is marked NotReady after 20 s instead of 50 s, and its pods
-# are replaced 30 s later instead of 300 s, so a dark Site's Services and
-# system pods move within about a minute (ARCHITECTURE.md, decision 46).
+# The node's public address is its ExternalIP, which dns.sh puts into DNS.
+source ../dev-cluster/k3s-server-args.sh
 install_k3s() { # site, ip, extra args...
   local site=$1 node_ip=$2
   shift 2
   echo "installing k3s on $site ($node_ip)"
   "${SSH[@]}" "root@$node_ip" "curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='$K3S_VERSION' K3S_TOKEN='$(cat "$STATE/token")' sh -s - server \
-    --flannel-backend=wireguard-native \
-    --node-label topology.kubernetes.io/zone=$site \
-    --tls-san $node_ip \
+    $(k3s_server_args "$site" "$node_ip") \
     --node-external-ip $node_ip \
-    --secrets-encryption \
-    --kube-apiserver-arg default-not-ready-toleration-seconds=30 \
-    --kube-apiserver-arg default-unreachable-toleration-seconds=30 \
-    --kube-controller-manager-arg node-monitor-grace-period=20s \
-    --disable traefik --disable servicelb \
     $*"
 }
 
