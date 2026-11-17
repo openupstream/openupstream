@@ -46,7 +46,8 @@ Member leaves. And most migration tools (Prisma, Flyway, node-pg-migrate,
 Rails, golang-migrate) hold a session advisory lock while they run, which
 PgBouncer in transaction mode does not carry: the lock stays on a pooled
 server connection after the tool has gone, and the next run cannot take
-it until PgBouncer closes that connection (10 minutes idle).
+it until PgBouncer closes that connection, which it does only once the
+role has left it unused for 10 minutes.
 
 Three ways to make a Member's role act as `app` were considered:
 
@@ -150,6 +151,12 @@ Three ways to make a Member's role act as `app` were considered:
   else at `owner`.
 - `oup` gets a Postgres client of its own (the `pg` package) for that one
   statement.
+- Acting as `app` includes what `app` may do to itself: a Member at
+  `owner` can change `app`'s password and session defaults
+  (`ALTER ROLE app …`), as a Service can today. A changed password stops
+  the Project's Services from connecting, and the Member then knows it,
+  which decision 61 otherwise rules out. It is of use only inside the
+  Project: a Member who has left has no token for the tunnel.
 - An `owner` role owns nothing, so it can be dropped when the Member
   leaves.
 - Nothing stops a Member from pointing a `read` or `write` role at the
@@ -182,16 +189,18 @@ image (1.24.1, transaction mode, `auth_query`) in Docker, without
 CloudNativePG:
 
 - A role created while PgBouncer runs logs in through it. A `read` role
-  cannot write; a `write` role cannot alter or create a table; both hold
-  for a table created after the roles.
+  cannot write; a `write` role writes rows but cannot alter or create a
+  table; both hold for a table created after the roles.
 - A member of `app` without the default creates tables that `app` cannot
   read, another member of `app` cannot alter, and that keep the role from
   being dropped.
 - The role sets `role = 'app'` for itself. Its next login acts as `app`:
   new tables belong to `app`, it alters `app`'s tables, `pg_stat_activity`
   names the Member's role, a password change keeps the setting, and the
-  role drops cleanly. A role that is not a member of `app` gets a warning
-  at login and stays itself.
+  role drops cleanly, its setting with it. A role that is not a member of
+  `app` gets a warning at login and stays itself.
+- Acting as `app`, the role changed `app`'s password and `app`'s session
+  defaults.
 - Through PgBouncer the setting only reaches server connections opened
   after it, and an advisory lock taken by a client that then left was
   still held by its idle server connection, so another role could not
@@ -205,6 +214,8 @@ To settle before this is accepted, on a dev cluster where it can be tried:
 - The primary accepts the forwarder's password login on the read-write
   Service (CloudNativePG's `pg_hba`), with TLS as a Service's connection
   has it.
+- Whether CloudNativePG sets `app`'s password back to its Secret's after
+  a Member at `owner` changed it, and how soon.
 - Which hostname the tunnel's route lives on: the API's or one per
   Project. Traefik does not route across namespaces.
 - Traefik keeps a WebSocket open for hours, and whether its bytes are
