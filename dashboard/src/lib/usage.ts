@@ -26,7 +26,8 @@ export const formatMeasured = (measured: Measured, format: (value: number) => st
 export const usedShare = (measured: Measured): number | undefined =>
     measured.used === null || measured.allocated === null || measured.allocated <= 0 ? undefined : Math.min(1, Math.max(0, measured.used / measured.allocated));
 
-const whole = (text: string): number | undefined => (/^\d{1,7}$/.test(text.trim()) ? Number(text.trim()) : undefined);
+/** What a form's number field holds, when it is a whole number; undefined otherwise. */
+export const whole = (text: string): number | undefined => (/^\d{1,7}$/.test(text.trim()) ? Number(text.trim()) : undefined);
 
 export interface DatabaseSizes {
     readonly memoryMb: number;
