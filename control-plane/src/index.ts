@@ -160,6 +160,7 @@ async function main(): Promise<void> {
         ...(config.value.prometheusUrl === undefined ? {} : { prometheus: prometheusClient(config.value.prometheusUrl, fetch, USAGE_PROMETHEUS_TIMEOUT_MS) }),
         databaseVolumes: config.value.databaseVolumes,
         ...(config.value.waitlist === undefined ? {} : { waitlistDomain: new URL(config.value.waitlist.url).hostname }),
+        ...(config.value.websiteProjectId === undefined ? {} : { websiteProjectId: config.value.websiteProjectId }),
         lookupTxt: txtLookup(),
         newAccountHolds: config.value.newAccountHolds,
         ...(auth.cliClientId === undefined ? {} : { cliLogin: { issuer: auth.issuer, clientId: auth.cliClientId } }),

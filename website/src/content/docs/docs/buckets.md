@@ -9,8 +9,13 @@ What it offers and what it leaves out is on the
 
 ## Create
 
-Create a Bucket on the dashboard's Project page, or through the API, here
-with the [SDK](/docs/reference/sdk/):
+Create a Bucket on the dashboard's Project page, with `oup`:
+
+```sh
+oup bucket create acme-uploads
+```
+
+or through the API, here with the [SDK](/docs/reference/sdk/):
 
 ```ts
 const bucket = await client.createBucket(projectId, { name: 'acme-uploads' });
@@ -34,7 +39,18 @@ A Bucket comes with what an S3 client needs:
 | `accessKeyId`, `secretAccessKey` | a key that reads and writes this Bucket and no other |
 
 `getBucket` returns them again at any time. The dashboard shows the
-endpoint and never the key. An API key that may only read gets the key's
+endpoint and never the key. `oup` hands the key out in two ways:
+
+```sh
+oup bucket export-env acme-uploads   # writes the variables into .env, without showing the secret
+oup bucket show-access-key acme-uploads   # prints the key's id and its secret
+```
+
+`export-env` writes `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3` and `BUCKET_NAME`,
+of which recent AWS SDKs read all but `BUCKET_NAME` by themselves. The AWS
+CLI also needs
+`aws configure set default.s3.addressing_style virtual`. An API key that may only read gets the key's
 id and not its secret, since the Bucket's key may write.
 
 The Bucket is in the hostname (virtual-hosted style); path-style requests

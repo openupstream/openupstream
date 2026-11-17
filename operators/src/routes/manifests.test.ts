@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import type { DomainRouting, RoutedPath } from '@openupstream/sdk';
-import { COMPONENT_LABEL, PRUNED_KINDS, matchOf, planRoutes } from './manifests.js';
+import { COMPONENT_LABEL, PRUNED_KINDS, matchOf, planRoutes, priorityOf } from './manifests.js';
 
 const routing: DomainRouting = {
     projectId: '11111111-1111-4111-8111-111111111111',
@@ -171,4 +172,24 @@ test('a Route to a Service: its Kubernetes Service, path unchanged, GET and HEAD
     const rootPriority = (siteIngress?.['spec'] as { routes: { priority: number }[] }).routes[0]?.priority ?? Infinity;
     assert.ok(rules.slice(0, 2).every((rule) => rule.priority > rootPriority));
     assert.ok(!planRoutes([routing], settings).some((o) => o.kind === 'ServersTransport'), 'only Projects with Routes to Services');
+});
+
+test("on the waitlist's host its own paths win over any Route, and every Route over its catch-all (decision 132)", () => {
+    const manifest = readFileSync(new URL('../../../infra/ingress/waitlist-route.yaml', import.meta.url), 'utf8');
+    const rules = manifest
+        .split('    - match: ')
+        .slice(1)
+        .map((rule) => ({ match: rule.split('\n')[0] ?? '', priority: /^ {6}priority: (\d+)$/m.exec(rule)?.[1] }));
+    const own = rules.filter((rule) => rule.match.includes('PathPrefix(`/waitlist`) || Path(`/privacy`) || Path(`/imprint`)'));
+    const catchAll = rules.filter((rule) => !own.includes(rule));
+    assert.equal(own.length, 2);
+    assert.equal(catchAll.length, 2);
+    for (const rule of own) {
+        assert.ok(Number(rule.priority) > priorityOf(`/${'a'.repeat(10_000)}`, true), rule.match);
+    }
+    // Without a priority Traefik takes the rule's length, also for the longest hostname.
+    for (const rule of catchAll) {
+        assert.equal(rule.priority, undefined);
+        assert.ok(rule.match.replace('WAITLIST_DOMAIN', 'a'.repeat(253)).length < priorityOf('/', false), rule.match);
+    }
 });

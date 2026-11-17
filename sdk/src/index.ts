@@ -406,20 +406,30 @@ const logSearch = (query: LogQuery): string => {
     return params === '' ? '' : `?${params}`;
 };
 
-/** The JSON values of a body of NDJSON, one per non-empty line. */
+/**
+ * The JSON values of a body of NDJSON, one per non-empty line. Read with a
+ * reader, not `for await` over the body, which Safari does not have; a
+ * consumer that stops early cancels the body, which ends the request.
+ */
 export async function* ndjsonLines<T>(body: ReadableStream<Uint8Array>): AsyncIterable<T> {
     const decoder = new TextDecoder();
+    const reader = body.getReader();
     let pending = '';
-    for await (const chunk of body) {
-        pending += decoder.decode(chunk, { stream: true });
-        const lines = pending.split('\n');
-        pending = lines.pop() ?? '';
-        for (const line of lines.filter((candidate) => candidate.trim() !== '')) {
-            yield JSON.parse(line) as T;
+    try {
+        for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+            pending += decoder.decode(chunk.value, { stream: true });
+            const lines = pending.split('\n');
+            pending = lines.pop() ?? '';
+            for (const line of lines.filter((candidate) => candidate.trim() !== '')) {
+                yield JSON.parse(line) as T;
+            }
         }
-    }
-    const last = pending + decoder.decode();
-    if (last.trim() !== '') {
-        yield JSON.parse(last) as T;
+        const last = pending + decoder.decode();
+        if (last.trim() !== '') {
+            yield JSON.parse(last) as T;
+        }
+    } finally {
+        // Also after an error or an abort, where cancelling again changes nothing.
+        await reader.cancel().catch(() => undefined);
     }
 }

@@ -55,6 +55,8 @@ const storage = fakeStorage();
 let privateKey: CryptoKey;
 let otherKey: CryptoKey;
 let api: ReturnType<typeof createApi>;
+/** What `api` was made from, for a test that needs another setting. */
+let apiDeps: Parameters<typeof createApi>[0];
 let accountA: string;
 let accountB: string;
 /** Published TXT records by name, as the fake resolver answers them; `dnsDown` makes it fail. */
@@ -214,7 +216,7 @@ before(async () => {
     privateKey = pair.privateKey;
     otherKey = (await generateKeyPair('ES256')).privateKey;
     const jwks = createLocalJWKSet({ keys: [{ ...(await exportJWK(pair.publicKey)), alg: 'ES256' }] });
-    api = createApi({
+    apiDeps = {
         pool: db.pool,
         kube,
         storage,
@@ -224,7 +226,8 @@ before(async () => {
         logStream: { pollMs: 20, maxMs: 2_000 },
         prometheus: (query) => prometheusAnswers(query),
         databaseVolumes: 'shared',
-    });
+    };
+    api = createApi(apiDeps);
     const accounts = await db.pool.query<{ id: string }>(`insert into accounts (name) values ('A'), ('B') returning id`);
     [accountA, accountB] = accounts.rows.map((row) => row.id) as [string, string];
     // alice is in A; bob in B; carol in both.
@@ -1043,6 +1046,24 @@ describe('Custom domains', () => {
         }
         assert.equal((await claim(projectId, 'www.shop.example')).status, 409);
         assert.equal((await claim(projectId, 'www.shop.example', 'bob')).status, 404);
+    });
+
+    test("the website's Project may claim the waitlist's host, and nothing else of ours; the claim still needs its proof", async () => {
+        const withWebsite = createApi({ ...apiDeps, websiteProjectId: projectId });
+        const claimThere = async (pid: string, hostname: string) =>
+            withWebsite.request(domains(pid), {
+                method: 'POST',
+                headers: { authorization: `Bearer ${await token('alice')}`, 'content-type': 'application/json' },
+                body: JSON.stringify({ hostname }),
+            });
+        for (const hostname of ['www.welcome.test', 'openupstream.test', 'api.platform.test']) {
+            assert.equal((await claimThere(projectId, hostname)).status, 400, hostname);
+        }
+        const other = await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'not-the-website' });
+        assert.equal((await claimThere(((await other.json()) as Project).id, 'welcome.test')).status, 400);
+        const response = await claimThere(projectId, 'welcome.test');
+        assert.equal(response.status, 201);
+        assert.equal(pending((await response.json()) as Domain).name, '_openupstream.welcome.test');
     });
 
     test('verifying looks the TXT record up now; the first claim verified gets the hostname', async () => {

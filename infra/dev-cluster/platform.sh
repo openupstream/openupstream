@@ -76,6 +76,11 @@ SIGNUP=${SIGNUP:-open}
 SIGNUP_ALLOW=${SIGNUP_ALLOW:-}
 IMPRINT_FILE=${IMPRINT_FILE:-}
 WAITLIST_DOMAIN=${WAITLIST_DOMAIN:-}
+# The Project whose Routes serve the website at the waitlist's host
+# (decision 132; docs/self-hosting.md, "The website"): it alone may claim
+# that host as a custom domain. Set it once the Project exists and run this
+# again; the waitlist then keeps /waitlist, /privacy and /imprint.
+WEBSITE_PROJECT_ID=${WEBSITE_PROJECT_ID:-}
 case $SIGNUP in
   open) ;;
   closed)
@@ -85,6 +90,9 @@ case $SIGNUP in
     [[ $MAIL == ses || $MAIL == log ]] || { echo "SIGNUP=closed needs MAIL=ses or MAIL=log for the waitlist's e-mails" >&2; exit 1; } ;;
   *) echo "SIGNUP must be open or closed" >&2; exit 1 ;;
 esac
+# The control plane refuses anything else when it starts, after the rollout has begun.
+[[ -z $WEBSITE_PROJECT_ID || $WEBSITE_PROJECT_ID =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ ]] ||
+  { echo "WEBSITE_PROJECT_ID must be the website Project's id (oup project list), not its name" >&2; exit 1; }
 # INITIAL_ADMIN_EMAIL makes that user madAuth's first admin once they sign
 # in; an admin registers the CLI (infra/madauth/register-cli.sh), whose
 # client ID then goes into CLI_CLIENT_ID for `oup login` (decision 87).
@@ -135,7 +143,7 @@ kubectl -n "$PLATFORM_NS" create configmap madauth-config --dry-run=client -o ya
   --from-literal=SES_REGION="${SES_REGION:-eu-central-1}" \
   --from-literal=SIGNUP="$SIGNUP" \
   --from-literal=SIGNUP_ALLOW="$SIGNUP_ALLOW" \
-  --from-literal=SIGNUP_MESSAGE="Sign-up is not open yet.${WAITLIST_DOMAIN:+ Leave your e-mail address at https://$WAITLIST_DOMAIN to hear when it is.}" \
+  --from-literal=SIGNUP_MESSAGE="Sign-up is not open yet.${WAITLIST_DOMAIN:+ Leave your e-mail address at https://$WAITLIST_DOMAIN/waitlist to hear when it is.}" \
   ${INITIAL_ADMIN_EMAIL:+--from-literal=INITIAL_ADMIN_EMAIL="$INITIAL_ADMIN_EMAIL"} | kubectl apply -f - >/dev/null
 if [[ $MAIL == ses ]]; then
   # The send-only key (docs/self-hosting.md, section 6), straight from the
@@ -223,6 +231,7 @@ kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client
   --from-literal=CLI_CLIENT_ID="${CLI_CLIENT_ID:-}" \
   --from-literal=PROMETHEUS_URL="$PROMETHEUS_URL" \
   --from-literal=DATABASE_VOLUMES="$DATABASE_VOLUMES" \
+  --from-literal=WEBSITE_PROJECT_ID="$WEBSITE_PROJECT_ID" \
   ${WAITLIST_CONFIG[@]+"${WAITLIST_CONFIG[@]}"} | kubectl apply -f - >/dev/null
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/control-plane/deploy/control-plane.yaml" | replicas |
   kubectl apply -f - >/dev/null

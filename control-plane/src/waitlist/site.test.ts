@@ -62,13 +62,17 @@ const row = async (email: string) =>
 test('the page says the service is coming, with the form, the consent text, privacy notice and Impressum', async () => {
     const page = await (await site.request('/')).text();
     assert.match(page, /Coming soon/);
+    assert.equal(await (await site.request('/waitlist')).text(), page, 'the same page where the website has /');
     assert.match(page, /<form method="post" action="\/waitlist">/);
     assert.ok(page.includes(CONSENT.text));
     assert.match(page, /href="\/privacy"/);
     assert.match(page, /href="\/imprint"/);
     const imprint = await (await site.request('/imprint')).text();
     assert.ok(imprint.includes('Example Street 1 &amp; 2'), 'the Impressum is escaped');
-    assert.match(await (await site.request('/privacy')).text(), /Art\. 6\(1\)\(a\) GDPR/);
+    const notice = await (await site.request('/privacy')).text();
+    assert.match(notice, /Art\. 6\(1\)\(a\) GDPR/);
+    assert.match(notice, /covers this website.*and the waitlist/);
+    assert.match(notice, /browser's own storage/);
 });
 
 test('every page is locked down: no scripts, no framing, no referrer, not cached', async () => {

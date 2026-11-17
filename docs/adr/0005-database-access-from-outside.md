@@ -3,7 +3,7 @@
 Date: 2026-11-17
 Status: accepted
 
-Built on 2026-11-17 (SDK 0.5.0, `oup` 0.3.0), run end to end against
+Built on 2026-11-17 (SDK 0.5.0, `oup` 0.4.0), run end to end against
 Postgres 17 and PgBouncer in Docker and then on the Hetzner dev cluster the
 same day; see "Verified" for what each showed and what is still open.
 

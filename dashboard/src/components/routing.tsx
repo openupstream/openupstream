@@ -124,7 +124,7 @@ export function BucketForm(props: { readonly existing: readonly Bucket[]; readon
                 note={
                     <>
                         The name is part of the Bucket&apos;s hostname, so no other Bucket of anyone has it. Files are uploaded with <a href="/cli">oup site deploy</a> or any S3 client; the
-                        Bucket&apos;s key comes from the API, not from this page.
+                        Bucket&apos;s key comes from <a href="/cli">oup bucket export-env</a>, not from this page.
                     </>
                 }
                 onSubmit={async (typed) => {
