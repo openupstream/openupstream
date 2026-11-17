@@ -14,7 +14,7 @@ const DRAW_MS = 250;
 /**
  * - `following`: the stream is open, new lines appear
  * - `ended`: the API ended it (every pod is gone, or an hour has passed)
- * - `paused`: the tab was hidden; it starts over when it is looked at again
+ * - `paused`: the tab is hidden; it follows again when it is looked at
  * - a string: what the API refused, or why the stream broke
  */
 type State = 'following' | 'ended' | 'paused' | string;
@@ -26,7 +26,11 @@ type State = 'following' | 'ended' | 'paused' | string;
  * wrote before it was replaced is gone.
  */
 export function LogView({ source }: { readonly source: LogSource }) {
-    const [lines, setLines] = useState<readonly LogEntry[]>([]);
+    // The lines shown, and how many older ones were dropped: together a line's number, which stays its own.
+    const [{ lines, dropped }, setLog] = useState<{ readonly lines: readonly LogEntry[]; readonly dropped: number }>({ lines: [], dropped: 0 });
+    // Whether lines are shown: following again then adds to them and reads only what is written from then on.
+    const shown = useRef(false);
+    const [resumed, setResumed] = useState(false);
     const [state, setState] = useState<State>('following');
     // Counts the times it was asked to follow again.
     const [again, setAgain] = useState(0);
@@ -38,8 +42,8 @@ export function LogView({ source }: { readonly source: LogSource }) {
     latest.current = source;
 
     const follow = useCallback(
-        async (signal: AbortSignal): Promise<string | undefined> => {
-            const opened = await latest.current(await api(), { follow: true }, signal);
+        async (signal: AbortSignal, query: LogQuery): Promise<string | undefined> => {
+            const opened = await latest.current(await api(), query, signal);
             if (!opened.ok) {
                 return signal.aborted ? undefined : refused(opened.error);
             }
@@ -49,7 +53,11 @@ export function LogView({ source }: { readonly source: LogSource }) {
                     const more = waiting;
                     waiting = [];
                     atEnd.current = box.current === null || box.current.scrollHeight - box.current.scrollTop - box.current.clientHeight < 8;
-                    setLines((before) => appended(before, more));
+                    shown.current = true;
+                    setLog((before) => {
+                        const next = appended(before.lines, more);
+                        return { lines: next, dropped: before.dropped + before.lines.length + more.length - next.length };
+                    });
                 }
             };
             const timer = window.setInterval(draw, DRAW_MS);
@@ -70,9 +78,10 @@ export function LogView({ source }: { readonly source: LogSource }) {
     useEffect(() => {
         const controller = new AbortController();
         const start = () => {
-            setLines([]);
+            // What is shown stays: nothing is kept anywhere else. Only what is written from now on is added to it.
+            setResumed(shown.current);
             setState('following');
-            void follow(controller.signal).then((problem) => {
+            void follow(controller.signal, shown.current ? { follow: true, tail: 0 } : { follow: true }).then((problem) => {
                 if (!controller.signal.aborted) {
                     setState(problem ?? 'ended');
                 }
@@ -108,7 +117,7 @@ export function LogView({ source }: { readonly source: LogSource }) {
                         ? 'Nothing written yet.'
                         : 'Nothing was written.'
                     : lines.map((line, index) => (
-                          <span key={index} className={line.previous ? 'previous' : undefined}>
+                          <span key={dropped + index} className={line.previous ? 'previous' : undefined}>
                               <time>{lineTime(line.time)}</time> {withPod && <b>{podLabel(line.pod)} </b>}
                               {line.line}
                               {'\n'}
@@ -117,9 +126,9 @@ export function LogView({ source }: { readonly source: LogSource }) {
             </pre>
             <small role={state === 'following' || state === 'ended' || state === 'paused' ? undefined : 'alert'}>
                 {state === 'following'
-                    ? 'Following: new lines appear as they are written.'
+                    ? `Following: new lines appear as they are written.${resumed ? ' What was written while it was not following is not shown.' : ''}`
                     : state === 'paused'
-                      ? 'Paused while the tab was hidden.'
+                      ? 'Paused while the tab is hidden.'
                       : state === 'ended'
                         ? 'The stream has ended: nothing runs any more, or an hour has passed.'
                         : state}{' '}
