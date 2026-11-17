@@ -10,8 +10,13 @@ Built with [Astro Starlight](https://starlight.astro.build) from the
 Markdown files in `src/content/docs`. The file's path is the page's
 address: `src/content/docs/docs/databases.md` is `/docs/databases/`.
 
-It is built and checked in CI but not deployed yet (ARCHITECTURE.md, Open
-question 24).
+The workflow `.github/workflows/website.yml` deploys it with
+`oup site deploy` on every merge to main that changes it (decision 131;
+docs/self-hosting.md, "The website"). `/waitlist`, `/privacy` and
+`/imprint` are not pages of this site: the control plane serves them on
+the same host while sign-up is closed, and the home page and the sidebar
+link to them. When sign-up opens they go, so the links have to change and
+the site needs an Impressum and a privacy notice of its own.
 
 ## Writing
 

@@ -471,6 +471,51 @@ sent at all.
    svc/kube-prometheus-stack-grafana 3000:80`, user `admin`, with the
    password the script prints how to read.
 
+## 11. The website
+
+Only for the hosted service: `website/` is `openupstream.com`, with pages
+that name its hostnames. It is served at the waitlist's host from a Bucket
+of an ordinary Project, and the waitlist keeps `/waitlist`, `/privacy` and
+`/imprint` (ARCHITECTURE.md, decisions 130 and 131). It needs section 9
+done with `SIGNUP=closed`. Unlike the sections above, these steps were
+written with the change and have not been done for the hosted service
+yet; correct them when they are.
+
+1. **A Project and a Bucket**, signed in as a Member of an Account of
+   yours that may create Resources:
+
+   ```bash
+   oup project create website --link
+   ```
+
+   Create a Bucket on the dashboard's Project page; its name is unique
+   across all Projects. `oup project list` shows the Project's id.
+2. **Name the Project to the control plane**, so that it alone may claim
+   the waitlist's host, by running `platform.sh` again with the settings of
+   section 9 and `WEBSITE_PROJECT_ID=<the Project's id>`.
+3. **Claim the host** on the dashboard's Project page (Domains), publish
+   the TXT record it names at `_openupstream.<WAITLIST_DOMAIN>` in the
+   bunny.net zone, and verify. The host already points at the compute
+   nodes, so it needs no CNAME.
+4. **Add a Route** for `/` to the Bucket, without SPA fallback. The Domain
+   gets a certificate of its own with it.
+5. **On GitHub**, in the repository's settings: the variables
+   `WEBSITE_PROJECT` (the Project's id) and `WEBSITE_BUCKET`; an
+   Environment `website` that accepts only the branch `main`, with the
+   secret `WEBSITE_API_KEY`, an API key of that Member with the scope
+   `openupstream:write`. Create the key in madAuth and paste it into the
+   secret's field; it is shown once.
+6. **Deploy**: run the workflow "Website" by hand once (Actions → Website →
+   Run workflow). From then on it runs on every merge to main that changes
+   the site.
+7. **Check it**: `https://<WAITLIST_DOMAIN>/` shows the website,
+   `/waitlist` the form, and a path the site does not have a 404.
+
+   ```bash
+   curl -sI https://openupstream.com/ | head -1
+   curl -s https://openupstream.com/waitlist | grep -c 'action="/waitlist"'
+   ```
+
 ## Coming with build step 2
 
 - **No payment method needed** when you run openupstream yourself: leave

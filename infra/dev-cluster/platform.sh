@@ -76,6 +76,11 @@ SIGNUP=${SIGNUP:-open}
 SIGNUP_ALLOW=${SIGNUP_ALLOW:-}
 IMPRINT_FILE=${IMPRINT_FILE:-}
 WAITLIST_DOMAIN=${WAITLIST_DOMAIN:-}
+# The Project whose Routes serve the website at the waitlist's host
+# (decision 131; docs/self-hosting.md, "The website"): it alone may claim
+# that host as a custom domain. Set it once the Project exists and run this
+# again; the waitlist then keeps /waitlist, /privacy and /imprint.
+WEBSITE_PROJECT_ID=${WEBSITE_PROJECT_ID:-}
 case $SIGNUP in
   open) ;;
   closed)
@@ -223,6 +228,7 @@ kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client
   --from-literal=CLI_CLIENT_ID="${CLI_CLIENT_ID:-}" \
   --from-literal=PROMETHEUS_URL="$PROMETHEUS_URL" \
   --from-literal=DATABASE_VOLUMES="$DATABASE_VOLUMES" \
+  --from-literal=WEBSITE_PROJECT_ID="$WEBSITE_PROJECT_ID" \
   ${WAITLIST_CONFIG[@]+"${WAITLIST_CONFIG[@]}"} | kubectl apply -f - >/dev/null
 sed "s#ghcr.io/openupstream/control-plane:main#$CONTROL_PLANE_IMAGE#" "$ROOT/control-plane/deploy/control-plane.yaml" | replicas |
   kubectl apply -f - >/dev/null

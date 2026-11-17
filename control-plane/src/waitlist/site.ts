@@ -129,7 +129,7 @@ const linkGone = (): Page =>
         'Link expired: openupstream',
         html`<h1>This link no longer works</h1>
 <p>A confirmation link works for 48 hours. If your address was removed, it is gone already.</p>
-<p><a href="/">Join the waitlist again</a></p>`,
+<p><a href="/waitlist">Join the waitlist again</a></p>`,
     );
 
 /** The two e-mails: confirm a new address; or, for one on the list already, how to remove it. */
@@ -209,7 +209,9 @@ export function createWaitlistSite(deps: WaitlistSiteDeps): Hono {
     // A form with an address and a checkbox is far below this.
     app.use(bodyLimit({ maxSize: 4096, onError: (c) => c.html(home('That was too much to read. Try again.'), 413) }));
 
+    // `/waitlist` is the page's address once the website has the host's other paths (decision 131); `/` serves it where there is no website.
     app.get('/', (c) => c.html(home()));
+    app.get('/waitlist', (c) => c.html(home()));
     app.get('/privacy', (c) => c.html(privacy(url)));
     app.get('/imprint', (c) => c.html(imprint(deps.imprint)));
 

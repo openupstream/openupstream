@@ -1,0 +1,52 @@
+name: Website
+
+# Deploys website/ to the Bucket that serves openupstream.com
+# (ARCHITECTURE.md, decision 131; docs/self-hosting.md, "The website"),
+# with this commit's own `oup site deploy`, when a merge to main changes
+# what the site is built from:
+#
+# - the repository variables WEBSITE_PROJECT (the Project's id) and
+#   WEBSITE_BUCKET name where it goes; without them, as in a fork, the job
+#   is skipped;
+# - the job runs in the GitHub Environment `website`, which holds the
+#   secret WEBSITE_API_KEY, an API key of a Member of that Project's
+#   Account, and accepts only the branch main;
+# - one deploy at a time, in the order of the merges;
+# - every action is pinned to a full commit SHA.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - website/**
+      - cli/README.md
+      - dashboard/src/lib/docs.ts
+      - package-lock.json
+      - .github/workflows/website.yml
+  workflow_dispatch:
+
+concurrency:
+  group: website
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: vars.WEBSITE_BUCKET != '' && vars.WEBSITE_PROJECT != ''
+    runs-on: ubuntu-latest
+    environment: website
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build -w sdk -w cli -w website
+      - name: Deploy to the Bucket
+        run: node cli/dist/index.js site deploy website/dist --bucket "$WEBSITE_BUCKET"
+        env:
+          OUP_API_KEY: ${{ secrets.WEBSITE_API_KEY }}
+          OUP_PROJECT: ${{ vars.WEBSITE_PROJECT }}
+          WEBSITE_BUCKET: ${{ vars.WEBSITE_BUCKET }}

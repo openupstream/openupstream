@@ -2,7 +2,7 @@
  * The control plane's settings, from its environment (control-plane/deploy).
  * Every problem is reported at once, before anything starts.
  */
-import { DNS_LABEL } from '@openupstream/sdk';
+import { DNS_LABEL, UUID } from '@openupstream/sdk';
 import { BACKUP_ENDPOINT } from './backups.js';
 import { retentionInterval } from './cleanup.js';
 import type { GarageConfig } from './garage.js';
@@ -67,6 +67,8 @@ export interface Config {
     readonly databaseVolumes: 'dedicated' | 'shared';
     /** The waitlist page while hosted sign-up is closed (decision 86); undefined: not served. */
     readonly waitlist?: WaitlistConfig;
+    /** The Project that may claim the waitlist's host as a custom domain, to serve the website there (decision 131). */
+    readonly websiteProjectId?: string;
 }
 
 export interface WaitlistConfig {
@@ -176,6 +178,10 @@ export function configFrom(env: Env): Result<Config, string[]> {
         problems.push('CLEANUP_INTERVAL_SECONDS must be a number of seconds, at least 1');
     }
     const waitlist = waitlistFrom(env, problems);
+    const websiteProjectId = env['WEBSITE_PROJECT_ID'] || undefined;
+    if (websiteProjectId !== undefined && !UUID.test(websiteProjectId)) {
+        problems.push('WEBSITE_PROJECT_ID must be the id of a Project');
+    }
     if (
         problems.length > 0 ||
         retention === undefined ||
@@ -213,6 +219,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
         prometheusUrl: env['PROMETHEUS_URL'] || undefined,
         databaseVolumes: databaseVolumes === 'shared' ? 'shared' : 'dedicated',
         ...(waitlist === undefined ? {} : { waitlist }),
+        ...(websiteProjectId === undefined ? {} : { websiteProjectId }),
     });
 }
 

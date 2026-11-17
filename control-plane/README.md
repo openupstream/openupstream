@@ -172,9 +172,15 @@ to; then it needs `WAITLIST_IMPRINT`, the Impressum as plain text, and
 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, madAuth's Secret
 `madauth-ses` in the cluster) or `log`.
 
+The form is at `/waitlist` and at `/`. Once the website is served at the
+host (decision 131), its Route has `/` and the ingress sends only
+`/waitlist…`, `/privacy` and `/imprint` here. `WEBSITE_PROJECT_ID` names
+the website's Project, the only one that may claim this host as a custom
+domain.
+
 | Route | |
 | --- | --- |
-| `GET /` | coming soon, and the form |
+| `GET /waitlist`, `GET /` | coming soon, and the form |
 | `POST /waitlist` | `email`, `consent=yes` (form fields): stores the address as pending and mails a link to confirm; an address on the list already gets a link to remove it instead. At most one e-mail per address an hour; the answer is the same either way. 400 without consent or a valid address, 503 if the e-mail could not be sent |
 | `GET /waitlist/confirm?token=` | a button that confirms; 404 for an unknown or expired token |
 | `POST /waitlist/confirm` | `token`: the address is on the list (`confirmed_at`) |

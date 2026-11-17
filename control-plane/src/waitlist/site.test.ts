@@ -62,6 +62,7 @@ const row = async (email: string) =>
 test('the page says the service is coming, with the form, the consent text, privacy notice and Impressum', async () => {
     const page = await (await site.request('/')).text();
     assert.match(page, /Coming soon/);
+    assert.equal(await (await site.request('/waitlist')).text(), page, 'the same page where the website has /');
     assert.match(page, /<form method="post" action="\/waitlist">/);
     assert.ok(page.includes(CONSENT.text));
     assert.match(page, /href="\/privacy"/);
