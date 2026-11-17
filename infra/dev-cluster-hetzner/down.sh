@@ -8,31 +8,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 PREFIX=${PREFIX:-oup-dev}
 LABEL="openupstream=dev"
-DNS=../dev-cluster/dns.sh
-# The host in the control plane's WAITLIST_URL, or nothing.
-waitlist_domain() {
-  [[ -f .state/kubeconfig ]] || return 0
-  KUBECONFIG=.state/kubeconfig kubectl --request-timeout=10s -n project-00000000-0000-4000-8000-000000000002 \
-    get configmap control-plane-config --ignore-not-found -o jsonpath='{.data.WAITLIST_URL}' 2>/dev/null |
-    sed -e 's#^https\{0,1\}://##' -e 's#/.*$##' || true
-}
-
-# The DNS records first: they point at the servers' addresses.
-# A failure here must not keep the servers running (and billing).
-if [[ -f ${BUNNY_API_KEY_FILE:-$HOME/.config/openupstream/bunny-api-key} ]]; then
-  DNS_DOMAIN=${PLATFORM_DOMAIN:-dev.openupstream.com} "$DNS" --delete ||
-    echo "could not remove the DNS records; remove them in bunny.net" >&2
-  DNS_DOMAIN=${CUSTOMER_DOMAIN:-dev.openupstream.app} DNS_NAMES='* *.s3' "$DNS" --delete ||
-    echo "could not remove the S3 records; remove them in bunny.net" >&2
-  # The waitlist's host, if platform.sh ran with SIGNUP=closed: as the
-  # control plane was told it, while the cluster still answers. DNS_NAMES
-  # keeps dns.sh from taking a record `api` of that domain along.
-  WAITLIST_DOMAIN=${WAITLIST_DOMAIN:-$(waitlist_domain)}
-  if [[ -n $WAITLIST_DOMAIN ]]; then
-    DNS_DOMAIN=$WAITLIST_DOMAIN DNS_NAMES=@ "$DNS" --delete ||
-      echo "could not remove the waitlist's DNS record; remove it in bunny.net" >&2
-  fi
-fi
+# The DNS records first: they point at the servers' addresses. It never
+# fails, so a failure there cannot keep the servers running (and billing).
+KUBECONFIG=$PWD/.state/kubeconfig ../dev-cluster/dns-delete-all.sh || true
 for name in $(hcloud server list --selector "$LABEL" -o noheader -o columns=name); do
   echo "deleting $name"
   hcloud server delete "$name" >/dev/null
