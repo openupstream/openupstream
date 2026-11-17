@@ -148,6 +148,23 @@ oup site deploy dist --bucket my-site
   but `BUCKET_NAME` by themselves; the AWS CLI also needs
   `aws configure set default.s3.addressing_style virtual`, since a Bucket
   is reached at its own hostname only.
+- `oup domain list`, `oup domain add <hostname>`, `oup domain verify
+  <hostname>`, `oup domain delete <hostname>` (and its Routes). Every
+  Project has its default Domain. `add` claims a hostname of your own and
+  prints the two DNS records to publish: a TXT record that proves it is
+  yours, and a CNAME that brings its traffic here. `verify` looks the TXT
+  record up now. Publish the CNAME before the first Route: the Domain's
+  certificate is requested then, and a failed attempt is tried again only
+  after an hour.
+- `oup route list`, `oup route add <address> --bucket <name> [--spa]`,
+  `oup route add <address> --service <name>`, `oup route delete <address>`.
+  A Route sends everything below a path of a Domain to a Bucket or to a
+  Service that has a port. The address is the hostname with the path, as in
+  `www.example.com/docs` (`www.example.com` alone is its `/`), or the path
+  alone, as in `/docs`, on the Project's default Domain. A Bucket gets the
+  path without the prefix, and with `--spa` a path without an object
+  serves `index.html`; a Service gets the path as it came. Deleting a Route
+  leaves what it went to.
 - `oup site deploy <dir> --bucket <name> [--keep] [--force]`: makes the
   Bucket mirror the directory (decision 88): changed files only, `index.html`
   files last, then deletes what the directory no longer has, unless
