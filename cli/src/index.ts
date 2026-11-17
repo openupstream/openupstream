@@ -23,13 +23,12 @@
  *   oup bucket list | create <name> | show <name> | show-access-key <name> | export-env <name> [--file <path>] | delete <name>
  *   oup domain list | add <hostname> | verify <hostname> | delete <hostname>
  *   oup route list | add <address> --bucket <name> [--spa] | add <address> --service <name> | delete <address>
+ *   oup usage [--instances] [--json]   what the Project's Resources use now
  *   oup site deploy <dir> --bucket <name> [--keep] [--force]
  *   oup version
  *
- * Database, service, job, secret, bucket, domain and route commands act on the linked Project; `--project`
+ * Database, service, job, secret, bucket, domain, route and usage commands act on the linked Project; `--project`
  * or `OUP_PROJECT` names another.
- *
- * Planned (ARCHITECTURE.md build order): oup usage.
  *
  * `OUP_API_KEY` (a madAuth API key) replaces `oup login`, e.g. in CI, with
  * `OUP_API_URL` for another API than https://console.openupstream.com/api.
@@ -85,6 +84,7 @@ import { dnsRecords, domainNamed, formatDomains, formatRoutes, hostnameOf, hostn
 import { apiAccess } from './session.js';
 import { readSecretValue } from './stdin.js';
 import { waitUntil } from './wait.js';
+import { formatUsage } from './usage.js';
 import { CLI_VERSION } from './version.js';
 
 const USAGE = `usage:
@@ -134,10 +134,11 @@ const USAGE = `usage:
   oup route add <address> --service <name>
   oup route delete <address>
                <address> is <hostname>/<path>, or /<path> alone for the Project's default Domain
+  oup usage [--instances] [--json]
   oup site deploy <dir> --bucket <name> [--keep] [--force]
   oup version
 
-Database, service, job, secret, bucket, domain and route commands take --project <name|id>; without
+Database, service, job, secret, bucket, domain, route and usage commands take --project <name|id>; without
 it, the Project linked to this directory (oup link) or OUP_PROJECT.
 
 pg create gives a Database 256 MB and 1 GB unless told otherwise. pg restore
@@ -1122,6 +1123,24 @@ async function route(args: string[]): Promise<void> {
     return deleted.ok ? console.log(`Deleted the Route ${where}; what it went to stays.`) : fail(deleted.error.message);
 }
 
+/** `oup usage`: what the linked Project's Resources use now of what they were given (decision 124); not what is billed. */
+async function usage(args: string[]): Promise<void> {
+    const { values, positionals } = parseArgs({
+        args,
+        allowPositionals: true,
+        options: { project: { type: 'string' }, instances: { type: 'boolean' }, json: { type: 'boolean' } },
+    });
+    if (positionals.length > 0) {
+        return fail(USAGE);
+    }
+    const { client, project } = await inProject(values.project);
+    const read = await client.getUsage(project.id);
+    if (!read.ok) {
+        return fail(read.error.message);
+    }
+    console.log(values.json === true ? JSON.stringify(read.value, null, 2) : formatUsage(read.value, project.name, { instances: values.instances ?? false }).join('\n'));
+}
+
 async function siteDeploy(args: string[]): Promise<void> {
     const { values, positionals } = parseArgs({
         args,
@@ -1188,6 +1207,8 @@ const run = async (): Promise<void> => {
             return domain(rest);
         case 'route':
             return route(rest);
+        case 'usage':
+            return usage(rest);
         case 'site':
             return rest[0] === 'deploy' ? siteDeploy(rest.slice(1)) : fail(USAGE);
         case 'version':
