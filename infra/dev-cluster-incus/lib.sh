@@ -18,4 +18,14 @@ vm_ipv4() {
   jq -r '[.network // {} | to_entries[] | select(.key | test("^(eth|en)")) |
     .value.addresses[] | select(.family == "inet" and .scope == "global") | .address][0] // empty'
 }
+# Runs a check every 2 s until it succeeds; gives up after WAIT_SECONDS
+# (default 300) with what it waited for: until_ok "description" command...
+until_ok() {
+  local what=$1 deadline=$((SECONDS + ${WAIT_SECONDS:-300}))
+  shift
+  until "$@"; do
+    ((SECONDS < deadline)) || { echo "gave up waiting for $what" >&2; exit 1; }
+    sleep 2
+  done
+}
 vm_state() { incus query "$R/1.0/instances/$PREFIX-$1/state"; } # site → state JSON

@@ -64,7 +64,9 @@ is reachable from the internet: their HTTP-01 challenge must reach port 80.
 group on the compute VMs (`infra/topolvm/vgcreate.sh`), our AppArmor
 profile, gVisor on the compute VMs (`infra/gvisor`), and k3s with the
 Hetzner dev cluster's settings, then the RuntimeClass `gvisor`. Run
-again, it starts stopped VMs and installs nothing that is already there.
+again, it completes a VM an interrupted run left without its devices,
+starts stopped VMs and installs nothing that is already there. Each wait
+(VM agent, address, disk) gives up after `WAIT_SECONDS` (300).
 The kubeconfig points at `hetzner-fsn1`'s address; before switching that
 Site off, point it at another VM's.
 
@@ -92,12 +94,13 @@ limit.
 ## Delete
 
 ```bash
-INCUS_REMOTE=mini ./down.sh
+INCUS_REMOTE=mini PLATFORM_DOMAIN=home.dev.example.com CUSTOMER_DOMAIN=home.dev.example.app ./down.sh
 ```
 
-It asks first (`YES=1` skips the question), then deletes the DNS records of
-the install (`../dev-cluster/dns-delete-all.sh`, with `PLATFORM_DOMAIN` and
-`CUSTOMER_DOMAIN` as installed), the VMs with their snapshots, the volumes
+Both domains are required, as installed: without them the DNS cleanup
+would take the Hetzner dev cluster's records (`SKIP_DNS=1` leaves DNS
+alone). It asks first (`YES=1` skips the question), then deletes the DNS
+records of the install (`../dev-cluster/dns-delete-all.sh`), the VMs with their snapshots, the volumes
 and `.state/`. Only the Databases' backups survive.
 
 `scripts.test.mjs` tests the scripts' own logic with a stubbed `incus`

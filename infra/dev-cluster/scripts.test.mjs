@@ -52,7 +52,7 @@ url=$1
 case "$method $url" in
   "GET https://api.bunny.net/dnszone?search=dev.example.com") echo '{"Items":[{"Domain":"dev.example.com","Id":7},{"Domain":"a.dev.example.com","Id":8}]}' ;;
   "GET https://api.bunny.net/dnszone?search="*) echo '{"Items":[]}' ;;
-  "GET https://api.bunny.net/dnszone/7") echo '{"Records":[{"Id":1,"Type":0,"Name":"home","Value":"10.0.0.9"},{"Id":2,"Type":0,"Name":"other","Value":"1.1.1.1"},{"Id":3,"Type":0,"Name":"api.home","Value":"10.0.0.9"}]}' ;;
+  "GET https://api.bunny.net/dnszone/7") echo '{"Records":[{"Id":1,"Type":0,"Name":"home","Value":"10.0.0.9"},{"Id":2,"Type":0,"Name":"other","Value":"1.1.1.1"},{"Id":3,"Type":0,"Name":"api.home","Value":"10.0.0.9"},{"Id":4,"Type":0,"Name":"pub","Value":"203.0.113.0","MonitorType":0}]}' ;;
   PUT*) echo "PUT $(jq -c . <<<"$body")" >>"$STUB_LOG"; echo '{}' ;;
   DELETE*) echo "DELETE \${url##*/}" >>"$STUB_LOG" ;;
   *) echo "unexpected: curl $method $url" >&2; exit 9 ;;
@@ -266,6 +266,34 @@ test('dns.sh leaves multi-node records at private addresses unchecked', () => {
             ['100.101.1.2', 0],
         ],
     );
+});
+
+test('dns.sh replaces a record whose address is right but whose health check is not', () => {
+    const { status, stderr, log } = run('./dns.sh', {
+        LAYOUT_STUB: 'multi-node',
+        NODES_JSON_STUB: multiNodeJson,
+        DNS_DOMAIN: 'pub.dev.example.com',
+    });
+    assert.equal(status, 0, stderr);
+    assert.deepEqual(
+        puts(log).map(({ Value, MonitorType }) => [Value, MonitorType]),
+        [
+            ['203.0.113.0', 2],
+            ['203.0.113.1', 2],
+        ],
+    );
+    assert.match(log, /^DELETE 4$/m);
+});
+
+test('dns.sh keeps a record with the same address and health check', () => {
+    const { status, stderr, log } = run('./dns.sh', {
+        LAYOUT_STUB: 'single-node',
+        NODES_JSON_STUB: singleNodeJson.replace('192.168.1.50', '10.0.0.9'),
+        DNS_DOMAIN: 'home.dev.example.com',
+    });
+    assert.equal(status, 0, stderr);
+    assert.deepEqual(puts(log), []);
+    assert.doesNotMatch(log, /DELETE/);
 });
 
 test('dns.sh --delete removes only its own names, the former api record included, and needs no cluster', () => {

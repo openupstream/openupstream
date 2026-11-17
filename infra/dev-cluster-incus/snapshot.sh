@@ -32,7 +32,14 @@ volumes() { # the compute Sites' block volumes
   done
 }
 stop_all() { for site in "${SITES[@]}"; do incus stop "$(instance "$site")" 2>/dev/null || true; done; }
-start_all() { for site in "${SITES[@]}"; do incus start "$(instance "$site")"; done; }
+start_all() { for site in "${SITES[@]}"; do incus start "$(instance "$site")" 2>/dev/null || true; done; }
+# Once the VMs are stopped, a failure starts them again instead of leaving
+# the cluster down; after a failed restore some VMs may be restored and
+# others not, so it says to restore again.
+stop_all_guarded() { # [note for a failure]
+  trap "echo \"$ACTION failed; starting the VMs again${1:+ ($1)}\" >&2; start_all" ERR
+  stop_all
+}
 
 case $ACTION in
   list)
@@ -42,7 +49,7 @@ case $ACTION in
     done
     ;;
   create)
-    stop_all
+    stop_all_guarded
     for site in "${SITES[@]}"; do incus snapshot create "$(instance "$site")" "$NAME"; done
     for volume in $(volumes); do incus storage volume snapshot create "$R$POOL" "$volume" "$NAME"; done
     start_all
@@ -58,7 +65,7 @@ case $ACTION in
       incus storage volume snapshot show "$R$POOL" "$volume" "$NAME" >/dev/null ||
         { echo "volume $volume has no snapshot $NAME" >&2; exit 1; }
     done
-    stop_all
+    stop_all_guarded "some may be restored and others not: run the restore again"
     for site in "${SITES[@]}"; do incus snapshot restore "$(instance "$site")" "$NAME"; done
     for volume in $(volumes); do incus storage volume snapshot restore "$R$POOL" "$volume" "$NAME"; done
     start_all

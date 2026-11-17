@@ -60,7 +60,7 @@ done
 
 # Type 0 is A. Only our names, so records someone added by hand stay.
 records() { api "https://api.bunny.net/dnszone/$ZONE_ID" | jq -c --argjson names "$(printf '%s\n' "${RECORD_NAMES[@]}" | jq -R . | jq -s .)" \
-  '.Records[] | select(.Type == 0 and (.Name as $n | $names | index($n))) | {Id, Name, Value}'; }
+  '.Records[] | select(.Type == 0 and (.Name as $n | $names | index($n))) | {Id, Name, Value, MonitorType: (.MonitorType // 0)}'; }
 delete_records() { # records (JSON lines) to delete
   for id in $(jq -r '.Id' <<<"$1"); do
     api -X DELETE "https://api.bunny.net/dnszone/$ZONE_ID/records/$id" >/dev/null
@@ -99,13 +99,16 @@ while read -r site ip; do
   IPS+=("$ip")
   for name in "${RECORD_NAMES[@]}"; do
     fqdn="$name${name:+.}$ZONE"
-    if jq -e --arg n "$name" --arg ip "$ip" 'select(.Name == $n and .Value == $ip)' <<<"$existing" >/dev/null; then
+    m=$(monitor "$ip")
+    if jq -e --arg n "$name" --arg ip "$ip" --argjson m "$m" 'select(.Name == $n and .Value == $ip and .MonitorType == $m)' <<<"$existing" >/dev/null; then
       echo "$fqdn A $ip ($site, kept)"
       continue
     fi
     api -X PUT "https://api.bunny.net/dnszone/$ZONE_ID/records" \
-      -d "$(jq -n --arg n "$name" --arg ip "$ip" --argjson m "$(monitor "$ip")" '{Type: 0, Name: $n, Value: $ip, Ttl: 60, MonitorType: $m}')" >/dev/null
+      -d "$(jq -n --arg n "$name" --arg ip "$ip" --argjson m "$m" '{Type: 0, Name: $n, Value: $ip, Ttl: 60, MonitorType: $m}')" >/dev/null
     echo "$fqdn A $ip ($site)"
+    # The same address with another health check goes after its replacement.
+    delete_records "$(jq -c --arg n "$name" --arg ip "$ip" 'select(.Name == $n and .Value == $ip)' <<<"$existing")"
   done
 done <<<"$nodes"
 delete_records "$(jq -c --argjson ips "$(printf '%s\n' "${IPS[@]}" | jq -R . | jq -s .)" 'select(.Value as $v | $ips | index($v) | not)' <<<"$existing")"

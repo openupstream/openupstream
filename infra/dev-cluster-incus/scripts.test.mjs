@@ -15,7 +15,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const stubs = mkdtempSync(join(tmpdir(), 'dev-cluster-incus-stubs-'));
 
 // incus: every call goes to $STUB_LOG; `snapshot show` and `storage volume
-// snapshot show` fail for the names in MISSING_STUB.
+// snapshot show` fail for the names in MISSING_STUB; a call containing
+// FAIL_STUB fails.
 writeFileSync(
     join(stubs, 'incus'),
     `#!/usr/bin/env bash
@@ -24,6 +25,7 @@ case "$*" in
   "snapshot show "* | "storage volume snapshot show "*)
     for missing in \${MISSING_STUB:-}; do [[ " $* " == *" $missing "* ]] && exit 1; done ;;
 esac
+[[ -n \${FAIL_STUB:-} && "$*" == *"$FAIL_STUB"* ]] && exit 1
 exit 0
 `,
 );
@@ -105,4 +107,30 @@ test('snapshot.sh refuses a name incus would not take, before stopping anything'
     const { status, log } = run("./snapshot.sh create 'a b'");
     assert.equal(status, 2);
     assert.equal(log, '');
+});
+
+test('snapshot.sh starts the VMs again when a snapshot fails', () => {
+    const { status, stderr, log } = run('./snapshot.sh create x', { FAIL_STUB: 'volume snapshot create' });
+    assert.notEqual(status, 0);
+    assert.match(stderr, /create failed; starting the VMs again/);
+    assert.deepEqual(calls(log).slice(-3), [
+        'start oup-home-hetzner-fsn1',
+        'start oup-home-ovh-lim',
+        'start oup-home-netcup-nbg',
+    ]);
+});
+
+test('down.sh refuses to run without the install\'s domains, before deleting anything', () => {
+    const { status, stderr, log } = run('YES=1 ./down.sh', { STATE: mkdtempSync(join(tmpdir(), 'dev-cluster-incus-state-')) });
+    assert.equal(status, 1);
+    assert.match(stderr, /set PLATFORM_DOMAIN and CUSTOMER_DOMAIN/);
+    assert.equal(log, '');
+});
+
+test('down.sh with SKIP_DNS deletes the VMs and the compute volumes', () => {
+    const { status, stderr, log } = run('YES=1 SKIP_DNS=1 ./down.sh', { STATE: mkdtempSync(join(tmpdir(), 'dev-cluster-incus-state-')) });
+    assert.equal(status, 0, stderr);
+    assert.ok(calls(log).includes('delete --force oup-home-netcup-nbg'), log);
+    assert.ok(calls(log).includes('storage volume delete default oup-home-ovh-lim-lvm'), log);
+    assert.ok(!calls(log).some((call) => call.includes('netcup-nbg-lvm')), log);
 });

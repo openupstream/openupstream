@@ -49,33 +49,36 @@ chmod 700 "$STATE"
 for i in 0 1 2; do
   site=${SITES[$i]}
   vm=$(instance "$site")
-  if incus info "$vm" >/dev/null 2>&1; then
-    incus start "$vm" 2>/dev/null || true
-    continue
+  if ! incus info "$vm" >/dev/null 2>&1; then
+    cpus=$COMPUTE_CPUS memory=$COMPUTE_MEMORY
+    [[ $site == "$THIRD_SITE" ]] && cpus=$THIRD_CPUS memory=$THIRD_MEMORY
+    echo "creating $vm ($cpus CPUs, $memory)"
+    incus init "$IMAGE" "$vm" --vm --storage "$POOL" \
+      -c limits.cpu="$cpus" -c limits.memory="$memory" \
+      -c user.openupstream=dev-incus -c user.site="$site" \
+      -d root,size="$ROOT_SIZE" >/dev/null
   fi
-  cpus=$COMPUTE_CPUS memory=$COMPUTE_MEMORY
-  [[ $site == "$THIRD_SITE" ]] && cpus=$THIRD_CPUS memory=$THIRD_MEMORY
-  echo "creating $vm ($cpus CPUs, $memory)"
-  incus init "$IMAGE" "$vm" --vm --storage "$POOL" \
-    -c limits.cpu="$cpus" -c limits.memory="$memory" \
-    -c user.openupstream=dev-incus -c user.site="$site" \
-    -d root,size="$ROOT_SIZE" >/dev/null
-  # The NIC on the home network replaces the profile's (usually Incus's own
-  # NAT bridge, which the home network cannot reach).
-  incus config device add "$vm" eth0 nic nictype=bridged parent="$BRIDGE" >/dev/null
+  # The devices are added on every run, so a run interrupted after `init`
+  # is completed by the next one. The NIC on the home network replaces the
+  # profile's (usually Incus's own NAT bridge, which the home network
+  # cannot reach).
+  devices=$(incus config device list "$vm")
+  grep -qx eth0 <<<"$devices" ||
+    incus config device add "$vm" eth0 nic nictype=bridged parent="$BRIDGE" >/dev/null
   if [[ $site != "$THIRD_SITE" ]]; then
     volume=$(volume_name "$site")
     incus storage volume show "$R$POOL" "$volume" >/dev/null 2>&1 ||
       incus storage volume create "$R$POOL" "$volume" --type=block size="$VOLUME_SIZE" >/dev/null
-    incus config device add "$vm" lvm disk pool="$POOL" source="$volume" >/dev/null
+    grep -qx lvm <<<"$devices" ||
+      incus config device add "$vm" lvm disk pool="$POOL" source="$volume" >/dev/null
   fi
-  incus start "$vm"
+  incus start "$vm" 2>/dev/null || true
 done
 
 # The VM agent answers once the VM has booted; cloud-init finishes after it.
 for site in "${SITES[@]}"; do
   vm=$(instance "$site")
-  until incus exec "$vm" -- true 2>/dev/null; do sleep 3; done
+  until_ok "the VM agent of $vm" incus exec "$vm" -- true 2>/dev/null
   incus exec "$vm" -- cloud-init status --wait >/dev/null || true
 done
 
@@ -83,10 +86,8 @@ IPS=()
 for site in "${SITES[@]}"; do
   vm=$(instance "$site")
   ip=
-  until [[ -n $ip ]]; do
-    ip=$(vm_state "$site" | vm_ipv4) || ip=
-    [[ -n $ip ]] || sleep 2
-  done
+  find_ip() { ip=$(vm_state "$site" | vm_ipv4) || ip=; [[ -n $ip ]]; }
+  until_ok "an IPv4 address of $vm on $BRIDGE (DHCP from the router)" find_ip
   echo "$vm: $ip"
   IPS+=("$ip")
 done
@@ -97,10 +98,8 @@ for i in 0 1; do
   site=${SITES[$i]}
   vm=$(instance "$site")
   device=
-  until [[ -n $device ]]; do
-    device=$(incus exec "$vm" -- sh -c 'ls /dev/disk/by-id/*incus_lvm 2>/dev/null | head -n 1')
-    [[ -n $device ]] || sleep 2
-  done
+  find_disk() { device=$(incus exec "$vm" -- sh -c 'ls /dev/disk/by-id/*incus_lvm 2>/dev/null | head -n 1'); [[ -n $device ]]; }
+  until_ok "the disk lvm in $vm" find_disk
   echo "volume group on $site ($device)"
   incus exec -T "$vm" -- bash -s -- "$device" <../topolvm/vgcreate.sh
 done
@@ -125,6 +124,7 @@ for site in "${SITES[0]}" "${SITES[1]}"; do
 done
 
 # The same k3s settings as on the Hetzner dev cluster, except the address:
+source ../dev-cluster/k3s-server-args.sh
 # the node's own on the home network is its InternalIP, and there is no
 # ExternalIP. A node that already runs k3s is left alone; the installer
 # would restart it.
@@ -138,15 +138,8 @@ install_k3s() { # index, extra args...
   fi
   echo "installing k3s on $vm ($node_ip)"
   incus exec "$vm" -- sh -c "curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION='$K3S_VERSION' K3S_TOKEN='$(cat "$STATE/token")' sh -s - server \
-    --flannel-backend=wireguard-native \
-    --node-label topology.kubernetes.io/zone=$site \
+    $(k3s_server_args "$site" "$node_ip") \
     --node-ip $node_ip \
-    --tls-san $node_ip \
-    --secrets-encryption \
-    --kube-apiserver-arg default-not-ready-toleration-seconds=30 \
-    --kube-apiserver-arg default-unreachable-toleration-seconds=30 \
-    --kube-controller-manager-arg node-monitor-grace-period=20s \
-    --disable traefik --disable servicelb \
     $*"
 }
 
