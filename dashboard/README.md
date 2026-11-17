@@ -33,8 +33,8 @@ What it does now:
     while its "Logs" is and the tab is looked at; the newest 2000 lines.
   - Buckets: list with the S3 endpoint and the addresses Routes serve them
     at, create, delete. A Bucket's key is not shown and never fetched
-    (decision 128): it comes from the API, and `oup site deploy` gets it
-    itself.
+    (decision 128): it comes from `oup bucket export-env` or
+    `show-access-key` (decision 133), and `oup site deploy` gets it itself.
   - Domains: the default Domain and custom domains, claimed with a
     hostname, with the TXT record that proves ownership and the CNAME to
     publish, verify, delete. Per Domain its Routes: add (path, a Bucket
