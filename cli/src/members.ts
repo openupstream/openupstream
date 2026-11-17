@@ -1,6 +1,6 @@
 /**
  * `oup member`: an Account's Members and their roles (ARCHITECTURE.md,
- * decisions 137 and 142). Pure, so it is tested without an API.
+ * decisions 138 and 143). Pure, so it is tested without an API.
  */
 import { MEMBER_ROLES, type Member, type MemberRole } from '@openupstream/sdk';
 import { type Result, err, ok } from './result.js';

@@ -128,7 +128,7 @@ export async function syncProjectSecrets(
             return written;
         }
     }
-    // A role taken from a removed Member (decision 142): its password goes, again after the removal's own delete.
+    // A role taken from a removed Member (decision 143): its password goes, again after the removal's own delete.
     for (const role of await recentlyDroppedRoles(deps.pool, projectId)) {
         const deleted = await deps.kube.remove({ apiVersion: 'v1', kind: 'Secret', namespace: projectNamespace(projectId), name: databaseRoleSecret(role) });
         if (!deleted.ok) {

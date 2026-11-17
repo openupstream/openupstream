@@ -27,7 +27,7 @@ export interface Account {
 }
 
 /**
- * What a Member may do in the whole Account (decision 137): `owner`
+ * What a Member may do in the whole Account (decision 138): `owner`
  * everything, the Account's Members included; `developer` every Project and
  * everything in it.
  */

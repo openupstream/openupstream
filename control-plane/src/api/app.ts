@@ -492,7 +492,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         return c.json(account, 201);
     });
 
-    // Members (decisions 137, 140, 142). Owners and developers see them;
+    // Members (decisions 138, 141, 143). Owners and developers see them;
     // only an owner changes or removes another, and anyone may leave. None
     // of it with an API key: a leaked key must not change who is in. The
     // schema keeps an owner in every Account.

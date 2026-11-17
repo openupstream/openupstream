@@ -116,7 +116,7 @@ export const OWNER_CONNECTION_LIMIT = 5;
 
 /**
  * A caller's role as CloudNativePG manages it: logs in with its Secret's
- * password, inherits its grants. A dropped one (decision 142) is only
+ * password, inherits its grants. A dropped one (decision 143) is only
  * named, `ensure: absent`, with no Secret, which the control plane deleted.
  */
 export const managedRoleFor = (role: DatabaseRoleRow) =>

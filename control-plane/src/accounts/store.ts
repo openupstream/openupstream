@@ -2,7 +2,7 @@
  * Accounts as the public API sees them: those the caller is a Member of. A
  * signed-in madAuth user creates an Account and becomes its first Member
  * and owner (ARCHITECTURE.md, decisions 62 and 137); invitations to
- * existing Accounts come later (decision 141). Members: ./members.ts.
+ * existing Accounts come later (decision 142). Members: ./members.ts.
  *
  * An Account's Holds stop it from creating Resources (decision 78). The
  * billing service places and lifts them through the internal API; new

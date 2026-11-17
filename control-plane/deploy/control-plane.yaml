@@ -77,7 +77,7 @@ rules:
   # Every Project's Secret project-secrets, rendered from the encrypted store
   # (decision 91). Cluster-wide, since Project namespaces are created at run
   # time; server-side apply needs create and patch. Delete: the Secret of a
-  # Postgres role taken from a removed Member (decision 142); patch already
+  # Postgres role taken from a removed Member (decision 143); patch already
   # lets it overwrite any Secret, so delete adds no reach.
   - apiGroups: [""]
     resources: [secrets]

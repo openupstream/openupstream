@@ -1,6 +1,6 @@
 /**
- * An Account's Members and their roles (ARCHITECTURE.md, decisions 137 and
- * 142; docs/adr/0006-invitations-roles-account-tokens.md). The schema keeps
+ * An Account's Members and their roles (ARCHITECTURE.md, decisions 138 and
+ * 143; docs/adr/0006-invitations-roles-account-tokens.md). The schema keeps
  * an owner in every Account (migrations, member-roles); a change that would
  * leave none is answered `last-owner` here.
  *
@@ -56,7 +56,7 @@ export async function memberOf(pool: pg.Pool, accountId: Id, subject: string): P
 
 /**
  * Gives the Member another role. Between owner and developer no database
- * access level is lost (decision 139), so no Postgres role is dropped.
+ * access level is lost (decision 140), so no Postgres role is dropped.
  */
 export async function changeRole(pool: pg.Pool, accountId: Id, memberId: Id, role: MemberRole): Promise<Result<Member, MemberError>> {
     const updated = await unlessCodes(

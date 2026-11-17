@@ -175,7 +175,7 @@ export async function recentlyDroppedRoles(pool: pg.Pool, projectId: Id): Promis
 /**
  * The roles of every live Database, by Database, oldest first: what the
  * operator adds to the Clusters. Dropped ones too, for as long as the
- * Database lives, so CloudNativePG drops them whenever it can (decision 142).
+ * Database lives, so CloudNativePG drops them whenever it can (decision 143).
  */
 export async function rolesByDatabase(pool: pg.Pool): Promise<ReadonlyMap<Id, readonly DatabaseRoleRow[]>> {
     const { rows } = await pool.query<{ id: string; database_id: string; access: DatabaseAccess; dropped: boolean }>(

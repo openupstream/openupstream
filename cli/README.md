@@ -41,7 +41,7 @@ oup site deploy dist --bucket my-site
   `--project <name|id>`, or `OUP_PROJECT` in CI, names another Project for
   one command.
 - `oup member list [--account <name|id>]`: the Members of your Account
-  with their roles (decision 137): an `owner` may do everything, the
+  with their roles (decision 138): an `owner` may do everything, the
   Account's Members included; a `developer` every Project and everything
   in it. With several Accounts, `--account` says which, as for every
   `oup member` command.
@@ -49,7 +49,7 @@ oup site deploy dist --bucket my-site
   Owners only; an Account always keeps an owner.
 - `oup member remove <email>`: removes a Member, owners only. Their
   Postgres roles from `oup pg proxy`, and those of their API keys, are
-  dropped from the Account's Databases (decision 142).
+  dropped from the Account's Databases (decision 143).
 - `oup member leave`: leaves the Account; its last owner cannot. `oup
   member` changes need `oup login`: an API key cannot change who is in an
   Account.

@@ -190,7 +190,7 @@ export const madauthAuthenticator =
 
 /**
  * The Accounts whose Projects the madAuth user may act on: those where
- * their Member has a role (decision 137); a Member without one reaches
+ * their Member has a role (decision 138); a Member without one reaches
  * only what grants give, which are not built yet. Their Member rows take
  * the e-mail address the user has in madAuth now, so a changed address
  * reaches them with the user's next request.

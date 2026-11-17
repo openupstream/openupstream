@@ -313,9 +313,10 @@ describe('Projects', () => {
             await first.query('begin');
             await second.query('begin');
             await first.query("update members set role = 'developer' where id = $1", [b]);
-            const waiting = second.query("update members set role = 'developer' where id = $1", [a]);
+            // The assertion is attached at once: the refusal may arrive right with the commit.
+            const refused = rejectsWith(second.query("update members set role = 'developer' where id = $1", [a]), 'OUOWN');
             await first.query('commit');
-            await rejectsWith(waiting, 'OUOWN');
+            await refused;
             await second.query('rollback');
         } finally {
             first.release();

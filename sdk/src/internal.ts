@@ -48,7 +48,7 @@ export const databaseRoleSecret = (role: { readonly id: Id }): string => `pg-rol
 export interface DatabaseRoleRow {
     readonly id: Id;
     readonly access: DatabaseAccess;
-    /** Taken from its caller (decision 142): the Cluster drops it (`ensure: absent`). */
+    /** Taken from its caller (decision 143): the Cluster drops it (`ensure: absent`). */
     readonly dropped?: true;
 }
 

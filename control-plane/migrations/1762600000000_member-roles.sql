@@ -1,10 +1,10 @@
 -- Up Migration
 
--- Member roles (ARCHITECTURE.md, decision 137;
+-- Member roles (ARCHITECTURE.md, decision 138;
 -- docs/adr/0006-invitations-roles-account-tokens.md): `owner` may do
 -- everything, the Account's Members included; `developer` every Project and
 -- everything in it. A Member without a role reaches only what grants give
--- (decision 138, not built yet), so nothing today. Every Member so far
+-- (decision 139, not built yet), so nothing today. Every Member so far
 -- created their Account, so they become its owners.
 alter table members add column role text check (role in ('owner', 'developer'));
 update members set role = 'owner';
@@ -32,7 +32,7 @@ $$;
 create trigger members_keep_an_owner before update of role or delete on members
     for each row execute function members_keep_an_owner();
 
--- A Postgres role its caller may no longer use (decision 142) is marked,
+-- A Postgres role its caller may no longer use (decision 143) is marked,
 -- not deleted: the Databases operator keeps rendering it as
 -- `ensure: absent`, so CloudNativePG drops it whenever the Cluster is
 -- there to do so, and the row goes with its Database. A marked role is no

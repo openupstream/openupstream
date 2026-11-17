@@ -8,7 +8,8 @@ Responsibilities:
 
 - accounts, members with their roles (owner, developer), API keys
   (sign-in and keys via madAuth), and the Holds that stop an Account from
-  creating Resources
+  creating Resources; grants, invitations and Account tokens are designed
+  in `docs/adr/0006-invitations-roles-account-tokens.md`, not built yet
 - projects and their resources: databases, buckets, sites, services, jobs
 - the routing table (`domain → prefix → target`)
 - secrets (envelope-encrypted, injected into containers as env)

@@ -11,8 +11,33 @@ members sign in. Owns one or more Projects.
 _Avoid_: tenant, organization, subscription, customer (in code)
 
 **Member**:
-A person who can sign in to an Account and act on its Projects.
+A person who can sign in to an Account and act on its Projects, as far as
+their role or grants allow.
 _Avoid_: user (ambiguous with the customer's own users)
+
+**Role**:
+What a Member may do in the whole Account: `owner` (everything, including
+who is a Member, invitations, Account tokens and paying) or `developer`
+(every Project and everything in it, but not the Account itself). A Member
+may also have no role and only grants.
+_Avoid_: admin (madAuth's own role), member as a role name, permission set
+
+**Grant**:
+Access to one Resource at a level, such as `read` on one Database, given
+to a Member or an Account token. For using the Resource, not managing it.
+_Avoid_: permission, ACL, share
+
+**Invitation**:
+An owner's offer, sent by e-mail, for one address to become a Member with
+a role or grants. Accepted by a signed-in person with that address within
+7 days.
+_Avoid_: invite link (it works only for the invited address)
+
+**Account token**:
+A named secret that belongs to the Account rather than to a person, with
+the developer role or grants, for CI, tools and scripts outside the
+platform. Not a Member's personal API key, and not a Bucket's access key.
+_Avoid_: service account, API token, robot, bot
 
 **Waitlist**:
 The e-mail addresses of people who want to hear when the hosted service
