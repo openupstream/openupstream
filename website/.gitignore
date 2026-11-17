@@ -1,0 +1,3 @@
+.astro/
+# written from cli/README.md by astro.config.ts
+src/content/docs/docs/reference/cli.md
