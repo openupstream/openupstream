@@ -16,8 +16,9 @@
 #
 # In multi-node each record gets an HTTP health check (port 80 every 30 s
 # from three regions), so bunny.net drops a dark Site's record. A single
-# node has no other record to fall back to, and a private address cannot be
-# checked from outside, so its record has none.
+# node has no other record to fall back to, and a private address (home
+# network, Tailscale) cannot be checked from outside, so their records have
+# none: a dark Site's private address stays in DNS (decision 137).
 #
 # Needs: the bunny.net API key in ~/.config/openupstream/bunny-api-key,
 # curl, jq, and for creating records KUBECONFIG and kubectl.
@@ -74,8 +75,15 @@ if [[ ${1:-} == --delete ]]; then
 fi
 
 LAYOUT=$(cluster_layout)
-MONITOR=2
-[[ $LAYOUT == single-node ]] && MONITOR=0
+# bunny.net's monitor type: 2 is an HTTP check, 0 none.
+monitor() { # ip → monitor type
+  [[ $LAYOUT == single-node ]] && { echo 0; return; }
+  case $1 in
+    10.* | 192.168.* | 172.1[6-9].* | 172.2[0-9].* | 172.3[01].* | 127.* | 169.254.*) echo 0 ;;
+    100.6[4-9].* | 100.[7-9][0-9].* | 100.1[01][0-9].* | 100.12[0-7].*) echo 0 ;; # 100.64.0.0/10: Tailscale, CGNAT
+    *) echo 2 ;;
+  esac
+}
 
 # Each compute node's Site and IPv4 address, ExternalIP before InternalIP.
 nodes=$(kubectl get nodes -l "topology.kubernetes.io/zone in ($(IFS=,; echo "${COMPUTE_SITES[*]}"))" -o json | jq -r '.items[] |
@@ -96,7 +104,7 @@ while read -r site ip; do
       continue
     fi
     api -X PUT "https://api.bunny.net/dnszone/$ZONE_ID/records" \
-      -d "$(jq -n --arg n "$name" --arg ip "$ip" --argjson m "$MONITOR" '{Type: 0, Name: $n, Value: $ip, Ttl: 60, MonitorType: $m}')" >/dev/null
+      -d "$(jq -n --arg n "$name" --arg ip "$ip" --argjson m "$(monitor "$ip")" '{Type: 0, Name: $n, Value: $ip, Ttl: 60, MonitorType: $m}')" >/dev/null
     echo "$fqdn A $ip ($site)"
   done
 done <<<"$nodes"

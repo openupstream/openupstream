@@ -243,6 +243,31 @@ test('dns.sh points a zone apex at every compute node\'s ExternalIP, health-chec
     );
 });
 
+test('dns.sh leaves multi-node records at private addresses unchecked', () => {
+    const homeJson = JSON.stringify({
+        items: [
+            ['hetzner-fsn1', '192.168.178.31'],
+            ['ovh-lim', '100.101.1.2'],
+        ].map(([site, address]) => ({
+            metadata: { labels: { 'topology.kubernetes.io/zone': site } },
+            status: { addresses: [{ type: 'InternalIP', address }] },
+        })),
+    });
+    const { status, stderr, log } = run('./dns.sh', {
+        LAYOUT_STUB: 'multi-node',
+        NODES_JSON_STUB: homeJson,
+        DNS_DOMAIN: 'dev.example.com',
+    });
+    assert.equal(status, 0, stderr);
+    assert.deepEqual(
+        puts(log).map(({ Value, MonitorType }) => [Value, MonitorType]),
+        [
+            ['192.168.178.31', 0],
+            ['100.101.1.2', 0],
+        ],
+    );
+});
+
 test('dns.sh --delete removes only its own names, the former api record included, and needs no cluster', () => {
     const { status, log } = run('./dns.sh --delete', { DNS_DOMAIN: 'home.dev.example.com', KUBECTL_FAIL: '1' });
     assert.equal(status, 0);
