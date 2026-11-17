@@ -1,6 +1,6 @@
 # website
 
-The public website for `openupstream.com` (ARCHITECTURE.md, decision 129):
+The public website for `openupstream.com` (ARCHITECTURE.md, decision 130):
 
 - a page per product, saying what it is and what to know before choosing
   it: `/postgres`, `/object-storage`, `/static-sites`, `/containers`
