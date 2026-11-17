@@ -50,8 +50,10 @@ oup bucket show-access-key acme-uploads   # prints the key's id and its secret
 `AWS_REGION`, `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3` and `BUCKET_NAME`,
 of which recent AWS SDKs read all but `BUCKET_NAME` by themselves. The AWS
 CLI also needs
-`aws configure set default.s3.addressing_style virtual`. An API key that may only read gets the key's
-id and not its secret, since the Bucket's key may write.
+`aws configure set default.s3.addressing_style virtual`.
+
+An API key that may only read gets the key's id and not its secret, since
+the Bucket's key may write.
 
 The Bucket is in the hostname (virtual-hosted style); path-style requests
 are not served. Most S3 clients put the Bucket's name in front of the

@@ -2,7 +2,9 @@
 # every Bucket at https://<bucket>.s3.CUSTOMER_DOMAIN, one wildcard
 # certificate through DNS-01 (decision 69). Path-style requests to
 # s3.CUSTOMER_DOMAIN itself are not routed, so every request names its
-# Bucket in the hostname. CUSTOMER_DOMAIN, CUSTOMER_DOMAIN_REGEX (the same
+# Bucket in the hostname. The route goes to port 3905, nginx in the Garage
+# pods, which restores the Content-Length that Traefik leaves out of
+# requests without a body (garage.yaml, decision 134). CUSTOMER_DOMAIN, CUSTOMER_DOMAIN_REGEX (the same
 # with its dots escaped) and CLUSTER_ISSUER are filled in when applied
 # (infra/dev-cluster/garage.sh).
 apiVersion: cert-manager.io/v1
@@ -49,8 +51,8 @@ spec:
     - match: HostRegexp(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\.s3\.CUSTOMER_DOMAIN_REGEX$`) && (Method(`GET`) || Method(`HEAD`))
       kind: Rule
       middlewares: [{name: retry-other-node}]
-      services: [{name: garage, port: 3900, serversTransport: fail-fast}]
+      services: [{name: garage, port: 3905, serversTransport: fail-fast}]
     - match: HostRegexp(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]\.s3\.CUSTOMER_DOMAIN_REGEX$`)
       kind: Rule
-      services: [{name: garage, port: 3900, serversTransport: fail-fast}]
+      services: [{name: garage, port: 3905, serversTransport: fail-fast}]
   tls: {secretName: s3-tls}
