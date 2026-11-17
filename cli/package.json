@@ -1,6 +1,6 @@
 {
   "name": "@openupstream/cli",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "oup, the openupstream command line tool",
   "license": "AGPL-3.0-only",
   "repository": {

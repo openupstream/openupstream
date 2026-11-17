@@ -19,18 +19,21 @@
  *   oup job stop <name> <run>
  *   oup job logs <name> [<run>] [--tail <n>] [-f] [--timestamps]   the newest run by default
  *   oup secret list | set <NAME> | delete <NAME>   a value is read from stdin
+ *   oup bucket list | create <name> | show <name> | show-access-key <name> | export-env <name> [--file <path>] | delete <name>
  *   oup site deploy <dir> --bucket <name> [--keep] [--force]
  *   oup version
  *
- * Database, service, job and secret commands act on the linked Project; `--project`
+ * Database, service, job, secret and bucket commands act on the linked Project; `--project`
  * or `OUP_PROJECT` names another.
  *
- * Planned (ARCHITECTURE.md build order): oup bucket, oup routes, oup usage.
+ * Planned (ARCHITECTURE.md build order): oup routes, oup usage.
  *
  * `OUP_API_KEY` (a madAuth API key) replaces `oup login`, e.g. in CI, with
  * `OUP_API_URL` for another API than https://console.openupstream.com/api.
  */
 import { spawn } from 'node:child_process';
+import { readFile, writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { S3Client } from '@aws-sdk/client-s3';
 import {
@@ -38,6 +41,7 @@ import {
     DEFAULT_API_URL,
     type Account,
     type ApiResult,
+    type BucketDetails,
     type JobDetails,
     type LogEntry,
     OpenUpstreamClient,
@@ -47,6 +51,7 @@ import {
     type Site,
     cliLogin,
 } from '@openupstream/sdk';
+import { bucketEnv, mergeEnv, s3Endpoint } from './buckets.js';
 import { credentialsPath, readCredentials, removeCredentials, writeCredentials } from './credentials.js';
 import { deploy } from './deploy.js';
 import { discover, emailOf, startDeviceSignIn, waitForApproval } from './oidc.js';
@@ -102,10 +107,16 @@ const USAGE = `usage:
   oup secret list
   oup secret set <NAME>        (the value from stdin)
   oup secret delete <NAME>
+  oup bucket list
+  oup bucket create <name>
+  oup bucket show <name>
+  oup bucket show-access-key <name>           (prints the Bucket's secret access key)
+  oup bucket export-env <name> [--file <path>] (writes it into an env file, default .env)
+  oup bucket delete <name>
   oup site deploy <dir> --bucket <name> [--keep] [--force]
   oup version
 
-Database, service, job and secret commands take --project <name|id>; without
+Database, service, job, secret and bucket commands take --project <name|id>; without
 it, the Project linked to this directory (oup link) or OUP_PROJECT.
 
 pg create gives a Database 256 MB and 1 GB unless told otherwise. pg restore
@@ -829,6 +840,92 @@ async function secret(args: string[]): Promise<void> {
     }
 }
 
+/**
+ * `oup bucket`: the linked Project's Buckets. Only `show-access-key` prints
+ * the Bucket's secret, and `export-env` writes it into a file without
+ * showing it (decision 132).
+ */
+async function bucket(args: string[]): Promise<void> {
+    const [verb, ...rest] = args;
+    const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { project: { type: 'string' }, file: { type: 'string' } } });
+    const [name] = positionals;
+    if (verb === undefined || (verb !== 'list' && name === undefined) || (values.file !== undefined && verb !== 'export-env')) {
+        return fail(USAGE);
+    }
+    const { client, project } = await inProject(values.project);
+    const buckets = await client.listBuckets(project.id);
+    if (!buckets.ok) {
+        return fail(buckets.error.message);
+    }
+    /** The Bucket `name` with its access, for the verbs that act on one. */
+    const details = async (): Promise<BucketDetails> => {
+        const found = buckets.value.find((candidate) => candidate.name === name);
+        if (found === undefined) {
+            return fail(`no Bucket ${name} in ${project.name}`);
+        }
+        const read = await client.getBucket(project.id, found.id);
+        return read.ok ? read.value : fail(read.error.message);
+    };
+    switch (verb) {
+        case 'list':
+            console.log(buckets.value.length === 0 ? `No Buckets in ${project.name}.` : buckets.value.map((b) => `${b.name.padEnd(32)} ${b.createdAt}`).join('\n'));
+            return;
+        case 'create': {
+            const created = await client.createBucket(project.id, { name: name as string });
+            return created.ok
+                ? console.log(`Created ${created.value.name} in ${project.name}: S3 endpoint ${s3Endpoint(created.value.name, created.value.access.endpoint)}`)
+                : fail(created.error.message);
+        }
+        case 'show': {
+            const { access, createdAt } = await details();
+            console.log(
+                [
+                    `Name:           ${name}`,
+                    `S3 endpoint:    ${s3Endpoint(name as string, access.endpoint)}   (virtual-hosted style: https://${new URL(access.endpoint).host})`,
+                    `Region:         ${access.region}`,
+                    `Access key id:  ${access.accessKeyId}`,
+                    `Created:        ${createdAt}`,
+                ].join('\n'),
+            );
+            return;
+        }
+        case 'show-access-key': {
+            const { access } = await details();
+            if (access.secretAccessKey === undefined) {
+                return fail("this API key may not read the Bucket's key; it needs openupstream:write");
+            }
+            console.log(`Access key id:      ${access.accessKeyId}\nSecret access key:  ${access.secretAccessKey}`);
+            return;
+        }
+        case 'export-env': {
+            const entries = bucketEnv(await details());
+            if (!entries.ok) {
+                return fail(entries.error);
+            }
+            const path = resolve(values.file ?? '.env');
+            // A file that is not there yet reads as empty; a new one is for its owner alone.
+            const before = await readFile(path, 'utf8').catch(() => '');
+            const written = await writeFile(path, mergeEnv(before, entries.value), { mode: 0o600 }).then(
+                () => undefined,
+                (error: unknown) => (error instanceof Error ? error.message : String(error)),
+            );
+            return written === undefined
+                ? console.log(`Wrote ${entries.value.map((entry) => entry.name).join(', ')} to ${path}. It holds the Bucket's secret: keep it out of git.`)
+                : fail(`cannot write ${path}: ${written}`);
+        }
+        case 'delete': {
+            const found = buckets.value.find((candidate) => candidate.name === name);
+            if (found === undefined) {
+                return fail(`no Bucket ${name} in ${project.name}`);
+            }
+            const deleted = await client.deleteBucket(project.id, found.id);
+            return deleted.ok ? console.log(`Deleted ${name} and every object in it.`) : fail(deleted.error.message);
+        }
+        default:
+            return fail(USAGE);
+    }
+}
+
 async function siteDeploy(args: string[]): Promise<void> {
     const { values, positionals } = parseArgs({
         args,
@@ -889,6 +986,8 @@ const run = async (): Promise<void> => {
             return job(rest);
         case 'secret':
             return secret(rest);
+        case 'bucket':
+            return bucket(rest);
         case 'site':
             return rest[0] === 'deploy' ? siteDeploy(rest.slice(1)) : fail(USAGE);
         case 'version':

@@ -117,6 +117,21 @@ oup site deploy dist --bucket my-site
   shells keep in their history: piped (one trailing line break is dropped,
   as `echo` adds it) or typed at the prompt, which does not echo it. The
   Project's Services restart with the new value.
+- `oup bucket list`, `oup bucket create <name>`, `oup bucket show <name>`
+  (S3 endpoint, region and access key id), `oup bucket delete <name>` (and
+  every object in it; refused while a Route serves it). A Bucket's name is
+  part of its hostname, so no other Bucket of anyone has it.
+- `oup bucket show-access-key <name>` prints the Bucket's access key id
+  and its secret access key: the only command that prints a secret.
+- `oup bucket export-env <name> [--file <path>]` writes what an S3 client
+  reads into an env file, `.env` by default, without showing the secret:
+  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`,
+  `AWS_DEFAULT_REGION`, `AWS_ENDPOINT_URL_S3` and `BUCKET_NAME`. Lines that
+  set them already are replaced and the rest of the file stays; a new file
+  can be read by you alone. Keep it out of git. Recent AWS SDKs read all
+  but `BUCKET_NAME` by themselves; the AWS CLI also needs
+  `aws configure set default.s3.addressing_style virtual`, since a Bucket
+  is reached at its own hostname only.
 - `oup site deploy <dir> --bucket <name> [--keep] [--force]`: makes the
   Bucket mirror the directory (decision 88): changed files only, `index.html`
   files last, then deletes what the directory no longer has, unless
