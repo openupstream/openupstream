@@ -129,7 +129,8 @@ the key itself is still reused for a minute (decision 64).
 API keys never manage the Account: inviting, revoking invitations,
 changing roles and grants, removing Members and managing Account tokens
 need a session or `oup`'s access token. A leaked CI key cannot let anyone
-in. Leaving an Account and accepting an invitation need a session too.
+in. Leaving an Account needs a session or `oup`'s access token too;
+accepting an invitation needs a session, whose address it checks.
 
 ### 5. Invitations (decision 141)
 
@@ -181,11 +182,14 @@ in. Leaving an Account and accepting an invitation need a session too.
   all of them in the Account; on a lower role or grant those above it. The
   control plane marks the role rows, deletes their Secrets, and the
   Databases operator renders them as `ensure: absent` in the Cluster's
-  `managed.roles` until CloudNativePG no longer reports them; then the
-  rows go. A marked row no longer counts as the caller's role, so a
-  Member who gets the level back meanwhile gets a new role with a new
-  name (the uniqueness of a caller's role per Database and level holds
-  for unmarked rows only). Their Resources stay: everything belongs to a Project, not to a
+  `managed.roles` for as long as the Database lives; the rows go with it.
+  CloudNativePG leaves a role alone once it is no longer listed, so an
+  entry removed before the drop happened (a Cluster that was down) would
+  keep the role in Postgres for good; one entry of about 100 bytes per
+  dropped role is the price. A marked row no longer counts as the
+  caller's role, so a Member who gets the level back gets a new role with
+  a new name (the uniqueness of a caller's role per Database and level
+  holds for unmarked rows only). Their Resources stay: everything belongs to a Project, not to a
   Member.
 - **madAuth tells the control plane** through the sidecar: `user.deleted`
   removes the user's Members in every Account, and
@@ -256,7 +260,8 @@ work.
 | list Members | yes | yes | themselves | as its Member | no |
 | invite, revoke, change roles and grants, remove | yes | no | no | never | never |
 | Account tokens: create, roll, revoke | yes | no (list only) | no | never | never |
-| leave the Account, accept an invitation | session | session | session | never | never |
+| leave the Account | session or `oup` login | same | same | never | never |
+| accept an invitation | session | | | never | never |
 | create an Account | any signed-in user, who becomes its owner | | | with `openupstream:write` | never |
 
 ## Consequences
