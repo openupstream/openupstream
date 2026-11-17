@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Domain, Route } from '@openupstream/sdk';
-import { dnsRecords, domainNamed, formatDomains, formatRoutes, hostnameOf, hostnameProblem, ingressOf, parseAddress, routeInput } from './routes.js';
+import { dnsRecords, domainNamed, formatDomains, formatRoutes, hostnameOf, hostnameProblem, ingressOf, parseAddress, routeInput, routeRefusal } from './routes.js';
 
 const base = { projectId: 'p', createdAt: '2026-11-17T00:00:00Z' };
 const byDefault: Domain = { ...base, id: 'd1', kind: 'default', hostname: 'shop-k3j9x0ab.openupstream.app' };
@@ -37,6 +37,8 @@ test('an address that names no Domain, or no path of a Route, says so', () => {
     assert.ok(!trailing.ok && /\/docs\/ is not a path of a Route/.test(trailing.error));
     const query = parseAddress('/docs?x=1', domains, 'shop');
     assert.ok(!query.ok);
+    const word = parseAddress('docs', domains, 'shop');
+    assert.ok(!word.ok && /docs is not an address.*as in \/docs/.test(word.error));
     const none = parseAddress('/docs', [verified], 'shop');
     assert.ok(!none.ok && /no default Domain/.test(none.error));
     assert.deepEqual(domainNamed(domains, 'new.example.com', 'shop'), { ok: true, value: pending });
@@ -56,6 +58,13 @@ test('a Route goes to a Bucket or to a Service with a port, one of the two', () 
     fails({ service: 'nope' }, /no Service nope in shop/);
     fails({ service: 'worker' }, /has no port/);
     fails({ service: 'api', spa: true }, /--spa is for a Bucket/);
+});
+
+test('a refusal over the fallback names the flag to change', () => {
+    const api = "the Bucket's other Routes have spaFallback true; every Route to a Bucket has the same";
+    assert.equal(routeRefusal(api, { bucket: 'site' }), `${api}: add --spa, as on its other Routes`);
+    assert.equal(routeRefusal(api.replace('true', 'false'), { bucket: 'site', spa: true }), `${api.replace('true', 'false')}: leave --spa out, as on its other Routes`);
+    assert.equal(routeRefusal('the Domain has a Route at /rt', { bucket: 'site' }), 'the Domain has a Route at /rt');
 });
 
 test('Domains with their state, and the DNS records of one that is not verified', () => {

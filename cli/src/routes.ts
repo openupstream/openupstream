@@ -38,6 +38,10 @@ export const parseAddress = (address: string, domains: readonly Domain[], projec
     if (!PATH_PREFIX.test(pathPrefix)) {
         return err(`${pathPrefix} is not a path of a Route: / or /segment[/segment…], without a slash at its end`);
     }
+    // A word without a dot is no hostname: most likely a path that lacks its slash.
+    if (hostname !== '' && !hostname.includes('.')) {
+        return err(`${typed} is not an address: give <hostname>/<path>, or a path that starts with a slash, as in /${typed}`);
+    }
     if (hostname !== '') {
         const domain = domainNamed(domains, hostname, project);
         return domain.ok ? ok({ domain: domain.value, pathPrefix }) : domain;
@@ -78,6 +82,10 @@ export const routeInput = (
           ? err(`the Service ${service.name} has no port, so it serves no HTTP; give it one with oup service deploy ${service.name} --port <port>`)
           : ok({ pathPrefix, serviceId: service.id });
 };
+
+/** What the API refused, with the flag to change where the API names a field instead. */
+export const routeRefusal = (message: string, flags: TargetFlags): string =>
+    /spaFallback/.test(message) ? `${message}: ${flags.spa === true ? 'leave --spa out' : 'add --spa'}, as on its other Routes` : message;
 
 /** Where a custom domain's CNAME points: `ingress.<customer domain>`, the customer domain being what follows the default Domain's first label. */
 export const ingressOf = (domains: readonly Domain[]): string | undefined => {

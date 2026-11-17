@@ -81,7 +81,7 @@ import { formatLogEntry, parseTail } from './logs.js';
 import { DATABASE_DEFAULTS, formatDatabases, growthOf, growthSettings, planRestore } from './databases.js';
 import { type DesiredService, formatServices, planServiceDeploy, waitUntilRunning } from './services.js';
 import { LISTEN_HOST, connectionUrl, listen, parseAccess, parsePort, portFree, prepareRole, serveTunnel } from './proxy.js';
-import { dnsRecords, domainNamed, formatDomains, formatRoutes, hostnameOf, hostnameProblem, ingressOf, parseAddress, routeInput } from './routes.js';
+import { dnsRecords, domainNamed, formatDomains, formatRoutes, hostnameOf, hostnameProblem, ingressOf, parseAddress, routeInput, routeRefusal } from './routes.js';
 import { apiAccess } from './session.js';
 import { readSecretValue } from './stdin.js';
 import { waitUntil } from './wait.js';
@@ -1101,13 +1101,14 @@ async function route(args: string[]): Promise<void> {
     const { domain: at, pathPrefix } = named.value;
     const where = `${at.hostname}${pathPrefix}`;
     if (verb === 'add') {
-        const input = routeInput(pathPrefix, values, await buckets(), await services(), project.name);
+        // Only the list the Route's target is in.
+        const input = routeInput(pathPrefix, values, values.bucket === undefined ? [] : await buckets(), values.service === undefined ? [] : await services(), project.name);
         if (!input.ok) {
             return fail(input.error);
         }
         const created = await client.createRoute(project.id, at.id, input.value);
         if (!created.ok) {
-            return fail(created.error.message);
+            return fail(routeRefusal(created.error.message, values));
         }
         const pending = at.kind === 'custom' && at.verification.state === 'pending';
         console.log(pending ? `Added the Route ${where}. It is served once the Domain is verified: oup domain verify ${at.hostname}` : `Added the Route: https://${where} is served within a minute.`);
