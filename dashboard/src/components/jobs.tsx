@@ -25,13 +25,15 @@ export function JobCard(props: {
     const { job, usage } = props;
     const [changing, setChanging] = useState(false);
     const [busy, setBusy] = useState(false);
-    const [problem, setProblem] = useState<string | undefined>(undefined);
+    // A refusal is about the Job as it was then (still deploying, say): gone once it differs.
+    const [problem, setProblem] = useState<{ readonly text: string; readonly about: string } | undefined>(undefined);
+    const about = JSON.stringify([job.state, job.deployedAt, job.schedule, job.timeoutSeconds]);
     // Counts the runs started here, so the list of runs opens and asks again.
     const [started, setStarted] = useState(0);
     const act = async (run: () => Change): Promise<boolean> => {
         setBusy(true);
         const refusal = await run();
-        setProblem(refusal);
+        setProblem(refusal === undefined ? undefined : { text: refusal, about });
         setBusy(false);
         return refusal === undefined;
     };
@@ -78,7 +80,7 @@ export function JobCard(props: {
                     </>
                 )}
             </small>
-            {problem !== undefined && <p role="alert">{problem}</p>}
+            {problem !== undefined && problem.about === about && <p role="alert">{problem.text}</p>}
             {changing && (
                 <FieldsForm
                     initial={jobFieldsOf(job)}
@@ -101,7 +103,8 @@ export function JobCard(props: {
                     }}
                 />
             )}
-            {usage !== undefined && <Usage usage={usage} />}
+            {/* Nothing is given to a Job between its runs, so there is nothing to show then. */}
+            {usage !== undefined && usage.instances.length > 0 && <Usage usage={usage} />}
             <Runs key={started} projectId={job.projectId} jobId={job.id} open={started > 0} />
         </li>
     );
@@ -144,7 +147,9 @@ function Runs(props: { readonly projectId: string; readonly jobId: string; reado
             {runs === undefined ? (
                 problem === undefined && <small aria-busy="true">Loading…</small>
             ) : runs.length === 0 ? (
-                <small>No runs in the last day.</small>
+                <p>
+                    <small>No runs in the last day.</small>
+                </p>
             ) : (
                 <table>
                     <thead>
@@ -165,7 +170,7 @@ function Runs(props: { readonly projectId: string; readonly jobId: string; reado
                                     <span className={`state ${run.state}`}>{run.state}</span>
                                     {run.reason !== null && <small> {run.reason === 'DeadlineExceeded' ? 'stopped at the timeout' : run.reason === 'BackoffLimitExceeded' ? 'exited with an error' : run.reason}</small>}
                                 </td>
-                                <td>{runDuration(run, Date.now()) ?? '–'}</td>
+                                <td>{(run.state === 'pending' ? undefined : runDuration(run, Date.now())) ?? '–'}</td>
                                 <td>
                                     <button
                                         type="button"
