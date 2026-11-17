@@ -65,6 +65,21 @@ oup site deploy dist --bucket my-site
   growth settings alone takes effect at once.
 - `oup pg list` (with each Database's growth: `auto`, `auto ≤ 40 GB` or
   `manual`), `oup pg show <name>` (JSON), `oup pg delete <name>`.
+- `oup pg proxy <name> [--access read|write|owner] [--port <n>]`: the
+  Database on this machine while it runs (decision 126). It listens on
+  `127.0.0.1:5432`, or `--port`, and prints the URL to give `psql`, a
+  database GUI or a migration tool. You log in with a Postgres role of
+  your own, created the first time (the first start waits a minute or two
+  for it): `--access read`, the default, reads every table; `write` also
+  inserts, updates and deletes rows; `owner` acts as `app`, the role the
+  Project's Services use, so migrations work and what they create belongs
+  to `app`. `read` and `write` go through the Pooler like a Service;
+  `owner` goes to the primary, so migration tools' locks work, with at most
+  5 connections at once, which end when the primary restarts. The same role
+  and password every time, on any machine. Connections travel through a
+  WebSocket on port 443; nothing else needs installing or opening. With
+  `OUP_API_KEY` (which needs `openupstream:write`), the key gets roles of
+  its own.
 - `oup service deploy <name> --image <ref> [--port <n> | --no-port] [--replicas <n>]
   [--memory <MB>] [--cpu <millicores>] [--site hetzner-fsn1|ovh-lim]
   [--registry-user <user> --registry-password-stdin] [--no-wait]`: brings
@@ -131,7 +146,7 @@ In CI, set `OUP_API_KEY` to a madAuth API key instead of signing in, and
 <!-- docs:end -->
 
 `src/oidc.ts` is the device grant and refresh, `src/session.ts` the token
-for each call, `src/deploy.ts` the site deploy (`planDeploy` is pure),
+for each call, `src/proxy.ts` the database proxy, `src/deploy.ts` the site deploy (`planDeploy` is pure),
 `src/project.ts` the linked Project, `src/services.ts` the Service deploy
 (`planServiceDeploy` is pure), `src/jobs.ts` the Job deploy and runs
 (`planJobDeploy` is pure), `src/wait.ts` the polling both wait with and

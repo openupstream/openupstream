@@ -4,7 +4,8 @@ Date: 2026-11-17
 Status: proposed
 
 Proposed until a session on a dev cluster has checked the points under
-"To verify". Nothing of it is built.
+"To verify". Built on 2026-11-17 (SDK 0.5.0, `oup` 0.3.0) and run end to
+end against Postgres 17 and PgBouncer in Docker, not yet on a cluster.
 
 ## Context
 
@@ -230,6 +231,22 @@ CloudNativePG:
   `app` gets a warning at login and stays itself.
 - Acting as `app`, the role changed `app`'s password and `app`'s session
   defaults.
+
+Built, and run on 2026-11-17 against the same images with the forwarder
+(`operators/src/forwarder`) and `oup`'s proxy code (`cli/src/proxy.ts`)
+on this machine, Traefik and the control plane left out:
+
+- An `owner` role added four seconds after `oup` first tried to log in:
+  `oup` waited, set the default and checked it. The session then acted as
+  `app`; a new table belonged to `app`, which read it; an advisory lock a
+  client took and left behind was free for the next one, through the
+  primary. A second start left `app`'s own settings alone (`oup` sets the
+  default only while the role does not act as `app` yet, since
+  `ALTER ROLE CURRENT_USER` would otherwise change `app`).
+- A `read` role through PgBouncer read a table made after it and could
+  not insert; a wrong password was refused.
+- madAuth's answer to an API key (`/auth/api-keys/verify`, 0.7.0-beta.2)
+  names the key with its id, which a role per key needs.
 - Through PgBouncer the setting only reaches server connections opened
   after it, and an advisory lock taken by a client that then left was
   still held by its idle server connection, so another role could not
@@ -251,6 +268,6 @@ To settle before this is accepted, on a dev cluster where it can be tried:
 - Traefik keeps a WebSocket open for hours, and whether its bytes are
   counted as Egress like HTTP responses (decision 16).
 - The forwarder runs under the `gvisor` RuntimeClass.
-- madAuth's answer to an API key (`/auth/api-keys/verify`) names the key
-  with an id that stays the same for the key's life, which a role per
-  key needs.
+- Traefik passes the WebSocket upgrade through after ForwardAuth's 204,
+  and its ForwardAuth request carries `X-Forwarded-Host` and
+  `X-Forwarded-Uri` as the control plane's check reads them.

@@ -10,6 +10,7 @@
  *   oup pg create <name> [--memory <MB>] [--storage <GB>] [--site …]   waits until ready
  *   oup pg restore <source> <name> [--time <RFC 3339>] …   a new Database as a copy of <source>
  *   oup pg resize <name> [--memory <MB>] [--storage <GB>]   storage only grows
+ *   oup pg proxy <name> [--access read|write|owner] [--port <n>]   the Database on this machine
  *   oup service list | show <name> | delete <name>
  *   oup service deploy <name> --image <ref> [--port … | --no-port] …
  *   oup service logs <name> [--tail <n>] [-f] [--timestamps]
@@ -31,6 +32,8 @@
  * `OUP_API_URL` for another API than https://console.openupstream.com/api.
  */
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { createServer } from 'node:net';
 import { parseArgs } from 'node:util';
 import { S3Client } from '@aws-sdk/client-s3';
 import {
@@ -66,6 +69,7 @@ import {
 import { formatLogEntry, parseTail } from './logs.js';
 import { DATABASE_DEFAULTS, formatDatabases, growthOf, growthSettings, planRestore } from './databases.js';
 import { type DesiredService, formatServices, planServiceDeploy, waitUntilRunning } from './services.js';
+import { LISTEN_HOST, connectionUrl, listen, parseAccess, parsePort, portFree, prepareRole, serveTunnel } from './proxy.js';
 import { apiAccess } from './session.js';
 import { readSecretValue } from './stdin.js';
 import { waitUntil } from './wait.js';
@@ -83,6 +87,7 @@ const USAGE = `usage:
   oup pg restore <source> <name> [--time <RFC 3339>] [--memory <MB>] [--storage <GB>] [--site …] [--max-storage <GB> | --no-auto-grow] [--no-wait]
   oup pg resize <name> [--memory <MB>] [--storage <GB>] [--max-storage <GB> | --no-max-storage] [--auto-grow | --no-auto-grow] [--no-wait]
   oup pg delete <name>
+  oup pg proxy <name> [--access read|write|owner] [--port <n>]
   oup service list
   oup service show <name>
   oup service deploy <name> --image <ref> [--port <n> | --no-port] [--replicas <n>] [--memory <MB>] [--cpu <millicores>]
@@ -117,6 +122,12 @@ Storage grows by itself by half once 90% full, without a limit unless
 --max-storage sets one; --no-auto-grow leaves it to pg resize.
 pg resize grows the storage online; a new memory size restarts the
 instances one after the other (writes pause for seconds).
+pg proxy reaches the Database from this machine while it runs: it listens on
+127.0.0.1:5432 (--port for another) and prints the URL to connect with. You
+log in with a Postgres role of your own: --access read (the default) reads
+every table, write also changes rows, owner acts as app, the role the
+Project's Services use, so migrations work; owner connections go to the
+primary, so migration tools' locks work, at most 5 at once.
 
 logs prints the last lines (100 by default) of every replica or of a run,
 with -f also new ones as they are written, for up to an hour. Nothing is
@@ -293,6 +304,7 @@ const PG_FLAGS = {
     create: ['memory', 'storage', 'site', 'no-wait', 'max-storage', 'no-auto-grow'],
     restore: ['memory', 'storage', 'site', 'no-wait', 'time', 'max-storage', 'no-auto-grow'],
     resize: ['memory', 'storage', 'no-wait', 'max-storage', 'no-max-storage', 'auto-grow', 'no-auto-grow'],
+    proxy: ['access', 'port'],
 } as const satisfies Record<string, readonly string[]>;
 
 async function pg(args: string[]): Promise<void> {
@@ -311,6 +323,8 @@ async function pg(args: string[]): Promise<void> {
             'no-max-storage': { type: 'boolean' },
             'auto-grow': { type: 'boolean' },
             'no-auto-grow': { type: 'boolean' },
+            access: { type: 'string' },
+            port: { type: 'string' },
         },
     });
     if (verb === undefined || !Object.hasOwn(PG_FLAGS, verb)) {
@@ -357,6 +371,8 @@ async function pg(args: string[]): Promise<void> {
                   )
                 : fail(deleted.error.message);
         }
+        case 'proxy':
+            return pgProxy(client, project, found(), values.access, values.port);
         case 'resize': {
             const database = found();
             if (memoryMb === undefined && storageGb === undefined && Object.keys(growth.settings).length === 0) {
@@ -417,6 +433,55 @@ async function pg(args: string[]): Promise<void> {
         default:
             return fail(USAGE);
     }
+}
+
+/**
+ * `oup pg proxy`: the caller's own role, a first login through the tunnel
+ * (which waits for the role and, at owner, makes it act as app), then the
+ * local port, until Ctrl-C.
+ */
+async function pgProxy(
+    client: OpenUpstreamClient,
+    project: Project,
+    database: { readonly id: string; readonly name: string },
+    accessFlag: string | undefined,
+    portFlag: string | undefined,
+): Promise<void> {
+    const access = parseAccess(accessFlag);
+    const port = parsePort(portFlag);
+    if (!access.ok || !port.ok) {
+        return fail(!access.ok ? access.error : !port.ok ? port.error : '');
+    }
+    // A taken port is said before any waiting.
+    const free = await portFree(port.value);
+    if (!free.ok) {
+        return fail(free.error);
+    }
+    const proxy = await client.openDatabaseProxy(project.id, database.id, { access: access.value });
+    if (!proxy.ok) {
+        return fail(proxy.error.message);
+    }
+    const token = async () => {
+        const fresh = await apiAccess(credentialsPath());
+        return fresh.ok ? { ok: true as const, value: fresh.value.token } : fresh;
+    };
+    const tunnel = { url: proxy.value.tunnelUrl, token, warn: (message: string) => console.error(`oup: ${message}`) };
+    const prepared = await prepareRole({ ...tunnel, proxy: proxy.value, report: (message) => console.log(message) });
+    if (!prepared.ok) {
+        return fail(prepared.error);
+    }
+    const server = createServer();
+    serveTunnel(server, tunnel);
+    const listening = await listen(server, port.value);
+    if (!listening.ok) {
+        return fail(listening.error);
+    }
+    console.log(`${database.name} (${access.value}) on ${LISTEN_HOST}:${port.value}. Connect with:`);
+    console.log(`  ${connectionUrl(proxy.value, port.value)}`);
+    console.log('Press Ctrl-C to stop.');
+    await once(process, 'SIGINT');
+    server.close();
+    process.exit(0);
 }
 
 /** Until the Database is ready; every state it passes through is reported once. */

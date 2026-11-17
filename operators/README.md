@@ -12,11 +12,26 @@ Traefik already implements is configured, not reimplemented.
   PgBouncer `Pooler`, Barman Cloud `ObjectStore` and `ScheduledBackup`, and a
   restored Database (a row with `restoring`) → the same with a Cluster that
   bootstraps from another Database's backups, until the restore is
-  recorded as finished. Pure functions; invalid input comes back as a list of
-  errors.
+  recorded as finished. The Cluster carries the callers' own roles
+  (`managed.roles`, decision 126) with the grants of their level and the
+  password from the Secret the control plane writes. Pure functions;
+  invalid input comes back as a list of errors.
+- `src/databases/tunnel.ts`: a Project's database tunnel (decision 126,
+  ADR-0005), applied with its namespace once a row names its tunnel host
+  and only with `FORWARDER_IMAGE` and `TUNNEL_AUTH_URL` set: the forwarder
+  Deployment and Service `database-tunnel` under gVisor, its egress policy
+  (DNS and the Databases on 5432), a ForwardAuth Middleware to the control
+  plane's tunnel check and an IngressRoute at `pg-<project id>.<customer
+  domain>`. Never deleted by the operator.
+- `src/forwarder/`: the forwarder, another entry point of the image
+  (`node operators/dist/forwarder/main.js`): an HTTP server that upgrades
+  `/databases/<id>/pooler` and `/databases/<id>/primary` to a WebSocket and
+  copies its binary messages to and from that Database's Pooler or the
+  Cluster's `-rw` Service in `NAMESPACE`.
 - `src/databases/reconcile.ts`: one reconcile pass. `planDatabases` (pure)
   turns rows into the objects to apply: per Project its namespace, its
-  NetworkPolicy and a copy of the backup credentials Secret, then each Database's objects.
+  NetworkPolicy, a copy of the backup credentials Secret and its database
+  tunnel, then each Database's objects.
   `reconcileDatabases` applies them with server-side apply. It never deletes
   (ARCHITECTURE.md, decision 48).
 - `src/routes/`: the Routes operator (ARCHITECTURE.md, decisions 84 and

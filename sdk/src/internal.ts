@@ -4,7 +4,7 @@
  * public API: it is served on its own port, never routed by ingress, and
  * callers authenticate with their Kubernetes ServiceAccount token.
  */
-import type { Account, Database, DatabaseConnection, Domain, Id, Job, Member, Project, ResourceKind, Route, Service, Site, UsageUnit } from './model.js';
+import type { Account, Database, DatabaseAccess, DatabaseConnection, Domain, Id, Job, Member, Project, ResourceKind, Route, Service, Site, UsageUnit } from './model.js';
 
 /**
  * Kubernetes names, by id (ARCHITECTURE.md, decision 42): the operators
@@ -17,6 +17,38 @@ export const clusterName = (database: Pick<Database, 'id'>): string => `db-${dat
 
 /** Cannot share the Cluster's name, nor `<cluster>-rw`, which the Cluster's own Service takes. */
 export const poolerName = (database: Pick<Database, 'id'>): string => `${clusterName(database)}-pooler`;
+
+/** The Cluster's own Service to its primary, which CloudNativePG names. */
+export const primaryServiceName = (database: Pick<Database, 'id'>): string => `${clusterName(database)}-rw`;
+
+/**
+ * Where a Project's database tunnel is served (decision 126): a host of its
+ * own under the customer domain, covered by the default Domains' wildcard
+ * record and certificate. No default Domain can take it: theirs end in a
+ * hyphen and 8 characters, a Project id in 12.
+ */
+export const tunnelHostname = (projectId: Id, customerDomain: string): string => `pg-${projectId}.${customerDomain}`;
+
+/** What the tunnel reaches at a level: the Pooler, or the primary at `owner`, so session advisory locks work. */
+export type DatabaseTunnelTarget = 'pooler' | 'primary';
+export const tunnelTargetOf = (access: DatabaseAccess): DatabaseTunnelTarget => (access === 'owner' ? 'primary' : 'pooler');
+
+/** The tunnel's path on its host, which names the Database and the target. */
+export const tunnelPath = (databaseId: Id, target: DatabaseTunnelTarget): string => `/databases/${databaseId}/${target}`;
+export const TUNNEL_PATH = /^\/databases\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(pooler|primary)$/;
+
+/** A caller's Postgres role: its level and its row's id, 46 characters, under Postgres's 63. */
+export const databaseRoleName = (role: { readonly id: Id; readonly access: DatabaseAccess }): string =>
+    `oup_${role.access}_${role.id.replaceAll('-', '')}`;
+
+/** The `kubernetes.io/basic-auth` Secret in the Project's namespace that CloudNativePG reads a role's password from. */
+export const databaseRoleSecret = (role: { readonly id: Id }): string => `pg-role-${role.id}`;
+
+/** One caller's role in a Database, as the Databases operator adds it to the Cluster. */
+export interface DatabaseRoleRow {
+    readonly id: Id;
+    readonly access: DatabaseAccess;
+}
 
 /** The Secret CloudNativePG keeps the Database's `app` user in, with its generated `password`. */
 export const databaseAppSecret = (database: Pick<Database, 'id'>): string => `${clusterName(database)}-app`;
@@ -239,6 +271,14 @@ export interface DatabaseRow {
      * so it no longer depends on the source's ObjectStore.
      */
     readonly restoring?: boolean;
+    /** The callers' own roles in this Database (decision 126), oldest first. */
+    readonly roles?: readonly DatabaseRoleRow[];
+    /**
+     * The Project's tunnel host (tunnelHostname), on every row of a Project
+     * that has a role in any Database: the operator then runs the tunnel's
+     * forwarder there.
+     */
+    readonly tunnelHostname?: string;
 }
 
 /**
