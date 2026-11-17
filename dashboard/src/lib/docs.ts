@@ -25,8 +25,8 @@ export const docsSection = (readme: string): string | undefined => {
     return start === -1 || end < start ? undefined : readme.slice(start + DOCS_START.length, end).trim();
 };
 
-/** Pointers into the design docs, which a reader of the page does not have. */
-const DECISION = /\s*\((?:ARCHITECTURE\.md, )?decision \d+\)/g;
+/** Pointers into the design docs, which a reader of the page does not have; they may wrap over a line. */
+export const DECISION = /\s*\((?:ARCHITECTURE\.md,\s+)?decision\s+\d+\)/g;
 
 /** Text and `code` in turns; a line break inside either is a space. */
 const inline = (text: string): Inline[] =>
