@@ -88,8 +88,9 @@ once that service has screens. Narrow access is a grant, not a role.
 
 The creator of an Account is its first owner. Existing Members become
 owners when the role is introduced. An Account always keeps at least one
-owner: the last owner cannot leave, be removed or lose the role, which
-the schema enforces like the data model's other invariants.
+owner: the last owner cannot leave, be removed or lose the role through
+the API, which the schema enforces like the data model's other
+invariants. The one exception is a madAuth user who is deleted (point 6).
 
 ### 2. Grants on single Resources (decision 138)
 
@@ -181,15 +182,19 @@ in. Leaving an Account and accepting an invitation need a session too.
   control plane marks the role rows, deletes their Secrets, and the
   Databases operator renders them as `ensure: absent` in the Cluster's
   `managed.roles` until CloudNativePG no longer reports them; then the
-  rows go. Their Resources stay: everything belongs to a Project, not to a
+  rows go. A marked row no longer counts as the caller's role, so a
+  Member who gets the level back meanwhile gets a new role with a new
+  name (the uniqueness of a caller's role per Database and level holds
+  for unmarked rows only). Their Resources stay: everything belongs to a Project, not to a
   Member.
 - **madAuth tells the control plane** through the sidecar: `user.deleted`
   removes the user's Members in every Account, and
   `user.api_key_revoked` drops that key's Postgres roles, which so far
   stayed until their Database went (ADR-0005). madAuth cannot be kept from
-  deleting a user, so an Account whose last owner deleted their madAuth
-  user is left without one; the operator of the installation gives it a
-  new owner by hand.
+  deleting a user, so this removal skips the last-owner rule: an Account
+  whose last owner deleted their madAuth user is left without one, the
+  control plane logs it as an error, and the operator of the installation
+  gives it a new owner by hand.
 
 ### 7. Account tokens (decision 143)
 
