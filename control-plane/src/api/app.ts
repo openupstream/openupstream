@@ -44,6 +44,7 @@ import {
     type ServiceDetails,
     type ServiceRow,
     type ServiceState,
+    DATABASE_TUNNEL,
     clusterName,
     databaseConnection,
     databaseRoleSecret,
@@ -554,6 +555,14 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             const deleted = await kube.remove({ apiVersion: 'v1', kind: 'Secret', namespace: projectNamespace(role.projectId), name: databaseRoleSecret(role) });
             if (!deleted.ok) {
                 deps.log?.({ msg: 'cannot delete a dropped database role Secret', role: role.id, error: deleted.error });
+            }
+        }
+        // An open `owner` session acts as `app` and survives the drop (dev cluster, 2026-11-17): restarting
+        // the Project's tunnel ends every tunnel there, and other callers' tools open new ones.
+        for (const projectId of new Set(removed.value.filter((role) => role.access === 'owner').map((role) => role.projectId))) {
+            const restarted = await kube.restartDeployment(projectNamespace(projectId), DATABASE_TUNNEL);
+            if (!restarted.ok) {
+                deps.log?.({ msg: 'cannot restart a database tunnel after a removal', projectId, error: restarted.error });
             }
         }
         return c.body(null, 204);

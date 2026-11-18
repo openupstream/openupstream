@@ -8,7 +8,7 @@
  * in the Account's Databases (decision 126), in the same statement: the
  * Databases operator then drops them from the Clusters (`ensure: absent`).
  */
-import type { Id, Member, MemberRole } from '@openupstream/sdk';
+import type { DatabaseAccess, Id, Member, MemberRole } from '@openupstream/sdk';
 import type pg from 'pg';
 import { LAST_OWNER, unlessCodes } from '../db/errors.js';
 import { inTransaction } from '../db/transaction.js';
@@ -70,10 +70,15 @@ export async function changeRole(pool: pg.Pool, accountId: Id, memberId: Id, rol
     return row === undefined ? err({ kind: 'not-found' }) : ok(toMember(row));
 }
 
-/** A Postgres role taken from a removed Member: its Secret in the Project's namespace goes too. */
+/**
+ * A Postgres role taken from a removed Member: its Secret in the Project's
+ * namespace goes too, and an `owner` role's open session needs its tunnel
+ * restarted, since it acts as `app` and outlives the role.
+ */
 export interface DroppedRole {
     readonly id: Id;
     readonly projectId: Id;
+    readonly access: DatabaseAccess;
 }
 
 /**
@@ -123,10 +128,10 @@ async function removeLocked(client: pg.PoolClient, accountId: Id, memberId: Id):
                  from databases d join projects p on p.id = d.project_id
                  where r.database_id = d.id and p.account_id = $1 and r.dropped_at is null
                    and r.auth_subject in (select auth_subject from member)
-                 returning r.id, d.project_id
+                 returning r.id, r.access, d.project_id
              )
              select exists (select 1 from member) as removed,
-                    coalesce((select jsonb_agg(jsonb_build_object('id', id, 'projectId', project_id)) from dropped), '[]') as dropped`,
+                    coalesce((select jsonb_agg(jsonb_build_object('id', id, 'projectId', project_id, 'access', access)) from dropped), '[]') as dropped`,
             [accountId, memberId],
         ),
         { [LAST_OWNER]: { kind: 'last-owner' } as const },

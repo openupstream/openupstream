@@ -29,6 +29,9 @@ export const primaryServiceName = (database: Pick<Database, 'id'>): string => `$
  */
 export const tunnelHostname = (projectId: Id, customerDomain: string): string => `pg-${projectId}.${customerDomain}`;
 
+/** The forwarder's Deployment in a Project's namespace (decision 126); the control plane restarts it to end every tunnel there. */
+export const DATABASE_TUNNEL = 'database-tunnel';
+
 /** What the tunnel reaches at a level: the Pooler, or the primary at `owner`, so session advisory locks work. */
 export type DatabaseTunnelTarget = 'pooler' | 'primary';
 export const tunnelTargetOf = (access: DatabaseAccess): DatabaseTunnelTarget => (access === 'owner' ? 'primary' : 'pooler');
