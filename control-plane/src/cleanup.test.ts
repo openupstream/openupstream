@@ -35,7 +35,6 @@ const fakes = () => {
         listPods: async () => ok([]),
         nodeSite: async () => ok(undefined),
         podLog: async () => err('not in this test'),
-        restartDeployment: async () => ok('restarted' as const),
         remove: async (ref: ObjectRef) => {
             if (failKinds.has(ref.kind)) {
                 return err('forbidden');

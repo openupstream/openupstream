@@ -44,7 +44,6 @@ import {
     type ServiceDetails,
     type ServiceRow,
     type ServiceState,
-    DATABASE_TUNNEL,
     clusterName,
     databaseConnection,
     databaseRoleSecret,
@@ -68,7 +67,7 @@ import { changeRole, listMembers, memberOf, removeMember } from '../accounts/mem
 import { type BucketRecord, createBucket, deleteBucket, getBucket, listBuckets } from '../buckets/store.js';
 import { GiB, MiB, roomForGrowth, roomForNew } from '../databases/capacity.js';
 import { checkRestore, restoreCheckMessage } from '../databases/restore.js';
-import { roleFor, roleSecretManifest } from '../databases/roles.js';
+import { endDroppedOwnerSessions, roleFor, roleSecretManifest } from '../databases/roles.js';
 import { createDatabase, deleteDatabase, getDatabase, getRestoreSource, listDatabases, updateDatabase } from '../databases/store.js';
 import type { TxtLookup } from '../domains/dns.js';
 import { createCustomDomain, deleteDomain, getDomain, isReserved, listDomains, verifyDomain } from '../domains/store.js';
@@ -557,12 +556,12 @@ export function createApi(deps: ApiDeps): Hono<Env> {
                 deps.log?.({ msg: 'cannot delete a dropped database role Secret', role: role.id, error: deleted.error });
             }
         }
-        // An open `owner` session acts as `app` and survives the drop (dev cluster, 2026-11-17): restarting
-        // the Project's tunnel ends every tunnel there, and other callers' tools open new ones.
+        // An open `owner` session acts as `app` and survives the drop: ending the Project's tunnels ends it
+        // (databases/roles.ts); the secrets pass tries again within the hour if this fails.
         for (const projectId of new Set(removed.value.filter((role) => role.access === 'owner').map((role) => role.projectId))) {
-            const restarted = await kube.restartDeployment(projectNamespace(projectId), DATABASE_TUNNEL);
-            if (!restarted.ok) {
-                deps.log?.({ msg: 'cannot restart a database tunnel after a removal', projectId, error: restarted.error });
+            const ended = await endDroppedOwnerSessions(pool, kube, projectId);
+            if (!ended.ok) {
+                deps.log?.({ msg: 'cannot end the database tunnels after a removal; the secrets pass will', projectId, error: ended.error });
             }
         }
         return c.body(null, 204);

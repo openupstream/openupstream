@@ -55,7 +55,6 @@ const fakeKube = (failing: readonly string[] = [], missing: readonly string[] = 
         nodeSite: async () => ok(undefined),
         podLog: async () => err('not in this test'),
         remove: async () => ok(undefined),
-        restartDeployment: async () => ok('restarted' as const),
         applySecret: async (secret) => {
             if (failing.includes(secret.metadata.namespace)) {
                 return err('forbidden');

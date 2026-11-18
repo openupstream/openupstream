@@ -29,8 +29,11 @@ export const primaryServiceName = (database: Pick<Database, 'id'>): string => `$
  */
 export const tunnelHostname = (projectId: Id, customerDomain: string): string => `pg-${projectId}.${customerDomain}`;
 
-/** The forwarder's Deployment in a Project's namespace (decision 126); the control plane restarts it to end every tunnel there. */
+/** The forwarder's Deployment in a Project's namespace (decision 126). */
 export const DATABASE_TUNNEL = 'database-tunnel';
+
+/** Its pods, by label; the control plane deletes them to end every tunnel of the Project (decision 143). */
+export const DATABASE_TUNNEL_PODS = `openupstream.io/component=${DATABASE_TUNNEL}`;
 
 /** What the tunnel reaches at a level: the Pooler, or the primary at `owner`, so session advisory locks work. */
 export type DatabaseTunnelTarget = 'pooler' | 'primary';

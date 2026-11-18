@@ -137,8 +137,6 @@ const recoveryWindows = new Map<string, RecoveryWindow | string>();
 
 /** The Secrets the fake Kubernetes received, latest last; namespaces in `missingNamespaces` do not exist. */
 const appliedSecrets: SecretManifest[] = [];
-/** The Deployments the fake Kubernetes was asked to restart, as `namespace/name`. */
-const restartedDeployments: string[] = [];
 /** What the fake Kubernetes was asked to delete through `remove`. */
 const removedObjects: { kind: string; namespace?: string; name: string }[] = [];
 const missingNamespaces = new Set<string>();
@@ -187,10 +185,6 @@ const kube: ControlPlaneKube = {
         return ok((async function* () {
             yield* tail;
         })());
-    },
-    restartDeployment: async (namespace, name) => {
-        restartedDeployments.push(`${namespace}/${name}`);
-        return ok('restarted');
     },
     remove: async (ref) => {
         removedObjects.push({ kind: ref.kind, name: ref.name, ...(ref.namespace === undefined ? {} : { namespace: ref.namespace }) });
@@ -538,9 +532,8 @@ describe('Members and their roles', () => {
         assert.equal((await call('POST', proxyPath, 'olga', { access: 'read' })).status, 201);
 
         removedObjects.length = 0;
-        restartedDeployments.length = 0;
         assert.equal((await call('DELETE', `/v1/accounts/${accountId}/members/${await memberId('nobody')}`, 'olga')).status, 204);
-        assert.deepEqual(restartedDeployments, [], 'read and write sessions end with their role: no tunnel restarts');
+        assert.deepEqual(removedObjects.filter((object) => object.kind === 'Pod'), [], 'read and write sessions end with their role: the tunnels stay');
         assert.equal((await call('GET', `/v1/projects/${projectId}`, 'nobody')).status, 404);
         const roles = (await listDatabaseRows(db.pool)).find((row) => row.database.id === database.id)?.roles ?? [];
         assert.equal(roles.filter((role) => role.dropped === true).length, 2);
@@ -560,11 +553,21 @@ describe('Members and their roles', () => {
         assert.equal(after.status, 201);
         assert.notEqual(((await after.json()) as DatabaseProxy).user, before.user);
 
-        // An open `owner` session acts as `app` and outlives its role: its Project's tunnel restarts.
+        // An open `owner` session acts as `app` and outlives its role: the Project's tunnel pods go.
         assert.equal((await call('POST', proxyPath, 'nobody', { access: 'owner' })).status, 201);
-        restartedDeployments.length = 0;
+        const tunnelPods = `project-${projectId} openupstream.io/component=database-tunnel`;
+        pods.set(tunnelPods, [{ name: 'database-tunnel-abc', nodeName: 'n1', containers: [] }]);
+        removedObjects.length = 0;
+        kubeDown = true; // the first attempt fails; the secrets pass makes it again
         assert.equal((await call('DELETE', `/v1/accounts/${accountId}/members/${await memberId('nobody')}`, 'olga')).status, 204);
-        assert.deepEqual(restartedDeployments, [`project-${projectId}/database-tunnel`]);
+        kubeDown = false;
+        assert.deepEqual(removedObjects.filter((object) => object.kind === 'Pod'), []);
+        assert.ok((await syncProjectSecrets({ pool: db.pool, kube, kek: domainDeps.kek }, projectId)).ok);
+        assert.deepEqual(removedObjects.filter((object) => object.kind === 'Pod'), [{ kind: 'Pod', name: 'database-tunnel-abc', namespace: `project-${projectId}` }]);
+        removedObjects.length = 0;
+        assert.ok((await syncProjectSecrets({ pool: db.pool, kube, kek: domainDeps.kek }, projectId)).ok);
+        assert.deepEqual(removedObjects.filter((object) => object.kind === 'Pod'), [], 'once ended, never again');
+        pods.delete(tunnelPods);
         await db.pool.query(`insert into members (account_id, auth_subject, email, role) values ($1, 'nobody', 'nobody@olga.test', 'developer')`, [accountId]);
     });
 

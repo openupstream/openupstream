@@ -61,12 +61,10 @@ rules:
   - apiGroups: [""]
     resources: [namespaces]
     verbs: [delete]
-  # A Service's state for the API. Patch: restarting a Project's database
-  # tunnel after a removal, which ends a removed Member's open `owner`
-  # session (decision 143).
+  # A Service's state for the API.
   - apiGroups: [apps]
     resources: [deployments]
-    verbs: [get, patch]
+    verbs: [get]
   # A Job's state for the API: the spec version on its CronJob, whose
   # jobTemplate a One-off job copies (decision 95). Runs are Kubernetes Jobs
   # the control plane starts, lists and stops in Project namespaces.
@@ -85,10 +83,13 @@ rules:
     resources: [secrets]
     verbs: [create, patch, delete]
   # The log stream: a Service's or a run's pods by label, their logs, and
-  # the Site (zone label) of the node each runs on.
+  # the Site (zone label) of the node each runs on. Delete: a Project's
+  # database tunnel pods, to end a removed Member's open `owner` session
+  # (decision 143); deleting a pod runs no new code, unlike patching its
+  # Deployment.
   - apiGroups: [""]
     resources: [pods]
-    verbs: [list]
+    verbs: [list, delete]
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get]

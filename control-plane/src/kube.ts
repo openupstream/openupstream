@@ -178,15 +178,7 @@ export interface ControlPlaneKube {
      * not exist yet: the operators create it with the Project's first object.
      */
     applySecret(secret: SecretManifest): Promise<Result<'applied' | 'no-namespace', string>>;
-    /**
-     * Restarts a Deployment's pods, as `kubectl rollout restart` does: a new
-     * time in a pod template annotation. `not-found` when there is none.
-     */
-    restartDeployment(namespace: string, name: string): Promise<Result<'restarted' | 'not-found', string>>;
 }
-
-/** The pod template annotation restartDeployment sets; the operators never set it, so their applies leave it alone. */
-export const RESTARTED_AT_ANNOTATION = 'openupstream.io/restarted-at';
 
 /**
  * No Cluster yet, or no instance up: provisioning; a spec with other sizes
@@ -610,26 +602,6 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
                 timeoutMs,
             );
             return result.ok || result.error.status === NOT_FOUND ? ok(undefined) : err(result.error.message);
-        },
-        restartDeployment: async (namespace, name) => {
-            const result = await within(
-                api.patch(
-                    {
-                        apiVersion: 'apps/v1',
-                        kind: 'Deployment',
-                        metadata: { name, namespace },
-                        spec: { template: { metadata: { annotations: { [RESTARTED_AT_ANNOTATION]: new Date().toISOString() } } } },
-                    },
-                    undefined,
-                    undefined,
-                    FIELD_MANAGER,
-                    undefined,
-                    // A merge patch, not an apply: a missing Deployment is a 404, never a new, empty one.
-                    PatchStrategy.MergePatch,
-                ),
-                timeoutMs,
-            );
-            return result.ok ? ok('restarted') : result.error.status === NOT_FOUND ? ok('not-found') : err(result.error.message);
         },
         applySecret: async (secret) => {
             const result = await within(

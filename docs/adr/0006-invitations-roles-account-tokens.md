@@ -297,8 +297,9 @@ work.
 - Dropping a role ends new logins and, through PgBouncer, the open
   `read` and `write` sessions, but not an open `owner` session: it acts
   as `app` and Postgres checks a role at login only (dev cluster,
-  2026-11-17). A removal therefore restarts the database tunnel of each
-  Project where the Member had an `owner` role. That ends every tunnel
+  2026-11-17). A removal therefore deletes the database tunnel's pod in
+  each Project where the Member had an `owner` role (the control plane
+  may delete pods, not patch Deployments). That ends every tunnel
   there: other callers' open sessions drop once and reconnect (18 s on
   the dev cluster), and a migration running through one is aborted.
 - The control plane checks an Account token's hash on every request, a

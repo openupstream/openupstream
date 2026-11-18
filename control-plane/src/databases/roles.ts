@@ -11,6 +11,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import {
+    DATABASE_TUNNEL_PODS,
     type DatabaseAccess,
     type DatabaseRoleRow,
     type Id,
@@ -21,7 +22,7 @@ import {
 import type pg from 'pg';
 import { lockCaller } from '../accounts/members.js';
 import { inTransaction } from '../db/transaction.js';
-import type { SecretManifest } from '../kube.js';
+import type { ControlPlaneKube, SecretManifest } from '../kube.js';
 import { type Result, err, ok } from '../result.js';
 import type { KeyEncryptionKey } from '../secrets/envelope.js';
 import { type SecretStoreError, openProjectValue, sealProjectValue } from '../secrets/store.js';
@@ -170,6 +171,43 @@ export async function recentlyDroppedRoles(pool: pg.Pool, projectId: Id): Promis
         [projectId, DROPPED_SECRET_RETRY],
     );
     return rows;
+}
+
+/**
+ * Ends the open sessions of the Project's `owner` roles dropped within
+ * DROPPED_SECRET_RETRY and not ended yet: such a session acts as `app` and
+ * outlives its role (dev cluster, 2026-11-17), so the Project's tunnel
+ * pods are deleted, which closes every tunnel there; the Deployment starts
+ * a new pod and other callers' tools reconnect. Recorded once done, so a
+ * failed attempt is made again by the next secrets pass. The number of
+ * roles whose sessions it ended.
+ */
+export async function endDroppedOwnerSessions(
+    pool: pg.Pool,
+    kube: Pick<ControlPlaneKube, 'listPods' | 'remove'>,
+    projectId: Id,
+): Promise<Result<number, string>> {
+    const { rows } = await pool.query<{ id: string }>(
+        `select r.id from database_roles r join databases d on d.id = r.database_id
+         where d.project_id = $1 and r.access = 'owner' and r.sessions_ended_at is null and r.dropped_at > now() - $2::interval`,
+        [projectId, DROPPED_SECRET_RETRY],
+    );
+    if (rows.length === 0) {
+        return ok(0);
+    }
+    const namespace = projectNamespace(projectId);
+    const pods = await kube.listPods(namespace, DATABASE_TUNNEL_PODS);
+    if (!pods.ok) {
+        return pods;
+    }
+    for (const pod of pods.value) {
+        const deleted = await kube.remove({ apiVersion: 'v1', kind: 'Pod', namespace, name: pod.name });
+        if (!deleted.ok) {
+            return deleted;
+        }
+    }
+    await pool.query('update database_roles set sessions_ended_at = now() where id = any($1)', [rows.map((row) => row.id)]);
+    return ok(rows.length);
 }
 
 /**

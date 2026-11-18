@@ -38,6 +38,10 @@ create trigger members_keep_an_owner before update of role or delete on members
 -- there to do so, and the row goes with its Database. A marked role is no
 -- longer the caller's, so one level given back gets a new role.
 alter table database_roles add column dropped_at timestamptz;
+-- An open `owner` session acts as `app` and outlives its role: the
+-- control plane ends it by deleting the Project's tunnel pods, and records
+-- that it did, so the secrets pass retries a delete that failed.
+alter table database_roles add column sessions_ended_at timestamptz;
 drop index database_roles_caller;
 create unique index database_roles_caller on database_roles (database_id, auth_subject, coalesce(api_key_id, ''), access)
     where dropped_at is null;
@@ -47,6 +51,7 @@ create unique index database_roles_caller on database_roles (database_id, auth_s
 drop index database_roles_caller;
 delete from database_roles where dropped_at is not null;
 create unique index database_roles_caller on database_roles (database_id, auth_subject, coalesce(api_key_id, ''), access);
+alter table database_roles drop column sessions_ended_at;
 alter table database_roles drop column dropped_at;
 drop trigger members_keep_an_owner on members;
 drop function members_keep_an_owner();
