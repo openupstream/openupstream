@@ -32,12 +32,13 @@ const row = (overrides: Partial<ServiceRow['service']> = {}, site: ServiceRow['s
 });
 
 type PodSpec = {
+    terminationGracePeriodSeconds?: number;
     runtimeClassName: string;
     automountServiceAccountToken: boolean;
     imagePullSecrets: unknown;
     affinity: { nodeAffinity: Record<string, unknown> };
     topologySpreadConstraints?: unknown[];
-    containers: { image: string; env?: unknown; envFrom: unknown; resources: unknown; ports: unknown }[];
+    containers: { image: string; env?: unknown; envFrom: unknown; resources: unknown; ports: unknown; lifecycle?: unknown }[];
 };
 const podOf = (object: KubeObject | undefined) =>
     (object?.['spec'] as { template: { metadata: { annotations: Record<string, string> }; spec: PodSpec } }).template;
@@ -232,4 +233,16 @@ test('without the Nodes nothing is applied or deleted, so the egress policy in p
 test('the Deployment carries the spec version the control plane compares its row with', () => {
     const deployment = planServices([row()], NODE_BLOCKS).find((o) => o.kind === 'Deployment');
     assert.equal(deployment?.metadata.annotations?.['openupstream.io/spec-version'], `ghcr.io/acme/api@${digest}|1|256|250|8080|ovh-lim|v1`);
+});
+
+test('an old pod keeps serving 5 s after it leaves the endpoints, then has the rest of 120 s to finish its requests', () => {
+    const pod = podOf(planServices([row()], NODE_BLOCKS).find((o) => o.kind === 'Deployment'));
+    assert.equal(pod.spec.terminationGracePeriodSeconds, 120);
+    assert.deepEqual(pod.spec.containers[0]?.lifecycle, { preStop: { sleep: { seconds: 5 } } });
+});
+
+test('a worker gets the same 120 s to finish its work, but no preStop sleep: no Route sends it requests', () => {
+    const pod = podOf(planServices([row({ port: null })], NODE_BLOCKS).find((o) => o.kind === 'Deployment'));
+    assert.equal(pod.spec.terminationGracePeriodSeconds, 120);
+    assert.equal(pod.spec.containers[0]?.lifecycle, undefined);
 });

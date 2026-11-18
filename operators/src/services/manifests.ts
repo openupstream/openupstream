@@ -50,6 +50,14 @@ export const SECRETS_VERSION_ANNOTATION = 'openupstream.io/secrets-version';
 export const RUNTIME_CLASS = 'gvisor';
 /** How long a worker (a Service without a port) runs before it counts as available. */
 export const WORKER_MIN_READY_SECONDS = 10;
+/**
+ * How long an old pod keeps serving after it leaves its Service's endpoints,
+ * before it gets SIGTERM: Traefik learns of the removal a moment later and
+ * would otherwise send requests to a pod that is shutting down.
+ */
+export const PRE_STOP_SLEEP_SECONDS = 5;
+/** From deletion to SIGKILL, the preStop sleep included: what a pod has to finish its requests or work. */
+export const TERMINATION_GRACE_PERIOD_SECONDS = 120;
 
 /** The kinds this operator prunes, a Deployment before the Service that fronts it. */
 export const PRUNED_KINDS = [
@@ -116,6 +124,7 @@ const deployment = (row: ServiceRow): KubeObject => {
             template: {
                 metadata: { labels: podLabels, annotations: { [SECRETS_VERSION_ANNOTATION]: row.secretsVersion, ...POD_BANDWIDTH_ANNOTATIONS } },
                 spec: {
+                    terminationGracePeriodSeconds: TERMINATION_GRACE_PERIOD_SECONDS,
                     runtimeClassName: RUNTIME_CLASS,
                     automountServiceAccountToken: false,
                     enableServiceLinks: false,
@@ -132,6 +141,8 @@ const deployment = (row: ServiceRow): KubeObject => {
                             // CPU and memory are what is reserved and billed (memory_gb_hours); no Service takes another's CPU or the node's disk.
                             resources: customerResources(service),
                             ...(service.port === null ? {} : { readinessProbe: { tcpSocket: { port: 'http' }, periodSeconds: 5 } }),
+                            // The kubelet sleeps, not the image: works in distroless images and under gVisor. A worker gets no Route traffic to wait out.
+                            ...(service.port === null ? {} : { lifecycle: { preStop: { sleep: { seconds: PRE_STOP_SLEEP_SECONDS } } } }),
                             securityContext: { allowPrivilegeEscalation: false },
                         },
                     ],
