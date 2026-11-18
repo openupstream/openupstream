@@ -49,7 +49,9 @@ oup site deploy dist --bucket my-site
   Owners only; an Account always keeps an owner.
 - `oup member remove <email>`: removes a Member, owners only. Their
   Postgres roles from `oup pg proxy`, and those of their API keys, are
-  dropped from the Account's Databases (decision 143).
+  dropped from the Account's Databases (decision 143). Where they had
+  `owner`, every open `oup pg proxy` connection to that Project is closed
+  once, so theirs ends too; tools reconnect.
 - `oup member leave`: leaves the Account; its last owner cannot. `oup
   member` changes need `oup login`: an API key cannot change who is in an
   Account.

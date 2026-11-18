@@ -16,8 +16,9 @@ has a role:
 
 `oup member` lists the Members, changes their roles and removes them;
 anyone may leave an Account. A removed Member loses their Postgres roles
-in the Account's Databases within about a minute; a connection open
-at that moment may keep running until it closes.
+in the Account's Databases within about a minute. If they had a
+connection open at `owner` level, every `oup pg proxy` connection to that
+Project's Databases is closed once, so tools reconnect within seconds.
 
 An Account can have a **Hold**: a reason it may not create Resources now,
 such as a missing payment method. Its existing Resources keep running.

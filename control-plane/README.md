@@ -92,7 +92,7 @@ what the control plane sees.
 | `POST /v1/accounts` | `{name}` → 201: a new Account, the caller its first Member and owner |
 | `GET /v1/accounts/{id}/members` | the Members with their `role` (`owner`, `developer`, or null), for owners and developers; 404 for anyone else |
 | `PATCH /v1/accounts/{id}/members/{id}` | `{role}`: another role, owners only (403 otherwise); 409 when the Account would have no owner. Never with an API key (403) |
-| `DELETE /v1/accounts/{id}/members/{id}` | 204: removes the Member, owners only, and drops their and their API keys' Postgres roles in the Account's Databases; `me` leaves the Account, which anyone may. 409 for the last owner. Never with an API key (403) |
+| `DELETE /v1/accounts/{id}/members/{id}` | 204: removes the Member, owners only, and drops their and their API keys' Postgres roles in the Account's Databases, restarting the database tunnel of each Project where they had `owner`; `me` leaves the Account, which anyone may. 409 for the last owner. Never with an API key (403) |
 | `GET /v1/projects` | the Projects of the caller's Accounts |
 | `POST /v1/projects` | `{accountId, name}` → 201, with its default Domain `<name>-<random>.<CUSTOMER_DOMAIN>`; 409 if the name is taken in the Account |
 | `GET /v1/projects/{id}` | |
