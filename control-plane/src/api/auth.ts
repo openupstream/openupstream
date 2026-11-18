@@ -189,16 +189,18 @@ export const madauthAuthenticator =
               : sessions(token);
 
 /**
- * The Accounts the madAuth user is a Member of. Their Member rows take the
- * e-mail address the user has in madAuth now, so a changed address reaches
- * them with the user's next request.
+ * The Accounts whose Projects the madAuth user may act on: those where
+ * their Member has a role (decision 138); a Member without one reaches
+ * only what grants give, which are not built yet. Their Member rows take
+ * the e-mail address the user has in madAuth now, so a changed address
+ * reaches them with the user's next request.
  */
 export async function accountsOf(pool: pg.Pool, identity: Pick<Identity, 'subject' | 'email'>): Promise<string[]> {
     const { rows } = await pool.query<{ account_id: string }>(
         `with refreshed as (
              update members set email = $2 where auth_subject = $1 and $2::text is not null and email <> $2
          )
-         select account_id from members where auth_subject = $1 order by account_id`,
+         select account_id from members where auth_subject = $1 and role is not null order by account_id`,
         [identity.subject, identity.email ?? null],
     );
     return rows.map((row) => row.account_id);

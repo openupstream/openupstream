@@ -24,7 +24,7 @@
  * - an IngressRoute at the tunnel host, served with the default TLS
  *   store's wildcard certificate for the customer domain.
  */
-import type { Id } from '@openupstream/sdk';
+import { DATABASE_TUNNEL, type Id } from '@openupstream/sdk';
 import type { KubeObject } from '../kube.js';
 import {
     COMPONENT_LABEL,
@@ -38,7 +38,7 @@ import {
 } from '../kubernetes.js';
 
 export const TUNNEL_COMPONENT = 'database-tunnel';
-export const TUNNEL_NAME = 'database-tunnel';
+export const TUNNEL_NAME = DATABASE_TUNNEL;
 export const TUNNEL_AUTH_MIDDLEWARE = 'database-tunnel-auth';
 export const TUNNEL_RATE_LIMIT_MIDDLEWARE = 'database-tunnel-rate-limit';
 /** Tunnels a client IP may open: a GUI opens several connections at once, a flood of bad tokens is cut before the control plane. */

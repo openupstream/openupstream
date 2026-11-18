@@ -6,7 +6,19 @@ description: How Accounts, Members, Projects and Resources belong together, wher
 ## Accounts and Members
 
 An **Account** is the customer: the party that pays and gets one invoice.
-Its **Members** are the people who sign in and act on its Projects.
+Its **Members** are the people who sign in and act on its Projects. Each
+has a role:
+
+- an **owner** may do everything, including who else is a Member and
+  with which role. An Account always keeps at least one owner.
+- a **developer** may do everything in every Project, but not change the
+  Account's Members.
+
+`oup member` lists the Members, changes their roles and removes them;
+anyone may leave an Account. A removed Member loses their Postgres roles
+in the Account's Databases within about a minute. If they had a
+connection open at `owner` level, every `oup pg proxy` connection to that
+Project's Databases is closed once, so tools reconnect within seconds.
 
 An Account can have a **Hold**: a reason it may not create Resources now,
 such as a missing payment method. Its existing Resources keep running.

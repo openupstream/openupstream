@@ -83,6 +83,18 @@ test('each role is a login role with its Secret: read and write by predefined ro
     assert.ok(managed.every((role) => (role as { name: string }).name.length <= 63));
 });
 
+test('a dropped role stays in the Cluster as absent, named only, without a Secret', () => {
+    const result = databaseManifests(project, orders, config, [roles[0]!, { ...roles[2]!, dropped: true }]);
+    assert.ok(result.ok);
+    const managed = (result.value.cluster.spec as { managed?: { roles?: unknown[] } }).managed?.roles;
+    assert.equal(managed?.length, 2);
+    assert.deepEqual(managed?.[1], {
+        name: 'oup_owner_cccccccc333343338333333333333333',
+        comment: 'openupstream owner role cccccccc-3333-4333-8333-333333333333, dropped',
+        ensure: 'absent',
+    });
+});
+
 test('without roles the Cluster has no managed section, as before', () => {
     const result = databaseManifests(project, orders, config);
     assert.ok(result.ok);

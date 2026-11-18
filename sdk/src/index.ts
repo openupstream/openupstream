@@ -34,6 +34,8 @@ import type {
     JobRunInput,
     LogEntry,
     LogQuery,
+    Member,
+    MemberPatch,
     Project,
     ProjectInput,
     ProjectUsage,
@@ -106,6 +108,25 @@ export class OpenUpstreamClient {
     /** A new Account, with the caller as its first Member. */
     createAccount(input: AccountInput): Promise<ApiResult<Account>> {
         return this.#call('POST', '/v1/accounts', input);
+    }
+
+    /** The Account's Members with their roles; for owners and developers. */
+    listMembers(accountId: Id): Promise<ApiResult<Member[]>> {
+        return this.#call('GET', `/v1/accounts/${encodeURIComponent(accountId)}/members`);
+    }
+
+    /** Gives a Member another role; owners only, never with an API key. An Account always keeps an owner (409). */
+    updateMember(accountId: Id, memberId: Id, patch: MemberPatch): Promise<ApiResult<Member>> {
+        return this.#call('PATCH', `/v1/accounts/${encodeURIComponent(accountId)}/members/${encodeURIComponent(memberId)}`, patch);
+    }
+
+    /**
+     * Removes a Member, `me` for the caller (leaving the Account); others
+     * only by an owner, never with an API key. Their Postgres roles in the
+     * Account's Databases are dropped. An Account always keeps an owner (409).
+     */
+    removeMember(accountId: Id, memberId: Id | 'me'): Promise<ApiResult<void>> {
+        return this.#call('DELETE', `/v1/accounts/${encodeURIComponent(accountId)}/members/${encodeURIComponent(memberId)}`);
     }
 
     listProjects(): Promise<ApiResult<Project[]>> {
