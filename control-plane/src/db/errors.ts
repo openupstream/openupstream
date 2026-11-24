@@ -10,6 +10,9 @@ export const FOREIGN_KEY_VIOLATION = '23503';
 /** Raised when a Resource is inserted for an Account with a Hold (migrations, account-holds). */
 export const ACCOUNT_HELD = 'OUHLD';
 
+/** Raised when a change would leave an Account without an owner (migrations, member-roles). */
+export const LAST_OWNER = 'OUOWN';
+
 /** Raised when a routed Service's port is removed (migrations, service-port-optional). */
 export const SERVICE_ROUTED = 'OURTD';
 

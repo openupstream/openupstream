@@ -40,6 +40,21 @@ oup site deploy dist --bucket my-site
   find it, as git finds `.git`. It holds no secret and may be committed.
   `--project <name|id>`, or `OUP_PROJECT` in CI, names another Project for
   one command.
+- `oup member list [--account <name|id>]`: the Members of your Account
+  with their roles (decision 138): an `owner` may do everything, the
+  Account's Members included; a `developer` every Project and everything
+  in it. With several Accounts, `--account` says which, as for every
+  `oup member` command.
+- `oup member role <email> owner|developer`: gives a Member another role.
+  Owners only; an Account always keeps an owner.
+- `oup member remove <email>`: removes a Member, owners only. Their
+  Postgres roles from `oup pg proxy`, and those of their API keys, are
+  dropped from the Account's Databases (decision 143). Where they had
+  `owner`, every open `oup pg proxy` connection to that Project is closed
+  once, so theirs ends too; tools reconnect.
+- `oup member leave`: leaves the Account; its last owner cannot. `oup
+  member` changes need `oup login`: an API key cannot change who is in an
+  Account.
 - `oup pg create <name> [--memory <MB>] [--storage <GB>] [--site hetzner-fsn1|ovh-lim] [--max-storage <GB> | --no-auto-grow] [--no-wait]`:
   a Database with its primary in the Site (default `hetzner-fsn1`) and a
   standby in the other one, 256 MB and 1 GB unless told otherwise. Its

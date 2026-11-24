@@ -10,11 +10,11 @@
  * writes every Project's, every interval, so a change whose write failed,
  * or that came before the Project had a namespace, arrives within one pass.
  */
-import { PROJECT_REGISTRY_AUTH, PROJECT_SECRETS, type RegistryAuth, projectNamespace } from '@openupstream/sdk';
+import { PROJECT_REGISTRY_AUTH, PROJECT_SECRETS, type RegistryAuth, databaseRoleSecret, projectNamespace } from '@openupstream/sdk';
 import type pg from 'pg';
 import type { ControlPlaneKube, SecretManifest } from '../kube.js';
 import { type Result, err, ok } from '../result.js';
-import { projectRoles, roleSecretManifest } from '../databases/roles.js';
+import { endDroppedOwnerSessions, projectRoles, recentlyDroppedRoles, roleSecretManifest } from '../databases/roles.js';
 import { jobRegistryAuthName } from '../jobs/store.js';
 import { credentialKey, parseImageReference } from '../registry.js';
 import { registryAuthName } from '../services/store.js';
@@ -127,6 +127,18 @@ export async function syncProjectSecrets(
         if (!written.ok) {
             return written;
         }
+    }
+    // A role taken from a removed Member (decision 143): its password goes, again after the removal's own delete.
+    for (const role of await recentlyDroppedRoles(deps.pool, projectId)) {
+        const deleted = await deps.kube.remove({ apiVersion: 'v1', kind: 'Secret', namespace: projectNamespace(projectId), name: databaseRoleSecret(role) });
+        if (!deleted.ok) {
+            return deleted;
+        }
+    }
+    // And its open `owner` session, if the removal's own attempt failed.
+    const ended = await endDroppedOwnerSessions(deps.pool, deps.kube, projectId);
+    if (!ended.ok) {
+        return ended;
     }
     // Only now may the Services roll: their pods will read these values.
     await deps.pool.query('update projects set secrets_version = $2 where id = $1 and secrets_version is distinct from $2', [projectId, version]);

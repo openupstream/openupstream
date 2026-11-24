@@ -3,7 +3,11 @@
 Date: 2026-11-17
 Status: accepted
 
-Designed on 2026-11-17; nothing of it is built yet. Decisions 138 to 145
+Designed on 2026-11-17. Built so far: the roles, listing, changing and
+removing Members, leaving, and dropping a removed Member's Postgres roles
+(points 1, 4 and 6, without grants and madAuth's webhooks), tested against
+Postgres in Docker and run on the Hetzner dev cluster on 2026-11-17 and
+18 (see `ARCHITECTURE.md`, "Control plane"). Decisions 138 to 145
 in `ARCHITECTURE.md` index it. It settles Open question 9 and the
 invitation part of Open question 16.
 
@@ -290,9 +294,14 @@ work.
 - madAuth's `user.deleted` arrives after the user is gone and is not
   retried: a lost webhook leaves the Member rows of a user who cannot sign
   in any more, harmless but listed.
-- An open tunnel still outlives what authorized it (ADR-0005): dropping a
-  role ends new logins; whether CloudNativePG's drop also ends the
-  sessions that are open is to be tried when it is built.
+- Dropping a role ends new logins and, through PgBouncer, the open
+  `read` and `write` sessions, but not an open `owner` session: it acts
+  as `app` and Postgres checks a role at login only (dev cluster,
+  2026-11-17). A removal therefore deletes the database tunnel's pod in
+  each Project where the Member had an `owner` role (the control plane
+  may delete pods, not patch Deployments). That ends every tunnel
+  there: other callers' open sessions drop once and reconnect (18 s on
+  the dev cluster), and a migration running through one is aborted.
 - The control plane checks an Account token's hash on every request, a
   query per call, so revoking is immediate.
 - IP ranges rely on the client address reaching the control plane through

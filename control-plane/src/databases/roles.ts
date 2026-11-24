@@ -11,6 +11,7 @@
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import {
+    DATABASE_TUNNEL_PODS,
     type DatabaseAccess,
     type DatabaseRoleRow,
     type Id,
@@ -19,7 +20,9 @@ import {
     projectNamespace,
 } from '@openupstream/sdk';
 import type pg from 'pg';
-import type { SecretManifest } from '../kube.js';
+import { lockCaller } from '../accounts/members.js';
+import { inTransaction } from '../db/transaction.js';
+import type { ControlPlaneKube, SecretManifest } from '../kube.js';
 import { type Result, err, ok } from '../result.js';
 import type { KeyEncryptionKey } from '../secrets/envelope.js';
 import { type SecretStoreError, openProjectValue, sealProjectValue } from '../secrets/store.js';
@@ -54,7 +57,8 @@ interface RoleRow {
 const findRole = async (pool: pg.Pool, databaseId: Id, caller: Caller, access: DatabaseAccess): Promise<RoleRow | undefined> => {
     const { rows } = await pool.query<RoleRow>(
         `select id, access, password from database_roles
-         where database_id = $1 and auth_subject = $2 and coalesce(api_key_id, '') = coalesce($3, '') and access = $4`,
+         where database_id = $1 and auth_subject = $2 and coalesce(api_key_id, '') = coalesce($3, '') and access = $4
+           and dropped_at is null`,
         [databaseId, caller.subject, caller.apiKeyId ?? null, access],
     );
     return rows[0];
@@ -109,22 +113,39 @@ async function insertRole(
     if (!sealed.ok) {
         return sealed;
     }
-    const { rows } = await pool.query<RoleRow>(
-        `insert into database_roles (id, database_id, auth_subject, api_key_id, access, password)
-         select $1, $2, $3, $4, $5, $6 where exists (select 1 from databases where id = $2 and deleted_at is null)
-         on conflict do nothing
-         returning id, access, password`,
-        [id, database.id, caller.subject, caller.apiKeyId ?? null, access, sealed.value],
+    // Under the caller's lock, and only while they are still a Member with a role: a removal that
+    // runs meanwhile either sees this row and marks it, or has removed them and nothing is inserted.
+    const inserted = await inTransaction(
+        pool,
+        async (client) => {
+            await client.query(
+                `select ${lockCaller('p.account_id', '$1')} from databases d join projects p on p.id = d.project_id where d.id = $2`,
+                [caller.subject, database.id],
+            );
+            return client.query<RoleRow>(
+                `insert into database_roles (id, database_id, auth_subject, api_key_id, access, password)
+                 select $1, $2, $3, $4, $5, $6
+                 where exists (
+                     select 1 from databases d join projects p on p.id = d.project_id
+                     join members m on m.account_id = p.account_id and m.auth_subject = $3 and m.role is not null
+                     where d.id = $2 and d.deleted_at is null
+                 )
+                 on conflict do nothing
+                 returning id, access, password`,
+                [id, database.id, caller.subject, caller.apiKeyId ?? null, access, sealed.value],
+            );
+        },
+        () => true,
     );
-    return ok(rows[0]);
+    return ok(inserted.rows[0]);
 }
 
-/** Every role of the Project's live Databases, opened, for the Secrets CloudNativePG reads. */
+/** Every role of the Project's live Databases that is not dropped, opened, for the Secrets CloudNativePG reads. */
 export async function projectRoles(pool: pg.Pool, kek: KeyEncryptionKey, projectId: Id): Promise<Result<readonly DatabaseRole[], SecretStoreError>> {
     const { rows } = await pool.query<RoleRow & { database_id: string }>(
         `select r.id, r.database_id, r.access, r.password from database_roles r
          join databases d on d.id = r.database_id
-         where d.project_id = $1 and d.deleted_at is null
+         where d.project_id = $1 and d.deleted_at is null and r.dropped_at is null
          order by r.created_at, r.id`,
         [projectId],
     );
@@ -139,17 +160,72 @@ export async function projectRoles(pool: pg.Pool, kek: KeyEncryptionKey, project
     return ok(roles);
 }
 
-/** The roles of every live Database, by Database, oldest first: what the operator adds to the Clusters. */
+/** How long the secrets pass keeps deleting a dropped role's Secret, in case the delete at its removal failed or a pass wrote it back. */
+export const DROPPED_SECRET_RETRY = '1 hour';
+
+/** The roles of the Project's Databases dropped within DROPPED_SECRET_RETRY, whose Secrets go. */
+export async function recentlyDroppedRoles(pool: pg.Pool, projectId: Id): Promise<readonly { readonly id: Id }[]> {
+    const { rows } = await pool.query<{ id: string }>(
+        `select r.id from database_roles r join databases d on d.id = r.database_id
+         where d.project_id = $1 and r.dropped_at > now() - $2::interval`,
+        [projectId, DROPPED_SECRET_RETRY],
+    );
+    return rows;
+}
+
+/**
+ * Ends the open sessions of the Project's `owner` roles dropped within
+ * DROPPED_SECRET_RETRY and not ended yet: such a session acts as `app` and
+ * outlives its role (dev cluster, 2026-11-17), so the Project's tunnel
+ * pods are deleted, which closes every tunnel there; the Deployment starts
+ * a new pod and other callers' tools reconnect. Recorded once done, so a
+ * failed attempt is made again by the next secrets pass. The number of
+ * roles whose sessions it ended.
+ */
+export async function endDroppedOwnerSessions(
+    pool: pg.Pool,
+    kube: Pick<ControlPlaneKube, 'listPods' | 'remove'>,
+    projectId: Id,
+): Promise<Result<number, string>> {
+    const { rows } = await pool.query<{ id: string }>(
+        `select r.id from database_roles r join databases d on d.id = r.database_id
+         where d.project_id = $1 and r.access = 'owner' and r.sessions_ended_at is null and r.dropped_at > now() - $2::interval`,
+        [projectId, DROPPED_SECRET_RETRY],
+    );
+    if (rows.length === 0) {
+        return ok(0);
+    }
+    const namespace = projectNamespace(projectId);
+    const pods = await kube.listPods(namespace, DATABASE_TUNNEL_PODS);
+    if (!pods.ok) {
+        return pods;
+    }
+    for (const pod of pods.value) {
+        const deleted = await kube.remove({ apiVersion: 'v1', kind: 'Pod', namespace, name: pod.name });
+        if (!deleted.ok) {
+            return deleted;
+        }
+    }
+    await pool.query('update database_roles set sessions_ended_at = now() where id = any($1)', [rows.map((row) => row.id)]);
+    return ok(rows.length);
+}
+
+/**
+ * The roles of every live Database, by Database, oldest first: what the
+ * operator adds to the Clusters. Dropped ones too, for as long as the
+ * Database lives, so CloudNativePG drops them whenever it can (decision 143).
+ */
 export async function rolesByDatabase(pool: pg.Pool): Promise<ReadonlyMap<Id, readonly DatabaseRoleRow[]>> {
-    const { rows } = await pool.query<{ id: string; database_id: string; access: DatabaseAccess }>(
-        `select r.id, r.database_id, r.access from database_roles r
+    const { rows } = await pool.query<{ id: string; database_id: string; access: DatabaseAccess; dropped: boolean }>(
+        `select r.id, r.database_id, r.access, r.dropped_at is not null as dropped from database_roles r
          join databases d on d.id = r.database_id
          where d.deleted_at is null
          order by r.created_at, r.id`,
     );
     const byDatabase = new Map<Id, DatabaseRoleRow[]>();
     for (const row of rows) {
-        byDatabase.set(row.database_id, [...(byDatabase.get(row.database_id) ?? []), { id: row.id, access: row.access }]);
+        const role: DatabaseRoleRow = row.dropped ? { id: row.id, access: row.access, dropped: true } : { id: row.id, access: row.access };
+        byDatabase.set(row.database_id, [...(byDatabase.get(row.database_id) ?? []), role]);
     }
     return byDatabase;
 }

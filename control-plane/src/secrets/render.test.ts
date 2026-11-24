@@ -23,6 +23,10 @@ after(async () => {
 
 async function createProject(): Promise<string> {
     const account = await db.pool.query<{ id: string }>(`insert into accounts (name) values ('Acme') returning id`);
+    // usr_a may open database roles in every Project here (databases/roles.ts asks for a Member with a role).
+    await db.pool.query(`insert into members (account_id, auth_subject, email, role) values ($1, 'usr_a', 'a@example.test', 'owner')`, [
+        account.rows[0]?.id,
+    ]);
     const project = await db.pool.query<{ id: string }>(
         `insert into projects (account_id, name) values ($1, $2) returning id`,
         [account.rows[0]?.id, `p-${randomBytes(4).toString('hex')}`],

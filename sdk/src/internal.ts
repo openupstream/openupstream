@@ -29,6 +29,12 @@ export const primaryServiceName = (database: Pick<Database, 'id'>): string => `$
  */
 export const tunnelHostname = (projectId: Id, customerDomain: string): string => `pg-${projectId}.${customerDomain}`;
 
+/** The forwarder's Deployment in a Project's namespace (decision 126). */
+export const DATABASE_TUNNEL = 'database-tunnel';
+
+/** Its pods, by label; the control plane deletes them to end every tunnel of the Project (decision 143). */
+export const DATABASE_TUNNEL_PODS = `openupstream.io/component=${DATABASE_TUNNEL}`;
+
 /** What the tunnel reaches at a level: the Pooler, or the primary at `owner`, so session advisory locks work. */
 export type DatabaseTunnelTarget = 'pooler' | 'primary';
 export const tunnelTargetOf = (access: DatabaseAccess): DatabaseTunnelTarget => (access === 'owner' ? 'primary' : 'pooler');
@@ -48,6 +54,8 @@ export const databaseRoleSecret = (role: { readonly id: Id }): string => `pg-rol
 export interface DatabaseRoleRow {
     readonly id: Id;
     readonly access: DatabaseAccess;
+    /** Taken from its caller (decision 143): the Cluster drops it (`ensure: absent`). */
+    readonly dropped?: true;
 }
 
 /** The Secret CloudNativePG keeps the Database's `app` user in, with its generated `password`. */
@@ -179,7 +187,7 @@ export interface DomainRouting {
 }
 
 export interface AccountRecord extends Account {
-    readonly members: readonly Pick<Member, 'authSubject' | 'email'>[];
+    readonly members: readonly Pick<Member, 'authSubject' | 'email' | 'role'>[];
 }
 
 /** One Service as the Services operator needs it. */

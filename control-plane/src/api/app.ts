@@ -12,6 +12,7 @@ import {
     COMPUTE_SITES,
     type Site,
     DATABASE_ACCESS_LEVELS,
+    MEMBER_ROLES,
     DATABASE_MIN_MEMORY_MB,
     DNS_LABEL,
     HOSTNAME,
@@ -45,6 +46,7 @@ import {
     type ServiceState,
     clusterName,
     databaseConnection,
+    databaseRoleSecret,
     jobObjectName,
     jobSpecVersion,
     projectNamespace,
@@ -61,10 +63,11 @@ import { stream } from 'hono/streaming';
 import type pg from 'pg';
 import { z } from 'zod';
 import { createAccount, holdsOf, listAccounts } from '../accounts/store.js';
+import { changeRole, listMembers, memberOf, removeMember } from '../accounts/members.js';
 import { type BucketRecord, createBucket, deleteBucket, getBucket, listBuckets } from '../buckets/store.js';
 import { GiB, MiB, roomForGrowth, roomForNew } from '../databases/capacity.js';
 import { checkRestore, restoreCheckMessage } from '../databases/restore.js';
-import { roleFor, roleSecretManifest } from '../databases/roles.js';
+import { endDroppedOwnerSessions, roleFor, roleSecretManifest } from '../databases/roles.js';
 import { createDatabase, deleteDatabase, getDatabase, getRestoreSource, listDatabases, updateDatabase } from '../databases/store.js';
 import type { TxtLookup } from '../domains/dns.js';
 import { createCustomDomain, deleteDomain, getDomain, isReserved, listDomains, verifyDomain } from '../domains/store.js';
@@ -152,6 +155,8 @@ const LOG_POLL_MS = 5_000;
 const accountInput = z.strictObject({
     name: z.string().trim().min(1).max(200),
 });
+
+const memberPatch = z.strictObject({ role: z.enum(MEMBER_ROLES) });
 
 /** Whether an API key with `scopes` may make a request with `method`; a session (undefined) may make any. */
 export const scopeAllows = (scopes: readonly string[] | undefined, method: string): boolean =>
@@ -487,6 +492,81 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         return c.json(account, 201);
     });
 
+    // Members (decisions 138, 141, 143). Owners and developers see them;
+    // only an owner changes or removes another, and anyone may leave. None
+    // of it with an API key: a leaked key must not change who is in. The
+    // schema keeps an owner in every Account.
+    const noKeys = { error: 'an API key cannot change the Account\'s Members; sign in' };
+    const lastOwner = { error: 'the Account would have no owner; make another Member owner first' };
+    const ownersOnly = { error: 'only an owner of the Account may do this' };
+
+    app.get('/v1/accounts/:accountId/members', async (c) => {
+        const accountId = c.req.param('accountId');
+        return c.get('accountIds').includes(accountId) ? c.json(await listMembers(pool, accountId)) : c.json(notFound, 404);
+    });
+
+    app.patch('/v1/accounts/:accountId/members/:memberId', async (c) => {
+        const identity = c.get('identity');
+        if (identity.scopes !== undefined) {
+            return c.json(noKeys, 403);
+        }
+        const { accountId, memberId } = c.req.param();
+        const caller = UUID.test(accountId) ? await memberOf(pool, accountId, identity.subject) : undefined;
+        if (caller?.role == null || !UUID.test(memberId)) {
+            return c.json(notFound, 404);
+        }
+        if (caller.role !== 'owner') {
+            return c.json(ownersOnly, 403);
+        }
+        const input = memberPatch.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const changed = await changeRole(pool, accountId, memberId, input.data.role);
+        return changed.ok
+            ? c.json(changed.value)
+            : changed.error.kind === 'last-owner'
+              ? c.json(lastOwner, 409)
+              : c.json(notFound, 404);
+    });
+
+    // `me` is the caller: leaving the Account.
+    app.delete('/v1/accounts/:accountId/members/:memberId', async (c) => {
+        const identity = c.get('identity');
+        if (identity.scopes !== undefined) {
+            return c.json(noKeys, 403);
+        }
+        const { accountId, memberId } = c.req.param();
+        const caller = UUID.test(accountId) ? await memberOf(pool, accountId, identity.subject) : undefined;
+        const target = memberId === 'me' ? caller?.id : memberId;
+        if (caller === undefined || target === undefined || !UUID.test(target) || (target !== caller.id && caller.role == null)) {
+            return c.json(notFound, 404);
+        }
+        if (target !== caller.id && caller.role !== 'owner') {
+            return c.json(ownersOnly, 403);
+        }
+        const removed = await removeMember(pool, accountId, target);
+        if (!removed.ok) {
+            return removed.error.kind === 'last-owner' ? c.json(lastOwner, 409) : c.json(notFound, 404);
+        }
+        // The roles are dropped from the Clusters by the operator; their passwords need not stay either.
+        for (const role of removed.value) {
+            const deleted = await kube.remove({ apiVersion: 'v1', kind: 'Secret', namespace: projectNamespace(role.projectId), name: databaseRoleSecret(role) });
+            if (!deleted.ok) {
+                deps.log?.({ msg: 'cannot delete a dropped database role Secret', role: role.id, error: deleted.error });
+            }
+        }
+        // An open `owner` session acts as `app` and survives the drop: ending the Project's tunnels ends it
+        // (databases/roles.ts); the secrets pass tries again within the hour if this fails.
+        for (const projectId of new Set(removed.value.filter((role) => role.access === 'owner').map((role) => role.projectId))) {
+            const ended = await endDroppedOwnerSessions(pool, kube, projectId);
+            if (!ended.ok) {
+                deps.log?.({ msg: 'cannot end the database tunnels after a removal; the secrets pass will', projectId, error: ended.error });
+            }
+        }
+        return c.body(null, 204);
+    });
+
     app.get('/v1/projects', async (c) => c.json(await listProjects(pool, c.get('accountIds'))));
 
     app.post('/v1/projects', async (c) => {
@@ -665,6 +745,10 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         const access = input.data.access ?? 'read';
         const role = await roleFor(pool, deps.kek, database, { subject: identity.subject, apiKeyId: identity.apiKeyId }, access);
+        if (!role.ok && role.error.kind === 'project-not-found') {
+            // The Database went, or the caller was removed from the Account, while the request ran.
+            return c.json(notFound, 404);
+        }
         if (!role.ok) {
             deps.log?.({ msg: 'cannot open a database role', database: database.id, error: role.error.kind });
             return c.json({ error: 'cannot open the role now' }, 500);

@@ -98,7 +98,7 @@ const record = (): AccountRecord => ({
     name: 'Erin AG',
     createdAt: '2026-10-20T00:00:00.000Z',
     holds: [...holds].sort(),
-    members: [{ authSubject: 'erin', email: 'erin@example.test' }],
+    members: [{ authSubject: 'erin', email: 'erin@example.test', role: 'owner' }],
 });
 
 before(async () => {
