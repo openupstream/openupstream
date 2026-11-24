@@ -14,8 +14,16 @@
  * sign up; `closed` refuses every new user but the addresses and `@domains`
  * in SIGNUP_ALLOW, with SIGNUP_MESSAGE as madAuth's answer. Users who exist
  * keep signing in either way.
+ *
+ * CONTROL_PLANE_URL (the internal API, `http://control-plane.<ns>.svc:8081`)
+ * and TOKEN_PATH (a projected ServiceAccount token for it): where
+ * `user.deleted` and `user.api_key_revoked` are passed on (decision 143).
+ * Without them the events are only logged.
  */
+import { readFile } from 'node:fs/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { serve } from '@hono/node-server';
+import { type ControlPlaneCall, controlPlaneSender, deliver } from './madauth/events.js';
 import { sesClient } from './mail.js';
 import { sesMail } from './madauth/mail.js';
 import {
@@ -71,7 +79,37 @@ const signup: SignupPolicy =
               message: process.env['SIGNUP_MESSAGE'] || DEFAULT_SIGNUP_MESSAGE,
           };
 
-const app = createSidecar({ webhookSecret, sendMail, signup, log });
+const controlPlaneUrl = process.env['CONTROL_PLANE_URL'] ?? '';
+const tokenPath = process.env['TOKEN_PATH'] ?? '';
+if ((controlPlaneUrl === '') !== (tokenPath === '')) {
+    log({ msg: 'CONTROL_PLANE_URL and TOKEN_PATH go together' });
+    process.exit(1);
+}
+const send = controlPlaneUrl === '' ? undefined : controlPlaneSender(controlPlaneUrl, () => readFile(tokenPath, 'utf8'));
+/** Events still being passed on: lost if the sidecar stops, so they are logged then. */
+const pending = new Set<ControlPlaneCall>();
+const forward =
+    send === undefined
+        ? undefined
+        : (call: ControlPlaneCall): void => {
+              // In the background: madAuth has its answer already.
+              pending.add(call);
+              deliver(call, { send, log, now: Date.now, sleep: async (ms) => void (await sleep(ms)) })
+                  .catch((error: unknown) =>
+                      log({ msg: 'madauth event lost', event: call.event, error: error instanceof Error ? error.message : String(error) }),
+                  )
+                  .finally(() => pending.delete(call));
+          };
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.on(signal, () => {
+        for (const call of pending) {
+            log({ msg: 'madauth event lost: the sidecar stopped while retrying', event: call.event, path: call.path });
+        }
+        process.exit(0);
+    });
+}
+
+const app = createSidecar({ webhookSecret, sendMail, signup, log, forward });
 // Only madAuth, in the same pod, may call it.
 serve({ fetch: app.fetch, port, hostname: '127.0.0.1' });
 log({
@@ -81,4 +119,5 @@ log({
     ...(mail === 'ses' ? { from: mailFrom, region: sesRegion } : {}),
     signup: signupSetting,
     ...(signup.open ? {} : { signupAllowed: signup.allow.length }),
+    controlPlane: controlPlaneUrl === '' ? 'none' : controlPlaneUrl,
 });

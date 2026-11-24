@@ -81,7 +81,7 @@ fails over. Owners and developers may pick any level. When a Member leaves
 or is removed, their roles, and those of their API keys, are dropped.
 
 In CI, `OUP_API_KEY` works too: the key needs `openupstream:write`, and
-gets roles of its own.
+gets roles of its own, dropped when you revoke the key.
 
 ## Resize
 

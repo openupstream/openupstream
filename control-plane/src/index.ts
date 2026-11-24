@@ -20,10 +20,12 @@ import { INTERNAL_API_AUDIENCE } from '@openupstream/sdk';
 import pg from 'pg';
 import { createApi } from './api/app.js';
 import { accessTokenVerifier, apiKeyVerifier, keysFrom, madauthAuthenticator, sessionVerifier } from './api/auth.js';
+import { removeUser } from './accounts/members.js';
 import { getAccountRecord, liftHold, placeHold } from './accounts/store.js';
 import { s3BackupStore } from './backups.js';
 import { cleanupPass } from './cleanup.js';
 import { growthPass } from './databases/growth.js';
+import { forgetDroppedRoles, revokeApiKey } from './databases/roles.js';
 import { prometheusClient } from './prometheus.js';
 import { meteringPass } from './usage/meter.js';
 import { accountUsage } from './usage/store.js';
@@ -135,6 +137,7 @@ async function main(): Promise<void> {
         routesCallers: config.value.routesCallers,
         servicesCallers: config.value.servicesCallers,
         jobsCallers: config.value.jobsCallers,
+        madauthCallers: config.value.madauthCallers,
         listDatabaseRows: () => listDatabaseRows(pool, config.value.customerDomain),
         listDomainRoutings: () => listDomainRoutings(pool),
         listServiceRows: () => listServiceRows(pool),
@@ -143,6 +146,20 @@ async function main(): Promise<void> {
         accountUsage: (accountId, month) => accountUsage(pool, accountId, month),
         placeHold: (accountId, reason) => placeHold(pool, accountId, reason),
         liftHold: (accountId, reason) => liftHold(pool, accountId, reason),
+        removeUser: async (subject) => {
+            const removed = await removeUser(pool, subject);
+            log({ msg: 'deleted madAuth user removed from their Accounts', accounts: removed.accounts, droppedRoles: removed.dropped.length });
+            for (const accountId of removed.ownerless) {
+                // decision 143: the operator of the installation gives the Account a new owner by hand.
+                log({ level: 'error', msg: 'Account left without an owner: its last owner deleted their madAuth user', accountId });
+            }
+            await forgetDroppedRoles(pool, kube, removed.dropped, log);
+        },
+        revokeApiKey: async (subject, apiKeyId) => {
+            const dropped = await revokeApiKey(pool, subject, apiKeyId);
+            log({ msg: 'revoked API key recorded', droppedRoles: dropped.length });
+            await forgetDroppedRoles(pool, kube, dropped, log);
+        },
         log,
     });
     internal.listen(config.value.internalPort);

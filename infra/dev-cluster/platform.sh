@@ -137,7 +137,7 @@ fi
 kubectl -n "$PLATFORM_NS" create configmap madauth-config --dry-run=client -o yaml \
   --from-literal=MADAUTH_ISSUER="$MADAUTH_ISSUER" \
   --from-literal=ALLOWED_ORIGINS="$MADAUTH_ISSUER" \
-  --from-literal=WEBHOOK_EVENTS=email.send_verification,email.send_password_reset,email.send_already_registered,email.send_password_reset_no_password,user.signing_up \
+  --from-literal=WEBHOOK_EVENTS=email.send_verification,email.send_password_reset,email.send_already_registered,email.send_password_reset_no_password,user.signing_up,user.deleted,user.api_key_revoked \
   --from-literal=MAIL="$MAIL" \
   --from-literal=MAIL_FROM="$MAIL_FROM" \
   --from-literal=SES_REGION="${SES_REGION:-eu-central-1}" \

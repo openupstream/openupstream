@@ -7,6 +7,8 @@
  * Removing a Member marks every Postgres role they and their API keys have
  * in the Account's Databases (decision 126), in the same statement: the
  * Databases operator then drops them from the Clusters (`ensure: absent`).
+ * A user madAuth deleted is removed from every Account at once
+ * (`removeUser`).
  */
 import type { DatabaseAccess, Id, Member, MemberRole } from '@openupstream/sdk';
 import type pg from 'pg';
@@ -141,4 +143,56 @@ async function removeLocked(client: pg.PoolClient, accountId: Id, memberId: Id):
     }
     const row = removed.value.rows[0];
     return row?.removed === true ? ok(row.dropped) : err({ kind: 'not-found' });
+}
+
+/** What removing a deleted user did: their dropped roles, and the Accounts left without an owner. */
+export interface RemovedUser {
+    readonly accounts: number;
+    readonly dropped: readonly DroppedRole[];
+    readonly ownerless: readonly Id[];
+}
+
+/**
+ * Removes a user madAuth deleted (its `user.deleted`) from every Account and
+ * marks all their Postgres roles and those of their API keys. madAuth cannot
+ * be kept from deleting a user, so this alone may leave an Account without
+ * an owner: the schema lets it for this transaction only, and the Accounts
+ * it happened to are returned for the log. Running it again finds nothing.
+ */
+export async function removeUser(pool: pg.Pool, subject: string): Promise<RemovedUser> {
+    return inTransaction(
+        pool,
+        async (client) => {
+            await client.query("select set_config('openupstream.owner_may_go', 'on', true)");
+            // The same lock as a single removal, per Account, in a fixed order.
+            const { rows: accounts } = await client.query<{ account_id: string }>(
+                'select account_id from members where auth_subject = $1 order by account_id',
+                [subject],
+            );
+            for (const { account_id } of accounts) {
+                await client.query(`select ${lockCaller('$1', '$2')}`, [account_id, subject]);
+            }
+            const { rows } = await client.query<RemovedUser>(
+                `with removed as (
+                     delete from members where auth_subject = $1 returning account_id, role
+                 ),
+                 dropped as (
+                     update database_roles r set dropped_at = now()
+                     from databases d
+                     where r.database_id = d.id and r.auth_subject = $1 and r.dropped_at is null
+                     returning r.id, r.access, d.project_id
+                 )
+                 select (select count(*)::int from removed) as accounts,
+                        coalesce((select jsonb_agg(jsonb_build_object('id', id, 'projectId', project_id, 'access', access)) from dropped), '[]') as dropped,
+                        coalesce((select jsonb_agg(account_id) from removed
+                                  where role = 'owner' and not exists (
+                                      select 1 from members m
+                                      where m.account_id = removed.account_id and m.role = 'owner' and m.auth_subject <> $1
+                                  )), '[]') as ownerless`,
+                [subject],
+            );
+            return rows[0] ?? { accounts: 0, dropped: [], ownerless: [] };
+        },
+        () => true,
+    );
 }

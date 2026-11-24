@@ -20,7 +20,7 @@ import {
     projectNamespace,
 } from '@openupstream/sdk';
 import type pg from 'pg';
-import { lockCaller } from '../accounts/members.js';
+import { type DroppedRole, lockCaller } from '../accounts/members.js';
 import { inTransaction } from '../db/transaction.js';
 import type { ControlPlaneKube, SecretManifest } from '../kube.js';
 import { type Result, err, ok } from '../result.js';
@@ -115,6 +115,7 @@ async function insertRole(
     }
     // Under the caller's lock, and only while they are still a Member with a role: a removal that
     // runs meanwhile either sees this row and marks it, or has removed them and nothing is inserted.
+    // An API key's own lock and the revoked keys do the same for a revocation (revokeApiKey).
     const inserted = await inTransaction(
         pool,
         async (client) => {
@@ -122,6 +123,9 @@ async function insertRole(
                 `select ${lockCaller('p.account_id', '$1')} from databases d join projects p on p.id = d.project_id where d.id = $2`,
                 [caller.subject, database.id],
             );
+            if (caller.apiKeyId !== undefined) {
+                await client.query(`select ${lockApiKey('$1')}`, [caller.apiKeyId]);
+            }
             return client.query<RoleRow>(
                 `insert into database_roles (id, database_id, auth_subject, api_key_id, access, password)
                  select $1, $2, $3, $4, $5, $6
@@ -130,6 +134,7 @@ async function insertRole(
                      join members m on m.account_id = p.account_id and m.auth_subject = $3 and m.role is not null
                      where d.id = $2 and d.deleted_at is null
                  )
+                 and not exists (select 1 from revoked_api_keys where api_key_id = $4)
                  on conflict do nothing
                  returning id, access, password`,
                 [id, database.id, caller.subject, caller.apiKeyId ?? null, access, sealed.value],
@@ -138,6 +143,71 @@ async function insertRole(
         () => true,
     );
     return ok(inserted.rows[0]);
+}
+
+/**
+ * The SQL that locks an API key for the rest of the transaction, from an SQL
+ * expression for its id: taken by its revocation and, after the Member's
+ * lock, by the creation of one of its roles.
+ */
+const lockApiKey = (apiKeyId: string): string => `pg_advisory_xact_lock(hashtextextended('api-key:' || ${apiKeyId}::text, 0))`;
+
+/**
+ * Records a key madAuth revoked (its `user.api_key_revoked`) and marks its
+ * Postgres roles in every Database, so the Databases operator drops them;
+ * until now they stayed until their Database went (ADR-0005). The key may
+ * still be accepted for a minute (decision 64), but no new role is created
+ * for it. Running it again marks nothing.
+ */
+export async function revokeApiKey(pool: pg.Pool, subject: string, apiKeyId: string): Promise<readonly DroppedRole[]> {
+    return inTransaction(
+        pool,
+        async (client) => {
+            await client.query(`select ${lockApiKey('$1')}`, [apiKeyId]);
+            const { rows } = await client.query<{ dropped: DroppedRole[] }>(
+                `with revoked as (
+                     insert into revoked_api_keys (api_key_id, auth_subject) values ($1, $2) on conflict do nothing
+                 ),
+                 dropped as (
+                     update database_roles r set dropped_at = now()
+                     from databases d
+                     where r.database_id = d.id and r.api_key_id = $1 and r.auth_subject = $2 and r.dropped_at is null
+                     returning r.id, r.access, d.project_id
+                 )
+                 select coalesce((select jsonb_agg(jsonb_build_object('id', id, 'projectId', project_id, 'access', access)) from dropped), '[]') as dropped`,
+                [apiKeyId, subject],
+            );
+            return rows[0]?.dropped ?? [];
+        },
+        () => true,
+    );
+}
+
+/**
+ * After roles were marked: their Secrets go at once (the secrets pass
+ * deletes them again for DROPPED_SECRET_RETRY), and in each Project where
+ * an `owner` role went the open sessions are ended (endDroppedOwnerSessions;
+ * also retried by the secrets pass). Failures are logged, not returned:
+ * the marks are what counts, and the retries follow them.
+ */
+export async function forgetDroppedRoles(
+    pool: pg.Pool,
+    kube: Pick<ControlPlaneKube, 'listPods' | 'remove'>,
+    dropped: readonly DroppedRole[],
+    log: (entry: Record<string, unknown>) => void,
+): Promise<void> {
+    for (const role of dropped) {
+        const deleted = await kube.remove({ apiVersion: 'v1', kind: 'Secret', namespace: projectNamespace(role.projectId), name: databaseRoleSecret(role) });
+        if (!deleted.ok) {
+            log({ msg: 'cannot delete a dropped database role Secret; the secrets pass will', role: role.id, error: deleted.error });
+        }
+    }
+    for (const projectId of new Set(dropped.filter((role) => role.access === 'owner').map((role) => role.projectId))) {
+        const ended = await endDroppedOwnerSessions(pool, kube, projectId);
+        if (!ended.ok) {
+            log({ msg: 'cannot end the database tunnels after dropping roles; the secrets pass will', projectId, error: ended.error });
+        }
+    }
 }
 
 /** Every role of the Project's live Databases that is not dropped, opened, for the Secrets CloudNativePG reads. */

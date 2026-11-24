@@ -5,7 +5,8 @@
 #
 # Next to it, in the same pod, the sidecar from the control plane's image:
 # madAuth only calls https or localhost URLs, so the sidecar serves the API
-# key scopes and receives the webhooks on 127.0.0.1.
+# key scopes and receives the webhooks on 127.0.0.1, and passes deleted
+# users and revoked API keys on to the control plane's internal API.
 #
 # Needs the Secret madauth (MADAUTH_SIGNING_KEY, the same on every replica,
 # and WEBHOOK_SECRET) and the ConfigMap madauth-config (MADAUTH_ISSUER,
@@ -108,9 +109,17 @@ spec:
             - name: SIGNUP_MESSAGE
               valueFrom:
                 configMapKeyRef: {name: madauth-config, key: SIGNUP_MESSAGE, optional: true}
+            # Deleted users and revoked API keys go to the control plane's
+            # internal API (decision 143); WEBHOOK_EVENTS must list
+            # user.deleted and user.api_key_revoked. project-isolation admits
+            # pods of this namespace, and MADAUTH_CALLERS this ServiceAccount.
+            - {name: CONTROL_PLANE_URL, value: "http://control-plane.project-00000000-0000-4000-8000-000000000002.svc:8081"}
+            - {name: TOKEN_PATH, value: /var/run/secrets/openupstream/control-plane/token}
           # The send-only SES key (MAIL=ses).
           envFrom:
             - secretRef: {name: madauth-ses, optional: true}
+          volumeMounts:
+            - {name: control-plane-token, mountPath: /var/run/secrets/openupstream/control-plane, readOnly: true}
           resources:
             requests: {cpu: 10m, memory: 64Mi}
             limits: {memory: 128Mi}
@@ -118,6 +127,17 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
+      volumes:
+        # A token only the control plane accepts (audience), rotated by the
+        # kubelet; the sidecar reads it for every call. madAuth's own
+        # container gets no token (automountServiceAccountToken: false).
+        - name: control-plane-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: openupstream-control-plane
+                  expirationSeconds: 3600
+                  path: token
 ---
 apiVersion: v1
 kind: Service

@@ -14,6 +14,8 @@ import {
     INTERNAL_ROUTES_PATH,
     INTERNAL_SERVICES_PATH,
     PLATFORM,
+    internalApiKeyPath,
+    internalUserPath,
     type ServiceRow,
 } from '@openupstream/sdk';
 import { err, ok } from '../result.js';
@@ -76,6 +78,9 @@ const jobRows: JobRow[] = [
         databases: [],
     },
 ];
+const madauthSidecar = 'system:serviceaccount:project-00000000-0000-4000-8000-000000000002:madauth';
+/** What the madAuth calls did, in order. */
+const madauthCalls: string[] = [];
 const accountId = '0b7c3f1e-2d4a-4c8b-9e6f-1a2b3c4d5e6f';
 const unknownId = '0b7c3f1e-2d4a-4c8b-9e6f-000000000000';
 
@@ -109,6 +114,9 @@ before(async () => {
         routesCallers: new Set([routesOperator]),
         servicesCallers: new Set([servicesOperator]),
         jobsCallers: new Set([jobsOperator]),
+        madauthCallers: new Set([madauthSidecar]),
+        removeUser: async (subject) => void madauthCalls.push(`user ${subject}`),
+        revokeApiKey: async (subject, keyId) => void madauthCalls.push(`key ${subject} ${keyId}`),
         listDomainRoutings: async () => routings,
         listServiceRows: async () => serviceRows,
         listJobRows: async () => jobRows,
@@ -246,4 +254,17 @@ test('the Jobs operator gets every Job; nobody else does', async () => {
     assert.deepEqual(await response.json(), jobRows);
     assert.equal((await get(servicesOperator, INTERNAL_JOBS_PATH)).status, 403);
     assert.equal((await get(jobsOperator, INTERNAL_SERVICES_PATH)).status, 403);
+});
+
+test("madAuth's sidecar removes deleted users and revokes API keys; nobody else does", async () => {
+    madauthCalls.length = 0;
+    assert.equal((await get(madauthSidecar, internalUserPath('usr_Ab-9'), 'DELETE')).status, 204);
+    assert.equal((await get(madauthSidecar, internalApiKeyPath('usr_Ab-9', 'key_1'), 'DELETE')).status, 204);
+    assert.deepEqual(madauthCalls, ['user usr_Ab-9', 'key usr_Ab-9 key_1']);
+    assert.equal((await get(billing, internalUserPath('usr_Ab-9'), 'DELETE')).status, 403);
+    assert.equal((await get(operator, internalApiKeyPath('usr_Ab-9', 'key_1'), 'DELETE')).status, 403);
+    assert.equal((await get(madauthSidecar, internalUserPath('usr_Ab-9'))).status, 405);
+    assert.equal((await get(madauthSidecar, internalUserPath('usr.x'), 'DELETE')).status, 404);
+    assert.equal((await get(madauthSidecar, INTERNAL_ACCOUNTS_PATH + '/' + accountId)).status, 403);
+    assert.equal(madauthCalls.length, 2);
 });

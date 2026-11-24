@@ -131,6 +131,21 @@ export const INTERNAL_SERVICES_PATH = '/internal/v1/services';
 /** `GET` lists every Job with its Project, for the Jobs operator. */
 export const INTERNAL_JOBS_PATH = '/internal/v1/jobs';
 
+/**
+ * For the madAuth sidecar, which passes on madAuth's events (decision 143):
+ * `DELETE <path>/<user id>` removes a user madAuth deleted from every
+ * Account; `DELETE <path>/<user id>/api-keys/<key id>` drops the Postgres
+ * roles of a key madAuth revoked. Both answer 204, also when there was
+ * nothing to do, so a retry is harmless.
+ */
+export const INTERNAL_USERS_PATH = '/internal/v1/users';
+
+/** A madAuth user or API key id in a path: `usr_` and base64url, kept to URL-safe characters. */
+export const MADAUTH_ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+export const internalUserPath = (subject: string): string => `${INTERNAL_USERS_PATH}/${subject}`;
+export const internalApiKeyPath = (subject: string, apiKeyId: string): string => `${INTERNAL_USERS_PATH}/${subject}/api-keys/${apiKeyId}`;
+
 /** An Account's usage of one month: `${INTERNAL_ACCOUNTS_PATH}/{id}/usage?month=YYYY-MM`, for the billing service. */
 export const internalUsagePath = (accountId: Id, month: string): string => `${INTERNAL_ACCOUNTS_PATH}/${accountId}/usage?month=${month}`;
 

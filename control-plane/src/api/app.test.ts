@@ -24,7 +24,9 @@ import {
 } from '@openupstream/sdk';
 import { getAccountRecord, liftHold, placeHold } from '../accounts/store.js';
 import { listDatabaseRows } from '../databases/rows.js';
-import { roleFor } from '../databases/roles.js';
+import { removeUser } from '../accounts/members.js';
+import { LAST_OWNER } from '../db/errors.js';
+import { forgetDroppedRoles, revokeApiKey, roleFor } from '../databases/roles.js';
 import { syncProjectSecrets } from '../secrets/render.js';
 import { ensureDefaultDomains } from '../domains/store.js';
 import { listDomainRoutings } from '../routes/store.js';
@@ -578,6 +580,71 @@ describe('Members and their roles', () => {
         assert.equal((await call('DELETE', `/v1/accounts/${accountId}/members/${dev}`, 'olga')).status, 204);
         assert.equal((await call('DELETE', `/v1/accounts/${accountId}/members/${dev}`, 'olga')).status, 404);
         assert.deepEqual(await (await call('GET', '/v1/accounts', 'dev')).json(), []);
+    });
+});
+
+describe("madAuth's events: deleted users and revoked API keys", () => {
+    const proxy = (projectId: string, databaseId: string) => `/v1/projects/${projectId}/databases/${databaseId}/proxy`;
+    const withKey = (key: string, path: string, body: unknown) =>
+        api.request(path, { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const newDatabase = async (subject: string, accountId: string, name: string) => {
+        const project = (await (await call('POST', '/v1/projects', subject, { accountId, name })).json()) as Project;
+        const database = (await (await call('POST', `/v1/projects/${project.id}/databases`, subject, { name: 'main', memoryMb: 256, storageGb: 1 })).json()) as DatabaseDetails;
+        return { projectId: project.id, database };
+    };
+    const rolesOf = async (databaseId: string) => (await listDatabaseRows(db.pool)).find((row) => row.database.id === databaseId)?.roles ?? [];
+
+    test("a revoked key's roles are dropped, and it gets no new one in the minute it may still be accepted", async () => {
+        const accountId = ((await (await call('POST', '/v1/accounts', 'kara', { name: 'Kara GmbH' })).json()) as Account).id;
+        const { projectId, database } = await newDatabase('kara', accountId, 'revoke');
+        assert.equal((await withKey('madauth_kara_write_k7', proxy(projectId, database.id), { access: 'owner' })).status, 201);
+        assert.equal((await withKey('madauth_kara_write_k8', proxy(projectId, database.id), { access: 'read' })).status, 201);
+        assert.equal((await call('POST', proxy(projectId, database.id), 'kara', { access: 'read' })).status, 201);
+
+        const dropped = await revokeApiKey(db.pool, 'kara', 'k7');
+        assert.deepEqual(dropped.map((role) => [role.projectId, role.access]), [[projectId, 'owner']]);
+        assert.equal((await rolesOf(database.id)).filter((role) => role.dropped === true).length, 1, "the other key's and kara's own roles stay");
+        const tunnelPods = `project-${projectId} openupstream.io/component=database-tunnel`;
+        pods.set(tunnelPods, [{ name: 'database-tunnel-k7', nodeName: 'n1', containers: [] }]);
+        removedObjects.length = 0;
+        await forgetDroppedRoles(db.pool, kube, dropped, () => undefined);
+        assert.deepEqual(
+            removedObjects.map((object) => object.kind),
+            ['Secret', 'Pod'],
+            "its Secret goes, and its open `owner` session with the Project's tunnel pod",
+        );
+        pods.delete(tunnelPods);
+
+        // The control plane may still accept the key for a minute: no role for it again.
+        assert.equal((await withKey('madauth_kara_write_k7', proxy(projectId, database.id), { access: 'write' })).status, 404);
+        const late = await roleFor(db.pool, domainDeps.kek, database, { subject: 'kara', apiKeyId: 'k7' }, 'read');
+        assert.equal(late.ok ? 'created' : late.error.kind, 'project-not-found');
+        assert.equal((await withKey('madauth_kara_write_k8', proxy(projectId, database.id), { access: 'write' })).status, 201, 'other keys go on');
+        assert.deepEqual(await revokeApiKey(db.pool, 'kara', 'k7'), [], 'passed on twice, it does nothing more');
+    });
+
+    test('a deleted user leaves every Account, even as its last owner, and loses all their roles', async () => {
+        const own = ((await (await call('POST', '/v1/accounts', 'una', { name: 'Una Solo' })).json()) as Account).id;
+        const shared = ((await (await call('POST', '/v1/accounts', 'vera', { name: 'Vera AG' })).json()) as Account).id;
+        await db.pool.query(`insert into members (account_id, auth_subject, email, role) values ($1, 'una', 'una@vera.test', 'developer')`, [shared]);
+        const mine = await newDatabase('una', own, 'una-own');
+        const theirs = await newDatabase('vera', shared, 'vera-shared');
+        assert.equal((await call('POST', proxy(mine.projectId, mine.database.id), 'una', { access: 'owner' })).status, 201);
+        assert.equal((await withKey('madauth_una_write_k3', proxy(theirs.projectId, theirs.database.id), { access: 'write' })).status, 201);
+        assert.equal((await call('POST', proxy(theirs.projectId, theirs.database.id), 'vera', { access: 'read' })).status, 201);
+
+        const removed = await removeUser(db.pool, 'una');
+        assert.equal(removed.accounts, 2);
+        assert.deepEqual(removed.ownerless, [own]);
+        assert.deepEqual(removed.dropped.map((role) => role.access).sort(), ['owner', 'write']);
+        assert.deepEqual(await (await call('GET', '/v1/accounts', 'una')).json(), []);
+        assert.equal((await rolesOf(theirs.database.id)).filter((role) => role.dropped !== true).length, 1, "vera's role stays");
+        assert.deepEqual(await removeUser(db.pool, 'una'), { accounts: 0, dropped: [], ownerless: [] });
+
+        // Only that removal may leave an Account without an owner.
+        const vera = (await db.pool.query<{ id: string }>(`select id from members where account_id = $1 and auth_subject = 'vera'`, [shared])).rows[0]?.id;
+        assert.equal((await call('DELETE', `/v1/accounts/${shared}/members/${vera}`, 'vera')).status, 409);
+        await assert.rejects(db.pool.query(`delete from members where account_id = $1`, [shared]), { code: LAST_OWNER });
     });
 });
 

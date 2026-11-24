@@ -46,7 +46,6 @@ import {
     type ServiceState,
     clusterName,
     databaseConnection,
-    databaseRoleSecret,
     jobObjectName,
     jobSpecVersion,
     projectNamespace,
@@ -67,7 +66,7 @@ import { changeRole, listMembers, memberOf, removeMember } from '../accounts/mem
 import { type BucketRecord, createBucket, deleteBucket, getBucket, listBuckets } from '../buckets/store.js';
 import { GiB, MiB, roomForGrowth, roomForNew } from '../databases/capacity.js';
 import { checkRestore, restoreCheckMessage } from '../databases/restore.js';
-import { endDroppedOwnerSessions, roleFor, roleSecretManifest } from '../databases/roles.js';
+import { forgetDroppedRoles, roleFor, roleSecretManifest } from '../databases/roles.js';
 import { createDatabase, deleteDatabase, getDatabase, getRestoreSource, listDatabases, updateDatabase } from '../databases/store.js';
 import type { TxtLookup } from '../domains/dns.js';
 import { createCustomDomain, deleteDomain, getDomain, isReserved, listDomains, verifyDomain } from '../domains/store.js';
@@ -549,21 +548,8 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (!removed.ok) {
             return removed.error.kind === 'last-owner' ? c.json(lastOwner, 409) : c.json(notFound, 404);
         }
-        // The roles are dropped from the Clusters by the operator; their passwords need not stay either.
-        for (const role of removed.value) {
-            const deleted = await kube.remove({ apiVersion: 'v1', kind: 'Secret', namespace: projectNamespace(role.projectId), name: databaseRoleSecret(role) });
-            if (!deleted.ok) {
-                deps.log?.({ msg: 'cannot delete a dropped database role Secret', role: role.id, error: deleted.error });
-            }
-        }
-        // An open `owner` session acts as `app` and survives the drop: ending the Project's tunnels ends it
-        // (databases/roles.ts); the secrets pass tries again within the hour if this fails.
-        for (const projectId of new Set(removed.value.filter((role) => role.access === 'owner').map((role) => role.projectId))) {
-            const ended = await endDroppedOwnerSessions(pool, kube, projectId);
-            if (!ended.ok) {
-                deps.log?.({ msg: 'cannot end the database tunnels after a removal; the secrets pass will', projectId, error: ended.error });
-            }
-        }
+        // The operator drops the roles from the Clusters; their passwords and open `owner` sessions go here.
+        await forgetDroppedRoles(pool, kube, removed.value, deps.log ?? (() => undefined));
         return c.body(null, 204);
     });
 

@@ -51,7 +51,9 @@ which like `CUSTOMER_DOMAIN` cannot be claimed as custom domains; optionally
 `payment-method`, and `BILLING_CALLERS`, the billing service's
 ServiceAccount; `ROUTES_CALLERS`, default the Routes operator's;
 `SERVICES_CALLERS`, default the Services operator's; `JOBS_CALLERS`,
-default the Jobs operator's; `WAITLIST_*` for the
+default the Jobs operator's; `MADAUTH_CALLERS`, default madAuth's
+ServiceAccount, whose sidecar passes on deleted users and revoked API
+keys; `WAITLIST_*` for the
 waitlist, see below). At startup it applies pending migrations, seeds the
 platform's own Account, Project and Database rows (`src/platform.ts`) and
 gives every Project without one its default Domain, then listens on `PORT`
@@ -159,6 +161,15 @@ with `MAIL=ses` (`MAIL_FROM`, `SES_REGION` and the send-only key in
 `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`), to the log with `MAIL=log`,
 and are refused without `MAIL`.
 
+madAuth's `user.deleted` and `user.api_key_revoked` (decision 143) are
+answered with 202 and passed on to the internal API at `CONTROL_PLANE_URL`
+with the projected token at `TOKEN_PATH` (`src/madauth/events.ts`).
+madAuth sends an event once, so the sidecar retries while the control
+plane answers 401, 408, 429, 5xx or nothing, waiting 1 s and doubling up
+to 5 minutes, for up to an hour; other answers are given up and logged.
+The retries live in memory and end with the sidecar. Without
+`CONTROL_PLANE_URL` the events are only logged.
+
 Who may sign up (ARCHITECTURE.md, decision 86): madAuth asks before it
 creates a user, when its `WEBHOOK_EVENTS` list `user.signing_up`. With
 `SIGNUP=open`, the default, everyone may. With `SIGNUP=closed` only the
@@ -233,8 +244,8 @@ that were not confirmed within 48 hours of their last e-mail.
 
 ## Internal API
 
-For the operators and the billing service, on its own port, never routed
-by ingress (`src/internal/`). Callers send their ServiceAccount token for
+For the operators, the billing service and madAuth's sidecar, on its own
+port, never routed by ingress (`src/internal/`). Callers send their ServiceAccount token for
 the audience `openupstream-control-plane`; a TokenReview confirms it, and
 only the ServiceAccounts listed for the route get an answer: 401 without a
 valid token, 403 for anyone else, 503 when the token cannot be checked.
@@ -263,6 +274,13 @@ valid token, 403 for anyone else, 503 when the token cannot be checked.
   of that month (UTC), summed per Project, Resource and unit, with the
   month's hours and how many are metered (`AccountUsage`); 400 for another
   form of month, 404 for an unknown Account. For `BILLING_CALLERS`.
+- `DELETE /internal/v1/users/{madAuth user id}`: a user madAuth deleted
+  leaves every Account and their and their API keys' Postgres roles are
+  dropped; an Account it leaves without an owner is logged as an error.
+  `DELETE /internal/v1/users/{id}/api-keys/{key id}`: a revoked key's
+  roles are dropped and no new one is created for it. Both answer 204,
+  also when there was nothing to do. For `MADAUTH_CALLERS` (default:
+  madAuth's ServiceAccount in the platform Project's namespace).
 
 The control plane's ServiceAccount is bound to `system:auth-delegator` to
 create TokenReviews.
