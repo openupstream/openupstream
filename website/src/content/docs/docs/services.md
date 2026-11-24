@@ -44,8 +44,8 @@ deploys Services too, from public images.
 - An old container gets requests for 5 more seconds, then `SIGTERM`. Stop
   accepting new requests and finish the open ones: it is stopped for good
   120 seconds after the rollout began replacing it. A worker gets the same
-  120 seconds to finish its work. A request through a Route is cut after
-  60 seconds anyway, rollout or not.
+  120 seconds to finish its work. A request whose body takes more than 60
+  seconds to arrive is cut, rollout or not.
 - During a rollout the old and the new version both serve, so a change to
   your Database must work with both.
 - A Service is `deploying` until its containers run what you last asked
