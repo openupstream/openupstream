@@ -302,6 +302,11 @@ work.
   stays away longer, leaves the Member rows of a user who cannot sign in
   any more, harmless but listed, or a revoked key's roles until their
   Database goes. Both are logged.
+- A deleted user's session token stays valid until it expires (madAuth's
+  session lifetime), and with it they may still create an Account after
+  `user.deleted` was handled, owned by nobody who can sign in. Nothing
+  else is reachable: their Members are gone. Refusing deleted users
+  would need a record of them, which this does not keep.
 - Dropping a role ends new logins and, through PgBouncer, the open
   `read` and `write` sessions, but not an open `owner` session: it acts
   as `app` and Postgres checks a role at login only (dev cluster,

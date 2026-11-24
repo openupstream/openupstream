@@ -23,7 +23,7 @@
 import { readFile } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { serve } from '@hono/node-server';
-import { controlPlaneSender, deliver } from './madauth/events.js';
+import { type ControlPlaneCall, controlPlaneSender, deliver } from './madauth/events.js';
 import { sesClient } from './mail.js';
 import { sesMail } from './madauth/mail.js';
 import {
@@ -86,15 +86,28 @@ if ((controlPlaneUrl === '') !== (tokenPath === '')) {
     process.exit(1);
 }
 const send = controlPlaneUrl === '' ? undefined : controlPlaneSender(controlPlaneUrl, () => readFile(tokenPath, 'utf8'));
+/** Events still being passed on: lost if the sidecar stops, so they are logged then. */
+const pending = new Set<ControlPlaneCall>();
 const forward =
     send === undefined
         ? undefined
-        : (call: Parameters<typeof send>[0]): void => {
+        : (call: ControlPlaneCall): void => {
               // In the background: madAuth has its answer already.
-              deliver(call, { send, log, now: Date.now, sleep: async (ms) => void (await sleep(ms)) }).catch((error: unknown) =>
-                  log({ msg: 'madauth event lost', event: call.event, error: error instanceof Error ? error.message : String(error) }),
-              );
+              pending.add(call);
+              deliver(call, { send, log, now: Date.now, sleep: async (ms) => void (await sleep(ms)) })
+                  .catch((error: unknown) =>
+                      log({ msg: 'madauth event lost', event: call.event, error: error instanceof Error ? error.message : String(error) }),
+                  )
+                  .finally(() => pending.delete(call));
           };
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    process.on(signal, () => {
+        for (const call of pending) {
+            log({ msg: 'madauth event lost: the sidecar stopped while retrying', event: call.event, path: call.path });
+        }
+        process.exit(0);
+    });
+}
 
 const app = createSidecar({ webhookSecret, sendMail, signup, log, forward });
 // Only madAuth, in the same pod, may call it.
