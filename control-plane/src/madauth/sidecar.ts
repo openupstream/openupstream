@@ -11,13 +11,16 @@
  *   visibly instead of waiting for an e-mail that never comes.
  *   `user.signing_up`, which madAuth sends before it creates a user when
  *   WEBHOOK_EVENTS lists it, is answered by the sign-up policy: while
- *   sign-up is closed (decision 86) only allowed addresses get in. Other
- *   events are acknowledged.
+ *   sign-up is closed (decision 86) only allowed addresses get in.
+ *   `user.deleted` and `user.api_key_revoked` are passed on to the control
+ *   plane's internal API (madauth/events.ts): answered at once, tried in
+ *   the background. Other events are acknowledged.
  */
 import { WEBHOOK_TOLERANCE_SECONDS, verifyWebhook } from '@madauth/server/webhook';
 import { API_KEY_SCOPES } from '@openupstream/sdk';
 import { Hono } from 'hono';
 import type { Result } from '../result.js';
+import { type ControlPlaneCall, callFor } from './events.js';
 
 /** What madAuth reads at API_KEY_SCOPES_URL (its docs/api-keys.md). */
 export const apiKeyScopes = {
@@ -98,6 +101,12 @@ export interface SidecarDeps {
     /** Open when not given. */
     readonly signup?: SignupPolicy;
     readonly log: (entry: Record<string, unknown>) => void;
+    /**
+     * Starts passing an event on to the control plane in the background
+     * (madauth/events.ts, deliver). undefined: no control plane configured
+     * (CONTROL_PLANE_URL), the events are only logged.
+     */
+    readonly forward?: ((call: ControlPlaneCall) => void) | undefined;
     /** Milliseconds, like Date.now. */
     readonly now?: () => number;
 }
@@ -138,12 +147,12 @@ export function createSidecar(deps: SidecarDeps): Hono {
             deps.log({ msg: 'madauth webhook: replayed call refused', id: c.req.header('webhook-id') });
             return c.body(null, 409);
         }
-        const call = parseCall(body);
-        if (call === undefined) {
+        const parsed = parseCall(body);
+        if (parsed === undefined) {
             deps.log({ msg: 'madauth webhook: body is not {type, data}' });
             return c.json({ error: 'malformed call' }, 400);
         }
-        const { type, data } = call;
+        const { type, data } = parsed;
         if (type === 'user.signing_up') {
             // madAuth refuses on `allow: false` and shows `message` to whoever tried.
             if (signup.open || signupAllowed(signup, data['email'])) {
@@ -152,6 +161,19 @@ export function createSidecar(deps: SidecarDeps): Hono {
             // The address is personal data; the log only needs the fact.
             deps.log({ msg: 'madauth webhook: sign-up refused, sign-up is closed', method: data['method'] });
             return c.json({ allow: false, message: signup.message });
+        }
+        const call = callFor(type, data);
+        if (call === 'malformed') {
+            deps.log({ msg: 'madauth webhook: event without the ids it needs, ignored', type });
+            return c.json({ error: 'malformed event' }, 400);
+        }
+        if (call !== undefined) {
+            if (deps.forward === undefined) {
+                deps.log({ msg: 'madauth webhook: not passed on, no control plane configured', type });
+                return c.body(null, 204);
+            }
+            deps.forward(call);
+            return c.body(null, 202);
         }
         if (!type.startsWith('email.send_')) {
             // Events (user.*) and anything newer: acknowledged, nothing to do yet.

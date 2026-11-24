@@ -5,9 +5,11 @@ Status: accepted
 
 Designed on 2026-11-17. Built so far: the roles, listing, changing and
 removing Members, leaving, and dropping a removed Member's Postgres roles
-(points 1, 4 and 6, without grants and madAuth's webhooks), tested against
-Postgres in Docker and run on the Hetzner dev cluster on 2026-11-17 and
-18 (see `ARCHITECTURE.md`, "Control plane"). Decisions 138 to 145
+(points 1, 4 and 6, without grants), tested against Postgres in Docker and
+run on the Hetzner dev cluster on 2026-11-17 and 18 (see
+`ARCHITECTURE.md`, "Control plane"); madAuth's `user.deleted` and
+`user.api_key_revoked` on 2026-11-24, tested against Postgres in Docker,
+not yet on a cluster. Decisions 138 to 145
 in `ARCHITECTURE.md` index it. It settles Open question 9 and the
 invitation part of Open question 16.
 
@@ -198,7 +200,10 @@ accepting an invitation needs a session, whose address it checks.
 - **madAuth tells the control plane** through the sidecar: `user.deleted`
   removes the user's Members in every Account, and
   `user.api_key_revoked` drops that key's Postgres roles, which so far
-  stayed until their Database went (ADR-0005). madAuth cannot be kept from
+  stayed until their Database went (ADR-0005), and records the key: the
+  control plane may still accept it for a minute (decision 64), but no
+  new role is created for it. madAuth sends an event once, so the sidecar
+  answers at once and retries the control plane for up to an hour. madAuth cannot be kept from
   deleting a user, so this removal skips the last-owner rule: an Account
   whose last owner deleted their madAuth user is left without one, the
   control plane logs it as an error, and the operator of the installation
@@ -291,9 +296,12 @@ work.
   (pending invitations, deleted users, revoked keys). Its Kubernetes
   ServiceAccount has to be listed for those routes, and madAuth's
   `WEBHOOK_EVENTS` must list `user.deleted` and `user.api_key_revoked`.
-- madAuth's `user.deleted` arrives after the user is gone and is not
-  retried: a lost webhook leaves the Member rows of a user who cannot sign
-  in any more, harmless but listed.
+- madAuth's `user.deleted` arrives after the user is gone and madAuth
+  does not retry it. The sidecar retries for up to an hour, in memory: an
+  event lost when the sidecar restarts meanwhile, or the control plane
+  stays away longer, leaves the Member rows of a user who cannot sign in
+  any more, harmless but listed, or a revoked key's roles until their
+  Database goes. Both are logged.
 - Dropping a role ends new logins and, through PgBouncer, the open
   `read` and `write` sessions, but not an open `owner` session: it acts
   as `app` and Postgres checks a role at login only (dev cluster,

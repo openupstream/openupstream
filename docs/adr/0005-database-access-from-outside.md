@@ -159,7 +159,8 @@ Three ways to make a Member's role act as `app` were considered:
 - A revoked API key opens no tunnel, but madAuth does not say when a key
   is revoked, so its roles stay in the Database, unreachable from
   outside, until the Database goes or a cleanup that asks madAuth is
-  built.
+  built. (Since decision 143 madAuth's `user.api_key_revoked` drops them,
+  ADR-0006.)
 - Nothing new faces the internet. An attacker without a valid token gets
   an HTTP 401 from Traefik and no Postgres login to guess at.
 - Tools that cannot run `oup` cannot connect: a hosted BI tool, another

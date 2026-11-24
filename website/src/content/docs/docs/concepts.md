@@ -19,6 +19,8 @@ anyone may leave an Account. A removed Member loses their Postgres roles
 in the Account's Databases within about a minute. If they had a
 connection open at `owner` level, every `oup pg proxy` connection to that
 Project's Databases is closed once, so tools reconnect within seconds.
+Deleting your sign-in removes you from every Account in the same way,
+and revoking an API key drops the Postgres roles it had.
 
 An Account can have a **Hold**: a reason it may not create Resources now,
 such as a missing payment method. Its existing Resources keep running.

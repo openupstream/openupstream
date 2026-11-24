@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { signWebhook } from '@madauth/server/webhook';
+import { type ControlPlaneCall, callFor } from './events.js';
 import { type MailRequest, apiKeyScopes, createSidecar, signupAllowList, signupAllowed } from './sidecar.js';
 
 const secret = `whsec_${randomBytes(32).toString('base64')}`;
@@ -133,4 +134,45 @@ test('the allow list ignores case, spaces and empty entries', () => {
     assert.equal(signupAllowed(policy, 'x@b.test'), false);
     assert.equal(signupAllowed(policy, 'c.test'), false);
     assert.equal(signupAllowed({ open: true }, undefined), true);
+});
+
+test('deleted users and revoked API keys are passed on in the background; madAuth gets its answer at once', async () => {
+    const forwarded: ControlPlaneCall[] = [];
+    const logs: Record<string, unknown>[] = [];
+    const app = createSidecar({
+        webhookSecret: secret,
+        sendMail: undefined,
+        log: (entry) => logs.push(entry),
+        forward: (call) => void forwarded.push(call),
+        now: () => NOW * 1000,
+    });
+    const post = (call: unknown) => {
+        const body = JSON.stringify(call);
+        return app.request('/webhooks', { method: 'POST', body, headers: sign(body) });
+    };
+    const user = { id: 'usr_dora', email: 'dora@example.test' };
+    assert.equal((await post({ type: 'user.deleted', data: { user } })).status, 202);
+    assert.equal((await post({ type: 'user.api_key_revoked', data: { user, apiKey: { id: 'key_ci', name: 'ci' } } })).status, 202);
+    assert.deepEqual(forwarded, [
+        { event: 'user.deleted', method: 'DELETE', path: '/internal/v1/users/usr_dora' },
+        { event: 'user.api_key_revoked', method: 'DELETE', path: '/internal/v1/users/usr_dora/api-keys/key_ci' },
+    ]);
+    // Without the ids, or with ids that are no path segment, nothing goes out.
+    assert.equal((await post({ type: 'user.api_key_revoked', data: { user } })).status, 400);
+    assert.equal((await post({ type: 'user.deleted', data: { user: { id: '../accounts' } } })).status, 400);
+    // Other events are acknowledged and not passed on.
+    assert.equal((await post({ type: 'user.signed_in', data: { user } })).status, 204);
+    assert.equal(forwarded.length, 2);
+});
+
+test('without a control plane configured, the events are logged and acknowledged', async () => {
+    const { post, logs } = sidecar();
+    assert.equal((await post({ type: 'user.deleted', data: { user: { id: 'usr_dora' } } })).status, 204);
+    assert.equal(logs.at(-1)?.['msg'], 'madauth webhook: not passed on, no control plane configured');
+});
+
+test('callFor maps only the events the control plane acts on', () => {
+    assert.equal(callFor('user.signed_up', { user: { id: 'usr_a' } }), undefined);
+    assert.equal(callFor('user.deleted', {}), 'malformed');
+    assert.equal(callFor('user.deleted', { user: { id: 'usr a' } }), 'malformed');
 });

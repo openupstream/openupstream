@@ -56,7 +56,8 @@ itself, with its dashboard, is at `console.openupstream.com`.
 
 An Account's Members are owners or developers (every Project, but not
 the Account itself); owners change roles and remove Members, and a removed
-Member's Postgres roles are dropped within the next operator pass.
+Member's Postgres roles are dropped within the next operator pass, as
+are those of a deleted user and of a revoked API key.
 Designed, not built yet:
 owners invite people by e-mail with a role or with access to single
 Databases only, such as read-only for an analyst, and invited people may

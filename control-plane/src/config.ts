@@ -2,7 +2,7 @@
  * The control plane's settings, from its environment (control-plane/deploy).
  * Every problem is reported at once, before anything starts.
  */
-import { DNS_LABEL, UUID } from '@openupstream/sdk';
+import { DNS_LABEL, PLATFORM, UUID, projectNamespace } from '@openupstream/sdk';
 import { BACKUP_ENDPOINT } from './backups.js';
 import { retentionInterval } from './cleanup.js';
 import type { GarageConfig } from './garage.js';
@@ -22,6 +22,8 @@ export interface Config {
     readonly servicesCallers: ReadonlySet<string>;
     /** ServiceAccounts that may list Jobs: the Jobs operator. */
     readonly jobsCallers: ReadonlySet<string>;
+    /** MADAUTH_CALLERS: who may pass on madAuth's deleted users and revoked API keys (its sidecar). */
+    readonly madauthCallers: ReadonlySet<string>;
     /** The Holds every new Account starts with, e.g. `payment-method`. None by default: no gate. */
     readonly newAccountHolds: readonly string[];
     readonly auth: {
@@ -86,6 +88,8 @@ export const DEFAULT_ALLOWED_CALLERS = ['system:serviceaccount:openupstream-syst
 export const DEFAULT_ROUTES_CALLERS = ['system:serviceaccount:openupstream-system:routes-operator'];
 export const DEFAULT_SERVICES_CALLERS = ['system:serviceaccount:openupstream-system:services-operator'];
 export const DEFAULT_JOBS_CALLERS = ['system:serviceaccount:openupstream-system:jobs-operator'];
+/** madAuth's pod, whose sidecar passes on its events, runs in the platform Project's namespace (infra/madauth). */
+export const DEFAULT_MADAUTH_CALLERS = [`system:serviceaccount:${projectNamespace(PLATFORM.project.id)}:madauth`];
 
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -201,6 +205,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
         routesCallers: new Set(list(env['ROUTES_CALLERS'] ?? DEFAULT_ROUTES_CALLERS.join(','))),
         servicesCallers: new Set(list(env['SERVICES_CALLERS'] ?? DEFAULT_SERVICES_CALLERS.join(','))),
         jobsCallers: new Set(list(env['JOBS_CALLERS'] ?? DEFAULT_JOBS_CALLERS.join(','))),
+        madauthCallers: new Set(list(env['MADAUTH_CALLERS'] ?? DEFAULT_MADAUTH_CALLERS.join(','))),
         newAccountHolds,
         auth: { issuer, madauthUrl, ...(jwks === '' ? {} : { jwks }), ...(cliClientId === '' ? {} : { cliClientId }) },
         backup: {

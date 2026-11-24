@@ -1,6 +1,6 @@
 /**
- * The internal API for the operators and the billing service
- * (ARCHITECTURE.md, "Operators" and "Billing"): its own port, reachable only
+ * The internal API for the operators, the billing service and madAuth's
+ * sidecar (ARCHITECTURE.md, "Operators", "Billing" and "Control plane"): its own port, reachable only
  * inside the cluster, never routed by ingress. Every request carries a
  * ServiceAccount token; each route answers only the ServiceAccounts listed
  * for it.
@@ -18,6 +18,8 @@ import {
     INTERNAL_JOBS_PATH,
     INTERNAL_ROUTES_PATH,
     INTERNAL_SERVICES_PATH,
+    INTERNAL_USERS_PATH,
+    MADAUTH_ID,
     type ServiceRow,
     UUID,
 } from '@openupstream/sdk';
@@ -35,6 +37,8 @@ export interface InternalApi {
     readonly servicesCallers: ReadonlySet<string>;
     /** Usernames allowed to list Jobs: the Jobs operator. */
     readonly jobsCallers: ReadonlySet<string>;
+    /** Usernames allowed to pass on madAuth's deleted users and revoked API keys: madAuth's sidecar. */
+    readonly madauthCallers: ReadonlySet<string>;
     readonly listDatabaseRows: () => Promise<readonly DatabaseRow[]>;
     readonly listDomainRoutings: () => Promise<readonly DomainRouting[]>;
     readonly listServiceRows: () => Promise<readonly ServiceRow[]>;
@@ -46,6 +50,10 @@ export interface InternalApi {
     readonly placeHold: (accountId: string, reason: string) => Promise<boolean>;
     /** False if there is no such Account. */
     readonly liftHold: (accountId: string, reason: string) => Promise<boolean>;
+    /** Removes a deleted madAuth user from every Account; nothing to do is no error. */
+    readonly removeUser: (subject: string) => Promise<void>;
+    /** Drops a revoked API key's Postgres roles; nothing to do is no error. */
+    readonly revokeApiKey: (subject: string, apiKeyId: string) => Promise<void>;
     readonly log?: (entry: Record<string, unknown>) => void;
 }
 
@@ -78,6 +86,8 @@ const bearerToken = (req: IncomingMessage): string | undefined =>
 const accountPath = new RegExp(`^${INTERNAL_ACCOUNTS_PATH}/([^/]+)$`);
 const holdPath = new RegExp(`^${INTERNAL_ACCOUNTS_PATH}/([^/]+)/holds/([^/]+)$`);
 const usagePath = new RegExp(`^${INTERNAL_ACCOUNTS_PATH}/([^/]+)/usage$`);
+const userPath = new RegExp(`^${INTERNAL_USERS_PATH}/([^/]+)$`);
+const apiKeyPath = new RegExp(`^${INTERNAL_USERS_PATH}/([^/]+)/api-keys/([^/]+)$`);
 
 /** The route for a path, or undefined; malformed ids and reasons match nothing. */
 function routeFor(api: InternalApi, path: string, query: URLSearchParams): Route | undefined {
@@ -146,6 +156,30 @@ function routeFor(api: InternalApi, path: string, query: URLSearchParams): Route
             handle: async (method) => {
                 const found = method === 'PUT' ? await api.placeHold(id, reason) : await api.liftHold(id, reason);
                 return found ? { status: 204 } : notFound;
+            },
+        };
+    }
+    const user = userPath.exec(path);
+    if (user?.[1] !== undefined && MADAUTH_ID.test(user[1])) {
+        const subject = user[1];
+        return {
+            methods: ['DELETE'],
+            callers: api.madauthCallers,
+            handle: async () => {
+                await api.removeUser(subject);
+                return { status: 204 };
+            },
+        };
+    }
+    const apiKey = apiKeyPath.exec(path);
+    if (apiKey?.[1] !== undefined && apiKey[2] !== undefined && MADAUTH_ID.test(apiKey[1]) && MADAUTH_ID.test(apiKey[2])) {
+        const [, subject, keyId] = apiKey;
+        return {
+            methods: ['DELETE'],
+            callers: api.madauthCallers,
+            handle: async () => {
+                await api.revokeApiKey(subject, keyId);
+                return { status: 204 };
             },
         };
     }
