@@ -47,7 +47,7 @@ const defaultSite = async (): Promise<string | undefined> => {
 
 const homeSite = platform ? await defaultSite() : undefined;
 if (platform && homeSite === undefined) {
-    console.error(`no node is labelled ${COMPUTE_SITE_LABEL}=true,${DEFAULT_SITE_LABEL}=true; run install-multi-node.sh or install-single-node.sh`);
+    console.error(`no node is labelled ${COMPUTE_SITE_LABEL}=true,${DEFAULT_SITE_LABEL}=true; label the nodes as their node setup does (docs/self-hosting.md)`);
     process.exit(1);
 }
 const rows: DatabaseRow[] = homeSite !== undefined ? platformRows(homeSite) : JSON.parse(readFileSync(rowsPath ?? '', 'utf8'));

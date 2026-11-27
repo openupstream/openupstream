@@ -70,9 +70,11 @@ Hetzner dev cluster's settings, then the RuntimeClass `gvisor`. The
 compute nodes join with the label `openupstream.io/compute-site=true`,
 the first also `openupstream.io/default-site=true`, the third with the
 taint `openupstream.io/third-site`, and each node without a description
-gets `Incus VM <name>` ([ADR-0007](../../docs/adr/0007-sites-from-node-labels.md);
-`SITE_DESCRIPTIONS` of the install replaces it). A cluster made before
-then needs `COMPUTE_SITES="hetzner-fsn1 ovh-lim"` once for the install. Run
+gets `Incus VM <name>` (`kubectl annotate --overwrite` changes it). This
+is the only place the nodes are labelled; the install only checks them
+([ADR-0007](../../docs/adr/0007-sites-from-node-labels.md)). k3s applies the
+labels only when a node first joins: a cluster made before needs them once
+by hand (the commands are in the [dev-cluster README](../dev-cluster/README.md#sites)). Run
 again, it completes a VM an interrupted run left without its devices,
 starts stopped VMs and installs nothing that is already there. Each wait
 (VM agent, address, disk) gives up after `WAIT_SECONDS` (300).

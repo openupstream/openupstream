@@ -85,7 +85,7 @@ monitor() { # ip → monitor type
   esac
 }
 
-# Each compute node's (label_sites) Site and IPv4 address, ExternalIP
+# Each compute node's (check_sites) Site and IPv4 address, ExternalIP
 # before InternalIP.
 nodes=$(kubectl get nodes -l "$COMPUTE_LABEL=true" -o json | jq -r --arg zone "$ZONE_LABEL" '.items[] |
   [(.metadata.labels[$zone] // "-"),

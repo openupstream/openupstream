@@ -24,49 +24,6 @@ one (03:00). The Databases' volumes come
 from TopoLVM on the compute nodes (decision 109) and from k3s's
 local-path provisioner on a single node (decision 112).
 
-## Sites
-
-Nothing here names a Site: the nodes say which there are
-([ADR-0007](../../docs/adr/0007-sites-from-node-labels.md)).
-
-| On the node | Meaning | Set by |
-| --- | --- | --- |
-| label `topology.kubernetes.io/zone=<id>` | its Site's id, a label value | the node setup (`up.sh`, `k3s-single-node.sh`) |
-| label `openupstream.io/compute-site=true` | its Site is a compute Site: Databases, Services, Jobs, Traefik, TopoLVM and the platform's pods run there | the node setup; `COMPUTE_SITES` |
-| label `openupstream.io/default-site=true` | its Site is the default Home site, one compute Site | the node setup; `DEFAULT_SITE` |
-| annotation `openupstream.io/site-description` | free text shown next to the id, e.g. `Home VM A` | the node setup; `SITE_DESCRIPTIONS` |
-| taint `openupstream.io/third-site=true:NoSchedule` | on every node outside the compute Sites: only etcd, Garage, Loki and the node agents run there | the node setup |
-
-Before recording the layout, both install scripts set the two labels and
-the annotation on every node of a Site, take them off every other node and
-check the result (`label_sites` in `lib.sh`); a failed check changes
-nothing:
-
-- `COMPUTE_SITES`, space-separated Site ids. Unset, the Sites already
-  labelled stay; with none labelled the install fails and asks for it.
-- `DEFAULT_SITE`, a compute Site. Unset, the labelled default stays while
-  it is a compute Site, else the first compute Site by name takes it.
-  Another value moves it.
-- `SITE_DESCRIPTIONS`, `id=text;id=text`; `id=` removes one. Unset,
-  descriptions stay.
-
-`multi-node` needs a Site on every node, at least two compute Sites (a
-Database's standby goes to another one), at least three Sites in all
-(etcd's and Garage's quorum) and the taint on exactly the nodes outside the
-compute Sites; any number of Sites beyond that. What survives a Site
-failure by running twice (madAuth, the control plane, the dashboard,
-Prometheus, Alertmanager, CoreDNS, the CloudNativePG operator) runs in two
-different compute Sites; Garage and Loki keep three copies in three Sites.
-`single-node` needs exactly one node; its Site becomes the compute and
-default Site.
-
-A cluster installed before ADR-0007 has no compute label; run the install
-once with its compute Sites, e.g. on the dev clusters:
-
-```bash
-COMPUTE_SITES="hetzner-fsn1 ovh-lim" ./install-multi-node.sh
-```
-
 `scripts.test.mjs` tests the scripts' own logic with stubbed `kubectl` and
 `curl` (`npm run test:infra`, part of `npm test`).
 
@@ -76,6 +33,69 @@ or `MAIL=log`), the bunny.net API key in
 `~/.config/openupstream/bunny-api-key`, and DNS zones on bunny.net for the
 domains; [docs/self-hosting.md](../../docs/self-hosting.md) says how to set
 them up.
+
+## Sites
+
+Nothing here names a Site: the nodes say which there are
+([ADR-0007](../../docs/adr/0007-sites-from-node-labels.md)).
+
+| On the node | Meaning |
+| --- | --- |
+| label `topology.kubernetes.io/zone=<id>` | its Site's id, a label value |
+| label `openupstream.io/compute-site=true` | its Site is a compute Site: Databases, Services, Jobs, Traefik, TopoLVM and the platform's pods run there |
+| label `openupstream.io/default-site=true` | its Site is the default Home site, exactly one compute Site |
+| annotation `openupstream.io/site-description` | free text shown next to the id, e.g. `Home VM A` |
+| taint `openupstream.io/third-site=true:NoSchedule` | on every node outside the compute Sites: only etcd, Garage, Loki and the node agents run there |
+
+The node setup sets them, and nothing else does: the labels and the taint
+as k3s flags when the node joins (k3s applies them only at its first
+registration), the description with `kubectl annotate` right after.
+`../dev-cluster-hetzner/up.sh` and `../dev-cluster-incus/up.sh` do it for
+their three VMs, `k3s-single-node.sh` for its node:
+
+```bash
+k3s server ... --node-label topology.kubernetes.io/zone=home-a \
+  --node-label openupstream.io/compute-site=true --node-label openupstream.io/default-site=true
+```
+
+```bash
+kubectl annotate node <node> openupstream.io/site-description='Home VM A'
+```
+
+The install scripts never change a label: before recording the layout they
+check them (`check_sites` in `lib.sh`) and refuse, recording nothing, with
+the `kubectl label` or `kubectl taint` command that fixes each problem.
+Every node needs a Site, and all nodes of a Site the same compute and
+default label; exactly one default Site, a compute one. `multi-node` also
+needs at least two compute Sites (a Database's standby goes to another
+one), at least three Sites in all (etcd's and Garage's quorum) and the
+taint on exactly the nodes outside the compute Sites; any number of Sites
+beyond that. What survives a Site failure by running twice (madAuth, the
+control plane, the dashboard, Prometheus, Alertmanager, CoreDNS, the
+CloudNativePG operator) runs in two different compute Sites; Garage and
+Loki keep three copies in three Sites. `single-node` needs exactly one
+node, labelled compute and default.
+
+While the cluster runs, the alerts `SiteNodeWithoutRole` (a node with
+neither the compute label nor the taint, e.g. one joined by hand) and
+`DefaultSiteNotOne` (`infra/monitoring/rules.yaml`) catch labels that
+drifted.
+
+To move the default Site, label the new one and take the label off the
+old one:
+
+```bash
+kubectl label nodes -l topology.kubernetes.io/zone=<new> openupstream.io/default-site=true
+kubectl label nodes -l topology.kubernetes.io/zone=<old> openupstream.io/default-site-
+```
+
+A cluster set up before ADR-0007 has neither label; label it once, e.g. a
+dev cluster:
+
+```bash
+kubectl label nodes -l 'topology.kubernetes.io/zone in (hetzner-fsn1,ovh-lim)' openupstream.io/compute-site=true
+kubectl label nodes -l topology.kubernetes.io/zone=hetzner-fsn1 openupstream.io/default-site=true
+```
 
 ## A single node
 
@@ -90,11 +110,11 @@ are the node's own disk (`DATABASE_VOLUMES=shared`, decision 124), so a
 Database's disk use shown by the API is Postgres's own figure. Usage is
 shown and metered as on any cluster.
 The node's
-Site is `SITE` (default `hetzner-fsn1`), the only compute Site and the
-default one.
+Site is `SITE` (default `hetzner-fsn1`), labelled at join as the only
+compute Site and the default one; `SITE_DESCRIPTION` is optional.
 
 ```bash
-SITE=home ./k3s-single-node.sh root@192.168.1.50
+SITE=home SITE_DESCRIPTION='Home mini PC' ./k3s-single-node.sh root@192.168.1.50
 ```
 
 It installs our AppArmor profile for containers (`infra/apparmor`,
@@ -121,7 +141,8 @@ the tailnet. Customer containers cannot reach the tailnet: the egress
 policies leave out `100.64.0.0/10` and `fc00::/7` and allow the node's own
 addresses on 80 and 443 only (decision 105). A machine that already runs k3s can be used as it is
 if gVisor was installed before k3s first started (`infra/gvisor`) and the
-node carries the labels `topology.kubernetes.io/zone=<Site id>` and
+node carries the labels `topology.kubernetes.io/zone=<Site id>`,
+`openupstream.io/compute-site=true`, `openupstream.io/default-site=true` and
 `openupstream.io/gvisor=true`.
 
 ```bash
@@ -161,8 +182,8 @@ export KUBECONFIG=$PWD/../dev-cluster-hetzner/.state/kubeconfig
 ./install-multi-node.sh
 ```
 
-Both dev clusters' `up.sh` label the nodes, so no `COMPUTE_SITES` is
-needed. `PLATFORM_DOMAIN` and `CUSTOMER_DOMAIN` default to `dev.openupstream.com`
+Both dev clusters' `up.sh` label the nodes when they join (see "Sites").
+`PLATFORM_DOMAIN` and `CUSTOMER_DOMAIN` default to `dev.openupstream.com`
 and `dev.openupstream.app`, `CLUSTER_ISSUER` to Let's Encrypt staging.
 
 ## The steps

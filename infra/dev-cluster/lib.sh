@@ -12,7 +12,8 @@
 #   everything, no failover. For development only.
 #
 # Nothing here names a Site: the nodes' labels say which Sites there are
-# (ADR-0007), and label_sites sets the compute and default labels.
+# (ADR-0007). The node setup sets them when a node joins (k3s
+# --node-label); check_sites only reads them.
 
 LAYOUT_NAMESPACE=openupstream-system
 LAYOUT_CONFIGMAP=cluster-layout
@@ -23,7 +24,6 @@ ZONE_LABEL=topology.kubernetes.io/zone
 COMPUTE_LABEL=openupstream.io/compute-site
 # The nodes of the default Home site, one compute Site.
 DEFAULT_LABEL=openupstream.io/default-site
-DESCRIPTION_ANNOTATION=openupstream.io/site-description
 # Every node outside the compute Sites carries it, as NoSchedule.
 THIRD_SITE_TAINT=openupstream.io/third-site
 
@@ -32,138 +32,93 @@ has() { [[ " $1 " == *" $2 "* ]]; } # list, word
 # Whether a Site id is a valid label value: at most 63 letters, digits,
 # `-`, `_` and `.`, starting and ending with a letter or digit.
 valid_site_id() { [[ $1 =~ ^[A-Za-z0-9]([A-Za-z0-9_.-]{0,61}[A-Za-z0-9])?$ ]]; }
-# Trims leading and trailing whitespace.
-trim() { local s=$1; s=${s#"${s%%[![:space:]]*}"}; echo "${s%"${s##*[![:space:]]}"}"; }
 
-# Sets and checks the Sites' node labels (ADR-0007), before record_layout;
-# changes nothing when a check fails:
-#
-# - COMPUTE_SITES, space-separated Site ids: their nodes get the compute
-#   label, every other node loses it. Unset, the Sites with a node already
-#   labelled stay the compute Sites; with none labelled it fails.
-# - DEFAULT_SITE, a compute Site: its nodes get the default label, every
-#   other node loses it. Unset, the labelled default stays while it is a
-#   compute Site, else the first compute Site by name becomes it.
-# - SITE_DESCRIPTIONS, optional, `id=text;id=text`: the annotation on every
-#   node of that Site; `id=` removes it. Unset, descriptions stay as they
-#   are.
-#
-# multi-node needs a Site on every node, at least two compute Sites (a
-# Database's standby goes to another one), at least three Sites in all
-# (etcd's and Garage's quorum), the taint THIRD_SITE_TAINT=true:NoSchedule
-# on every other node and on no compute node. single-node needs exactly one
-# node with a Site, which becomes the compute and default Site.
-label_sites() { # single-node | multi-node
-  local nodes name site compute default sites unzoned count entry text found
-  local is_compute is_default tainted current args entries=() untainted= tainted_compute=
-  # One line per node: name, Site (- for none), compute, default, tainted,
-  # description.
+# Checks the Sites' node labels (ADR-0007) before record_layout, and
+# changes nothing: every node has a Site; within a Site all nodes agree on
+# the compute and the default label; exactly one default Site, a compute
+# Site. multi-node also needs at least two compute Sites (a Database's
+# standby goes to another one), at least three Sites in all (etcd's and
+# Garage's quorum), the taint THIRD_SITE_TAINT=true:NoSchedule on every
+# node outside the compute Sites and on none inside. single-node needs
+# exactly one node, labelled compute and default. Each problem is printed
+# with the command that fixes it; prints the Sites when all is well.
+check_sites() { # single-node | multi-node
+  local nodes problems= sites= compute= default= unzoned name site is_compute is_default tainted total ncompute ndefault count first
+  # One line per node: name, Site (- for none), compute, default, tainted.
   nodes=$(kubectl get nodes -o json | jq -r --arg zone "$ZONE_LABEL" --arg compute "$COMPUTE_LABEL" \
-    --arg default "$DEFAULT_LABEL" --arg taint "$THIRD_SITE_TAINT" --arg description "$DESCRIPTION_ANNOTATION" \
+    --arg default "$DEFAULT_LABEL" --arg taint "$THIRD_SITE_TAINT" \
     '.items[] | [.metadata.name, (.metadata.labels[$zone] // "-"),
       (.metadata.labels[$compute] == "true"), (.metadata.labels[$default] == "true"),
-      any(.spec.taints[]?; .key == $taint and .effect == "NoSchedule"),
-      ((.metadata.annotations // {})[$description] // "" | gsub("\\s+"; " "))] | map(tostring) | join(" ")') ||
+      any(.spec.taints[]?; .key == $taint and .effect == "NoSchedule")] | map(tostring) | join(" ")') ||
     { echo "cannot read the nodes; is KUBECONFIG right?" >&2; return 1; }
   [[ -n $nodes ]] || { echo "the cluster has no nodes" >&2; return 1; }
-  count=$(wc -l <<<"$nodes" | tr -d ' ')
-  sites=$(awk '$2 != "-" {print $2}' <<<"$nodes" | LC_ALL=C sort -u | xargs)
-  unzoned=$(awk '$2 == "-" {print $1}' <<<"$nodes" | xargs)
-  [[ -z $unzoned ]] ||
-    { echo "no $ZONE_LABEL on the node(s) $unzoned: every node needs its Site's id as that label" >&2; return 1; }
+  problem() { problems+="- $1"$'\n'; }
 
+  for name in $(awk '$2 == "-" {print $1}' <<<"$nodes"); do
+    problem "node $name has no Site: kubectl label node $name $ZONE_LABEL=<Site id>"
+  done
   if [[ $1 == single-node ]]; then
+    count=$(wc -l <<<"$nodes" | tr -d ' ')
     if [[ $count -ne 1 ]]; then
       echo "the cluster has $count nodes; install-single-node.sh needs exactly one" \
         "(install-multi-node.sh is for nodes in three or more Sites)" >&2
       return 1
     fi
-    for entry in "COMPUTE_SITES=${COMPUTE_SITES:-}" "DEFAULT_SITE=${DEFAULT_SITE:-}"; do
-      [[ -z ${entry#*=} || ${entry#*=} == "$sites" ]] ||
-        { echo "single-node: ${entry%%=*} can only be the node's Site $sites" >&2; return 1; }
-    done
-    compute=$sites default=$sites
-  else
-    if [[ -n ${COMPUTE_SITES:-} ]]; then
-      compute=$(tr -s ' \t' '\n' <<<"$COMPUTE_SITES" | grep -v '^$' | LC_ALL=C sort -u | xargs)
-      for site in $compute; do
-        has "$sites" "$site" || { echo "COMPUTE_SITES names $site, but no node has $ZONE_LABEL=$site (Sites: $sites)" >&2; return 1; }
-      done
-    else
-      compute=$(awk '$3 == "true" {print $2}' <<<"$nodes" | LC_ALL=C sort -u | xargs)
-      [[ -n $compute ]] ||
-        { echo "no node is labelled $COMPUTE_LABEL=true; set COMPUTE_SITES to the compute Sites' ids (Sites: $sites)," \
-          "e.g. COMPUTE_SITES=\"${sites% *}\"" >&2; return 1; }
+    read -r name site is_compute is_default _ <<<"$nodes"
+    [[ $is_compute == true && $is_default == true ]] ||
+      problem "node $name is not labelled as the compute and default Site: kubectl label node $name $COMPUTE_LABEL=true $DEFAULT_LABEL=true"
+  fi
+
+  # Per Site: its nodes, how many are compute, how many default.
+  while read -r site total ncompute ndefault; do
+    [[ -n $site ]] || continue
+    sites+=" $site"
+    if ((ncompute > 0)); then
+      compute+=" $site"
+      ((ncompute == total)) ||
+        problem "only some nodes of $site are labelled $COMPUTE_LABEL=true: kubectl label nodes -l $ZONE_LABEL=$site $COMPUTE_LABEL=true (or $COMPUTE_LABEL- on all of them)"
     fi
+    if ((ndefault > 0)); then
+      default+=" $site"
+      ((ndefault == total)) ||
+        problem "only some nodes of $site are labelled $DEFAULT_LABEL=true: kubectl label nodes -l $ZONE_LABEL=$site $DEFAULT_LABEL=true (or $DEFAULT_LABEL- on all of them)"
+    fi
+  done <<<"$(awk '$2 != "-" {n[$2]++; if ($3 == "true") c[$2]++; if ($4 == "true") d[$2]++}
+    END {for (s in n) print s, n[s], c[s] + 0, d[s] + 0}' <<<"$nodes" | LC_ALL=C sort)"
+  sites=${sites# } compute=${compute# } default=${default# }
+  first=${compute%% *}
+
+  if [[ $1 == multi-node ]]; then
     [[ $(wc -w <<<"$compute") -ge 2 ]] ||
-      { echo "multi-node needs at least two compute Sites, for a Database's standby; compute Sites: $compute" >&2; return 1; }
+      problem "multi-node needs at least two compute Sites, for a Database's standby (compute Sites: ${compute:-none}):\
+ kubectl label nodes -l $ZONE_LABEL=<Site> $COMPUTE_LABEL=true, and kubectl taint nodes -l $ZONE_LABEL=<Site> $THIRD_SITE_TAINT-"
     [[ $(wc -w <<<"$sites") -ge 3 ]] ||
-      { echo "multi-node needs nodes in at least three Sites, for etcd's and Garage's quorum; Sites: $sites" >&2; return 1; }
-    while read -r name site _ _ tainted _; do
+      problem "multi-node needs nodes in at least three Sites, for etcd's and Garage's quorum (Sites: $sites): join a node of another Site"
+    while read -r name site _ _ tainted; do
+      [[ $site != - ]] || continue
       if has "$compute" "$site"; then
-        [[ $tainted == false ]] || tainted_compute+=" $name"
-      else
-        [[ $tainted == true ]] || untainted+=" $name"
+        [[ $tainted == false ]] ||
+          problem "node $name is in the compute Site $site but carries the taint $THIRD_SITE_TAINT: kubectl taint node $name $THIRD_SITE_TAINT-"
+      elif [[ $tainted == false ]]; then
+        problem "node $name is in no compute Site but lacks the taint: kubectl taint node $name $THIRD_SITE_TAINT=true:NoSchedule"
       fi
     done <<<"$nodes"
-    [[ -z $untainted ]] ||
-      { echo "the node(s)$untainted are in no compute Site but lack the taint $THIRD_SITE_TAINT=true:NoSchedule;" \
-        "kubectl taint node <name> $THIRD_SITE_TAINT=true:NoSchedule, or add their Site to COMPUTE_SITES" >&2; return 1; }
-    [[ -z $tainted_compute ]] ||
-      { echo "the node(s)$tainted_compute are in a compute Site but carry the taint $THIRD_SITE_TAINT;" \
-        "kubectl taint node <name> $THIRD_SITE_TAINT-" >&2; return 1; }
-    if [[ -n ${DEFAULT_SITE:-} ]]; then
-      has "$compute" "$DEFAULT_SITE" ||
-        { echo "DEFAULT_SITE $DEFAULT_SITE is not a compute Site ($compute)" >&2; return 1; }
-      default=$DEFAULT_SITE
-    else
-      default=
-      for site in $(awk '$4 == "true" {print $2}' <<<"$nodes" | LC_ALL=C sort -u); do
-        if has "$compute" "$site"; then default=$site; break; fi
-      done
-      [[ -n $default ]] || default=${compute%% *}
-    fi
   fi
 
-  if [[ -n ${SITE_DESCRIPTIONS+set} ]]; then
-    IFS=';' read -r -a entries <<<"$SITE_DESCRIPTIONS"
-    for entry in ${entries[@]+"${entries[@]}"}; do
-      [[ -n $(trim "$entry") ]] || continue
-      [[ $entry == *=* ]] || { echo "SITE_DESCRIPTIONS: '$entry' is not id=text" >&2; return 1; }
-      site=$(trim "${entry%%=*}")
-      has "$sites" "$site" || { echo "SITE_DESCRIPTIONS names $site, but no node has $ZONE_LABEL=$site" >&2; return 1; }
-    done
-  fi
+  case $(wc -w <<<"$default" | tr -d ' ') in
+    0) problem "no default Site: kubectl label nodes -l $ZONE_LABEL=${first:-<compute Site>} $DEFAULT_LABEL=true" ;;
+    1) ;;
+    *) problem "more than one default Site ($default): keep one, e.g. kubectl label nodes -l $ZONE_LABEL=${default##* } $DEFAULT_LABEL-" ;;
+  esac
+  for site in $default; do
+    has "$compute" "$site" ||
+      problem "the default Site $site is no compute Site: kubectl label nodes -l $ZONE_LABEL=$site $DEFAULT_LABEL-, then label a compute Site's nodes $DEFAULT_LABEL=true"
+  done
 
-  # Every check passed: change only what differs.
-  while read -r name site is_compute is_default _ current; do
-    args=()
-    if has "$compute" "$site"; then
-      [[ $is_compute == true ]] || args+=("$COMPUTE_LABEL=true")
-    elif [[ $is_compute == true ]]; then
-      args+=("$COMPUTE_LABEL-")
-    fi
-    if [[ $site == "$default" ]]; then
-      [[ $is_default == true ]] || args+=("$DEFAULT_LABEL=true")
-    elif [[ $is_default == true ]]; then
-      args+=("$DEFAULT_LABEL-")
-    fi
-    if [[ ${#args[@]} -gt 0 ]]; then
-      kubectl label node "$name" --overwrite "${args[@]}" >/dev/null </dev/null
-    fi
-    found= text=
-    for entry in ${entries[@]+"${entries[@]}"}; do
-      # Whitespace runs collapsed, as the nodes' descriptions are read above.
-      if [[ $entry == *=* && $(trim "${entry%%=*}") == "$site" ]]; then found=1 text=$(trim "$(tr -s '[:space:]' ' ' <<<"${entry#*=}")"); fi
-    done
-    if [[ -n $found && $text != "$current" ]]; then
-      if [[ -n $text ]]; then
-        kubectl annotate node "$name" --overwrite "$DESCRIPTION_ANNOTATION=$text" >/dev/null </dev/null
-      else
-        kubectl annotate node "$name" "$DESCRIPTION_ANNOTATION-" >/dev/null </dev/null
-      fi
-    fi
-  done <<<"$nodes"
+  if [[ -n $problems ]]; then
+    printf 'the nodes'"'"' Site labels need fixing (ADR-0007; infra/dev-cluster/README.md, "Sites"):\n%s' "$problems" >&2
+    return 1
+  fi
   echo "Sites: $sites; compute Sites: $compute; default Site: $default"
 }
 

@@ -17,7 +17,10 @@
 #
 # SITE is the node's Site id (default hetzner-fsn1), e.g. SITE=home. It is
 # set when k3s first registers the node; the platform's data names it as
-# the Home site, so it stays.
+# the Home site, so it stays. SITE_DESCRIPTION, if set, becomes the node's
+# openupstream.io/site-description, shown next to the id (on every run).
+# This script is the only place that labels the node (ADR-0007);
+# install-single-node.sh only checks it.
 #
 # Then install the platform with install-single-node.sh. Running it again
 # on a machine that already has k3s installs nothing and only fetches the
@@ -103,5 +106,9 @@ chmod 600 "$STATE/kubeconfig"
 
 KUBECONFIG=$STATE/kubeconfig kubectl wait --for=condition=Ready node --all --timeout=5m
 KUBECONFIG=$STATE/kubeconfig kubectl apply -f ../gvisor/runtimeclass.yaml >/dev/null
+if [[ -n ${SITE_DESCRIPTION:-} ]]; then
+  KUBECONFIG=$STATE/kubeconfig kubectl annotate node --all --overwrite \
+    openupstream.io/site-description="$SITE_DESCRIPTION" >/dev/null
+fi
 echo "export KUBECONFIG=$PWD/$STATE/kubeconfig"
 echo "then: PLATFORM_DOMAIN=… CUSTOMER_DOMAIN=… ./install-single-node.sh"

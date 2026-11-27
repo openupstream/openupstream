@@ -30,8 +30,10 @@ which is why it lives in the monorepo.
   control plane's sidecar (ARCHITECTURE.md, decision 63).
 - `dev-cluster/` — installs the platform onto a k3s cluster for
   development, with nodes in three or more Sites or on a single node,
-  labels the Sites' nodes (ADR-0007), and sets up one
-  Linux machine as such a node (ARCHITECTURE.md, decision 112).
+  after checking the Sites' node labels (ADR-0007), and sets up one Linux
+  machine as such a node (ARCHITECTURE.md, decision 112). The node setup
+  (`dev-cluster-hetzner/up.sh`, `dev-cluster-incus/up.sh`,
+  `dev-cluster/k3s-single-node.sh`) is the only place that labels nodes.
 - `dev-cluster-hetzner/` — a throwaway three-Site k3s cluster on Hetzner
   Cloud for one working session (ARCHITECTURE.md, decisions 33 and 52).
 

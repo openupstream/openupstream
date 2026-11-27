@@ -41,15 +41,25 @@ The Sites are what the nodes say. Nothing in the code names a Site.
      free text such as `Falkenstein (Hetzner)` or `Home VM A`, shown next
      to the id. When a Site's nodes disagree, the oldest node's wins;
      without one the id is shown alone.
-2. **The install sets and checks the labels.** `install-multi-node.sh` and
-   `install-single-node.sh` label the nodes from `COMPUTE_SITES`,
-   `DEFAULT_SITE` and `SITE_DESCRIPTIONS`. Unset, `COMPUTE_SITES` keeps
-   the Sites already labelled, and `DEFAULT_SITE` keeps the labelled
-   default while it is still a compute Site, else takes the first compute
-   Site by name. Running it again with another `DEFAULT_SITE` moves the
-   default. The node setup scripts (`infra/dev-cluster-hetzner/up.sh`,
-   `infra/dev-cluster-incus/up.sh`, `infra/dev-cluster/k3s-single-node.sh`)
-   set the compute label when they create a node.
+2. **One writer: the node setup.** A node gets its labels when it joins
+   (k3s `--node-label`) and its description right after (`kubectl
+   annotate`), from the script that sets the machine up
+   (`infra/dev-cluster-hetzner/up.sh`, `infra/dev-cluster-incus/up.sh`,
+   `infra/dev-cluster/k3s-single-node.sh`, and the production node setup
+   of decision 117). A node's role is a property of the machine, set where
+   the machine is made, as Kubernetes' own well-known labels are. Moving
+   the default Site, or a node's role, is a `kubectl label`. Everything
+   else only reads: the scheduler, the control plane (`get` and `list` on
+   nodes, never `patch`) and the bootstrap.
+   - `install-multi-node.sh` and `install-single-node.sh` check the labels
+     and change nothing: they refuse a layout that breaks the rules below
+     and name the `kubectl` command that fixes it.
+   - Two alerts check them while the cluster runs, so a node added,
+     removed or relabelled later is caught: `SiteNodeWithoutRole` (a node
+     in a Site with neither the compute label nor the taint) and
+     `DefaultSiteNotOne` (zero or several default Sites), from
+     kube-state-metrics' `kube_node_labels` with the three labels
+     allowed.
 3. **Any number of Sites.** `multi-node` needs at least two compute Sites
    (a Database's standby must go to another one) and at least three Sites
    in all (etcd's and Garage's quorum); any number of Sites beyond that,
@@ -77,8 +87,13 @@ The Sites are what the nodes say. Nothing in the code names a Site.
 ## Consequences
 
 - Production and the existing dev clusters keep their Site ids, so no row
-  changes. An existing cluster needs the compute label once:
-  `COMPUTE_SITES="hetzner-fsn1 ovh-lim" ./install-multi-node.sh`.
+  changes. An existing cluster needs the labels once: `kubectl label nodes
+  -l 'topology.kubernetes.io/zone in (hetzner-fsn1,ovh-lim)'
+  openupstream.io/compute-site=true` and `kubectl label nodes -l
+  topology.kubernetes.io/zone=hetzner-fsn1 openupstream.io/default-site=true`.
+- No install configuration holds the Sites: no variables, no ConfigMap.
+  A node that joins without its labels gets no customer pods until it is
+  labelled, and the alert says so.
 - A self-hoster names the Sites after their own places, and the dashboard
   shows "Home VM A · home-a" instead of a provider they do not use.
 - The list is runtime state. A Site whose nodes are all deleted (not just
@@ -95,5 +110,12 @@ The Sites are what the nodes say. Nothing in the code names a Site.
   requests that need a Site answer 503.
 - Breaking for SDK users who imported `COMPUTE_SITES` or relied on `Site`
   being a union of two names.
+- Considered and turned down: the install writing the labels from
+  variables (a second writer, and adding a node meant running the whole
+  install again); the Sites in the control plane's Postgres (the scheduler
+  can only place pods by node labels, so it would be a second copy; the
+  bootstrap runs before that Postgres exists); an admin API that writes
+  the labels (the control plane would need `patch` on nodes, so a bug or a
+  leaked token could move every workload).
 - Amends ADR-0002, which still describes production; its "two compute
   Sites and one third Site" is now one layout among several.

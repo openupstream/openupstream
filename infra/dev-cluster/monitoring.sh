@@ -28,7 +28,7 @@ ROOT=$(git rev-parse --show-toplevel)
 source ./lib.sh
 load_layout
 # One Loki and one copy per Site up to three: min(3, Sites), which is 3 in
-# multi-node (label_sites refuses fewer Sites, ADR-0007).
+# multi-node (check_sites refuses fewer Sites, ADR-0007).
 LOKI_REPLICAS=3
 [[ $LAYOUT == single-node ]] && LOKI_REPLICAS=1
 NS=monitoring

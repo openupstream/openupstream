@@ -29,7 +29,7 @@ load_layout
 load_domains
 PLATFORM_NS=project-00000000-0000-4000-8000-000000000002
 # One Garage node and copy per Site up to three: min(3, Sites), which is 3
-# in multi-node (label_sites refuses fewer Sites, ADR-0007).
+# in multi-node (check_sites refuses fewer Sites, ADR-0007).
 GARAGE_NODES=3
 [[ $LAYOUT == single-node ]] && GARAGE_NODES=1
 PODS=()

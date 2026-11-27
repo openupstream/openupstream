@@ -15,7 +15,8 @@ const stubs = mkdtempSync(join(tmpdir(), 'dev-cluster-stubs-'));
 
 // kubectl: the layout from LAYOUT_STUB (KUBECTL_FAIL=1 fails every call),
 // whether a node has the gVisor label from LABELED_STUB, the nodes as JSON
-// from NODES_JSON_STUB. Writes, node labels and annotations included, go to
+// from NODES_JSON_STUB. Writes, node labels and annotations included (which
+// check_sites must never make), go to
 // $STUB_LOG.
 writeFileSync(
     join(stubs, 'kubectl'),
@@ -236,148 +237,75 @@ test("platform.sh refuses a WEBSITE_PROJECT_ID that is not a Project's id, befor
     }
 });
 
-const labelSites = (layout, env) => run(`set -euo pipefail; source ./lib.sh; label_sites ${layout}`, env);
-const labelCalls = (log) => log.split('\n').filter(Boolean);
-// The production layout, labelled: two compute Sites, the first the default,
-// and a tainted third Site.
-const labelled = nodes(
+const checkSites = (layout, env) => run(`set -euo pipefail; source ./lib.sh; check_sites ${layout}`, env);
+// The production layout: two compute Sites, the first the default, and a
+// tainted third Site.
+const valid = nodes(
     ['a', 'site-a', { compute: true, default: true }],
+    ['a2', 'site-a', { compute: true, default: true }],
     ['b', 'site-b', { compute: true }],
     ['c', 'site-c', { tainted: true }],
 );
 
-test('label_sites keeps the labelled compute and default Sites, changing nothing', () => {
-    const { status, stdout, stderr, log } = labelSites('multi-node', { NODES_JSON_STUB: labelled });
+test('check_sites passes a labelled multi-node layout and changes nothing', () => {
+    const { status, stdout, stderr, log } = checkSites('multi-node', { NODES_JSON_STUB: valid });
     assert.equal(status, 0, stderr);
     assert.equal(stdout.trim(), 'Sites: site-a site-b site-c; compute Sites: site-a site-b; default Site: site-a');
-    assert.equal(log, '');
+    assert.equal(log, '', 'no label or annotate call');
 });
 
-test('label_sites labels every node of a compute Site, also one that joined later', () => {
-    const { status, stderr, log } = labelSites('multi-node', {
-        NODES_JSON_STUB: nodes(
-            ['a', 'site-a', { compute: true, default: true }],
-            ['a2', 'site-a'],
-            ['b', 'site-b', { compute: true }],
-            ['c', 'site-c', { tainted: true }],
-        ),
-    });
-    assert.equal(status, 0, stderr);
-    assert.deepEqual(labelCalls(log), ['label node a2 --overwrite openupstream.io/compute-site=true openupstream.io/default-site=true']);
-});
-
-test('label_sites without COMPUTE_SITES on an unlabelled cluster asks for them, changing nothing', () => {
-    const { status, stderr, log } = labelSites('multi-node', {
-        NODES_JSON_STUB: nodes(['a', 'site-a'], ['b', 'site-b'], ['c', 'site-c', { tainted: true }]),
-    });
-    assert.notEqual(status, 0);
-    assert.match(stderr, /no node is labelled openupstream.io\/compute-site=true; set COMPUTE_SITES/);
-    assert.equal(log, '');
-});
-
-test('label_sites labels the COMPUTE_SITES, the first by name the default', () => {
-    const { status, stdout, stderr, log } = labelSites('multi-node', {
-        NODES_JSON_STUB: nodes(['b', 'site-b'], ['a', 'site-a'], ['c', 'site-c', { tainted: true }]),
-        COMPUTE_SITES: ' site-b  site-a ',
-    });
-    assert.equal(status, 0, stderr);
-    assert.match(stdout, /compute Sites: site-a site-b; default Site: site-a/);
-    assert.deepEqual(labelCalls(log), [
-        'label node b --overwrite openupstream.io/compute-site=true',
-        'label node a --overwrite openupstream.io/compute-site=true openupstream.io/default-site=true',
-    ]);
-});
-
-test('label_sites moves the default to DEFAULT_SITE, and refuses one that is no compute Site', () => {
-    const moved = labelSites('multi-node', { NODES_JSON_STUB: labelled, DEFAULT_SITE: 'site-b' });
-    assert.equal(moved.status, 0, moved.stderr);
-    assert.deepEqual(labelCalls(moved.log), [
-        'label node a --overwrite openupstream.io/default-site-',
-        'label node b --overwrite openupstream.io/default-site=true',
-    ]);
-    const third = labelSites('multi-node', { NODES_JSON_STUB: labelled, DEFAULT_SITE: 'site-c' });
-    assert.notEqual(third.status, 0);
-    assert.match(third.stderr, /DEFAULT_SITE site-c is not a compute Site/);
-    assert.equal(third.log, '');
-});
-
-test('label_sites takes the compute label off a Site left out of COMPUTE_SITES, and its default to the first compute Site', () => {
-    const { status, stderr, log } = labelSites('multi-node', {
-        NODES_JSON_STUB: nodes(
-            ['a', 'site-a', { compute: true, default: true, tainted: true }],
-            ['b', 'site-b', { compute: true }],
-            ['c', 'site-c'],
-            ['d', 'site-d', { tainted: true }],
-        ),
-        COMPUTE_SITES: 'site-b site-c',
-    });
-    assert.equal(status, 0, stderr);
-    assert.deepEqual(labelCalls(log), [
-        'label node a --overwrite openupstream.io/compute-site- openupstream.io/default-site-',
-        'label node b --overwrite openupstream.io/default-site=true',
-        'label node c --overwrite openupstream.io/compute-site=true',
-    ]);
-});
-
-test('label_sites accepts three compute Sites and no other', () => {
-    const { status, stderr } = labelSites('multi-node', {
-        NODES_JSON_STUB: nodes(['a', 'site-a'], ['b', 'site-b'], ['c', 'site-c']),
-        COMPUTE_SITES: 'site-a site-b site-c',
+test('check_sites passes three compute Sites and no other', () => {
+    const { status, stderr } = checkSites('multi-node', {
+        NODES_JSON_STUB: nodes(['a', 'site-a', { compute: true }], ['b', 'site-b', { compute: true, default: true }], ['c', 'site-c', { compute: true }]),
     });
     assert.equal(status, 0, stderr);
 });
 
-test('label_sites refuses a multi-node layout that breaks a rule, changing nothing', () => {
+test('check_sites refuses each broken multi-node layout with the command that fixes it', () => {
+    const a = ['a', 'site-a', { compute: true, default: true }];
+    const b = ['b', 'site-b', { compute: true }];
+    const c = ['c', 'site-c', { tainted: true }];
     const cases = [
-        [{ NODES_JSON_STUB: labelled, COMPUTE_SITES: 'site-a' }, /at least two compute Sites/],
-        [{ NODES_JSON_STUB: nodes(['a', 'site-a', { compute: true }], ['b', 'site-b', { compute: true }]) }, /at least three Sites/],
-        [{ NODES_JSON_STUB: nodes(['a', 'site-a', { compute: true }], ['b', 'site-b', { compute: true }], ['c', 'site-c']) }, /node\(s\) c are in no compute Site but lack the taint openupstream.io\/third-site=true:NoSchedule/],
-        [{ NODES_JSON_STUB: labelled, COMPUTE_SITES: 'site-a site-b site-c' }, /node\(s\) c are in a compute Site but carry the taint/],
-        [{ NODES_JSON_STUB: labelled, COMPUTE_SITES: 'site-a site-x' }, /COMPUTE_SITES names site-x, but no node has/],
-        [{ NODES_JSON_STUB: nodes(['a', 'site-a', { compute: true }], ['b', 'site-b', { compute: true }], ['c', 'site-c', { tainted: true }], ['d', null]) }, /no topology.kubernetes.io\/zone on the node\(s\) d/],
-        [{ NODES_JSON_STUB: labelled, SITE_DESCRIPTIONS: 'site-x=Elsewhere' }, /SITE_DESCRIPTIONS names site-x/],
-        [{ NODES_JSON_STUB: labelled, SITE_DESCRIPTIONS: 'site-a' }, /'site-a' is not id=text/],
-        [{ KUBECTL_FAIL: '1' }, /cannot read the nodes/],
+        [nodes(a, b, c, ['d', null, { tainted: true }]), /node d has no Site: kubectl label node d topology.kubernetes.io\/zone=<Site id>/],
+        [nodes(a, ['a2', 'site-a', { default: true }], b, c), /only some nodes of site-a are labelled openupstream.io\/compute-site=true: kubectl label nodes -l topology.kubernetes.io\/zone=site-a openupstream.io\/compute-site=true/],
+        [nodes(a, ['a2', 'site-a', { compute: true }], b, c), /only some nodes of site-a are labelled openupstream.io\/default-site=true: kubectl label nodes -l topology.kubernetes.io\/zone=site-a openupstream.io\/default-site=true/],
+        [nodes(a, ['b', 'site-b', { tainted: true }], c), /at least two compute Sites.*kubectl label nodes -l topology.kubernetes.io\/zone=<Site> openupstream.io\/compute-site=true/],
+        [nodes(a, b), /at least three Sites/],
+        [nodes(a, b, ['c', 'site-c']), /node c is in no compute Site but lacks the taint: kubectl taint node c openupstream.io\/third-site=true:NoSchedule/],
+        [nodes(a, ['b', 'site-b', { compute: true, tainted: true }], c), /node b is in the compute Site site-b but carries the taint openupstream.io\/third-site: kubectl taint node b openupstream.io\/third-site-/],
+        [nodes(['a', 'site-a', { compute: true }], b, c), /no default Site: kubectl label nodes -l topology.kubernetes.io\/zone=site-a openupstream.io\/default-site=true/],
+        [nodes(a, ['b', 'site-b', { compute: true, default: true }], c), /more than one default Site \(site-a site-b\): keep one, e.g. kubectl label nodes -l topology.kubernetes.io\/zone=site-b openupstream.io\/default-site-/],
+        [nodes(['a', 'site-a', { compute: true }], b, ['c', 'site-c', { tainted: true, default: true }]), /the default Site site-c is no compute Site: kubectl label nodes -l topology.kubernetes.io\/zone=site-c openupstream.io\/default-site-/],
     ];
-    for (const [env, message] of cases) {
-        const { status, stderr, log } = labelSites('multi-node', env);
-        assert.notEqual(status, 0, JSON.stringify(env));
+    for (const [json, message] of cases) {
+        const { status, stderr, log } = checkSites('multi-node', { NODES_JSON_STUB: json });
+        assert.notEqual(status, 0, json);
+        assert.match(stderr, /Site labels need fixing/);
         assert.match(stderr, message);
         assert.equal(log, '', 'changes nothing');
     }
+    const unreachable = checkSites('multi-node', { KUBECTL_FAIL: '1' });
+    assert.notEqual(unreachable.status, 0);
+    assert.match(unreachable.stderr, /cannot read the nodes/);
 });
 
-test('label_sites sets, keeps and removes the SITE_DESCRIPTIONS on every node of their Site', () => {
-    const { status, stderr, log } = labelSites('multi-node', {
-        NODES_JSON_STUB: nodes(
-            ['a', 'site-a', { compute: true, default: true }],
-            ['a2', 'site-a', { compute: true, default: true, description: 'Home VM A' }],
-            ['b', 'site-b', { compute: true, description: 'Home VM B' }],
-            ['c', 'site-c', { tainted: true, description: 'old' }],
-        ),
-        // Runs of whitespace count as one space, as they are read from the nodes.
-        SITE_DESCRIPTIONS: 'site-a=Home VM A; site-b = Home  VM B ;site-c=',
-    });
-    assert.equal(status, 0, stderr);
-    assert.deepEqual(labelCalls(log), [
-        'annotate node a --overwrite openupstream.io/site-description=Home VM A',
-        'annotate node c openupstream.io/site-description-',
-    ]);
-});
-
-test('label_sites on a single node makes its Site the compute and default Site, and refuses any other', () => {
-    const one = nodes(['mini', 'home']);
-    const ok = labelSites('single-node', { NODES_JSON_STUB: one });
+test('check_sites passes one node labelled compute and default, and refuses anything else', () => {
+    const ok = checkSites('single-node', { NODES_JSON_STUB: nodes(['mini', 'home', { compute: true, default: true }]) });
     assert.equal(ok.status, 0, ok.stderr);
-    assert.deepEqual(labelCalls(ok.log), ['label node mini --overwrite openupstream.io/compute-site=true openupstream.io/default-site=true']);
-    for (const env of [{ COMPUTE_SITES: 'other' }, { DEFAULT_SITE: 'other' }]) {
-        const refused = labelSites('single-node', { NODES_JSON_STUB: one, ...env });
-        assert.notEqual(refused.status, 0);
-        assert.match(refused.stderr, /can only be the node's Site home/);
-        assert.equal(refused.log, '');
+    assert.equal(ok.stdout.trim(), 'Sites: home; compute Sites: home; default Site: home');
+    assert.equal(ok.log, '');
+    const cases = [
+        [nodes(['mini', 'home']), /node mini is not labelled as the compute and default Site: kubectl label node mini openupstream.io\/compute-site=true openupstream.io\/default-site=true/],
+        [nodes(['mini', 'home', { compute: true }]), /kubectl label node mini openupstream.io\/compute-site=true openupstream.io\/default-site=true/],
+        [nodes(['mini', null, { compute: true, default: true }]), /node mini has no Site: kubectl label node mini topology.kubernetes.io\/zone=<Site id>/],
+        [nodes(['a', 's', { compute: true, default: true }], ['b', 's', { compute: true, default: true }]), /the cluster has 2 nodes; install-single-node.sh needs exactly one/],
+    ];
+    for (const [json, message] of cases) {
+        const { status, stderr, log } = checkSites('single-node', { NODES_JSON_STUB: json });
+        assert.notEqual(status, 0, json);
+        assert.match(stderr, message);
+        assert.equal(log, '');
     }
-    const unzoned = labelSites('single-node', { NODES_JSON_STUB: nodes(['mini', null]) });
-    assert.match(unzoned.stderr, /no topology.kubernetes.io\/zone on the node\(s\) mini/);
 });
 
 test('install-multi-node.sh refuses a cluster with too few Sites before it records a layout', () => {
@@ -386,6 +314,7 @@ test('install-multi-node.sh refuses a cluster with too few Sites before it recor
     });
     assert.notEqual(status, 0);
     assert.match(stderr, /at least three Sites/);
+    assert.match(stderr, /no default Site: kubectl label nodes/);
     assert.equal(log, '', 'records no layout');
 });
 
@@ -393,9 +322,9 @@ test('install-single-node.sh refuses anything but one node with gVisor, and miss
     const domains = { PLATFORM_DOMAIN: 'a.example.com', CUSTOMER_DOMAIN: 'b.example.app' };
     const three = run('./install-single-node.sh', { NODES_JSON_STUB: nodes(['a', 's'], ['b', 's'], ['c', 's']), ...domains });
     assert.match(three.stderr, /has 3 nodes/);
-    const unlabelled = run('./install-single-node.sh', { NODES_JSON_STUB: nodes(['a', 's']), LABELED_STUB: '0', ...domains });
+    const unlabelled = run('./install-single-node.sh', { NODES_JSON_STUB: nodes(['a', 's', { compute: true, default: true }]), LABELED_STUB: '0', ...domains });
     assert.match(unlabelled.stderr, /openupstream.io\/gvisor=true/);
-    const noDomain = run('./install-single-node.sh', { NODES_JSON_STUB: nodes(['a', 's']) });
+    const noDomain = run('./install-single-node.sh', { NODES_JSON_STUB: nodes(['a', 's', { compute: true, default: true }]) });
     assert.match(noDomain.stderr, /set PLATFORM_DOMAIN/);
     for (const result of [three, unlabelled, noDomain]) {
         assert.notEqual(result.status, 0);
@@ -533,10 +462,12 @@ test('k3s-single-node.sh installs gVisor before k3s, labelled as the compute and
     assert.match(log, /applied apply -f ..\/gvisor\/runtimeclass.yaml/);
 });
 
-test('k3s-single-node.sh takes the Site id from SITE, and refuses one that is no label value', () => {
-    const home = k3s({ SITE: 'home' });
+test('k3s-single-node.sh takes the Site id from SITE and its description from SITE_DESCRIPTION, and refuses an id that is no label value', () => {
+    const home = k3s({ SITE: 'home', SITE_DESCRIPTION: 'Home mini PC' });
     assert.equal(home.status, 0, home.stderr);
     assert.match(home.log, /get\.k3s\.io.*--node-label topology.kubernetes.io\/zone=home /s);
+    assert.match(home.log, /^annotate node --all --overwrite openupstream.io\/site-description=Home mini PC$/m);
+    assert.doesNotMatch(k3s({}).log, /annotate/);
     const state = mkdtempSync(join(tmpdir(), 'dev-cluster-state-'));
     const invalid = run('./k3s-single-node.sh root@mini', { STATE: state, SITE: 'my home' });
     assert.notEqual(invalid.status, 0);

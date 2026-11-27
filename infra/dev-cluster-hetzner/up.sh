@@ -12,10 +12,13 @@
 #   ovh-lim       hel1  compute Site (stand-in; Hetzner Cloud has no Limburg)
 #   netcup-nbg    nbg1  third Site, tainted openupstream.io/third-site
 #
-# The compute nodes get the labels openupstream.io/compute-site=true (and
-# the first openupstream.io/default-site=true) when they join, every node a
-# description (openupstream.io/site-description) unless it has one
-# (ADR-0007), so install-multi-node.sh needs no COMPUTE_SITES.
+# The node setup is the only place that labels the nodes (ADR-0007): the
+# compute nodes join with openupstream.io/compute-site=true (the first also
+# openupstream.io/default-site=true), the third with the taint
+# openupstream.io/third-site=true:NoSchedule, and every node without a
+# description gets one (openupstream.io/site-description) once it has
+# joined. install-multi-node.sh only checks them. k3s sets labels only when
+# a node first registers: a node that already runs k3s keeps its own.
 #
 # Each compute node gets a Hetzner Cloud Volume as its LVM volume group
 # `openupstream`, where TopoLVM puts the Databases' volumes (infra/topolvm);

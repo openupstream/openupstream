@@ -9,9 +9,9 @@
 # backups (Hetzner Object Storage) survive.
 #
 # The node stands in for every Site: its Site (topology.kubernetes.io/zone)
-# becomes the only compute Site and the default Site (label_sites in
-# lib.sh, ADR-0007; SITE_DESCRIPTIONS as for install-multi-node.sh).
-# k3s-single-node.sh installs k3s that way.
+# is the only compute Site and the default Site, labelled so when it joined
+# (check_sites in lib.sh checks it, ADR-0007). k3s-single-node.sh installs
+# k3s that way.
 #
 #   PLATFORM_DOMAIN=home.example.com CUSTOMER_DOMAIN=home.example.app ./install-single-node.sh
 #
@@ -35,7 +35,7 @@ fi
 [[ -n $(kubectl get runtimeclass gvisor --ignore-not-found -o name) ]] ||
   { echo "no RuntimeClass gvisor: kubectl apply -f ../gvisor/runtimeclass.yaml" >&2; exit 1; }
 
-label_sites single-node
+check_sites single-node
 record_layout single-node
 ./operators.sh
 ./ingress.sh

@@ -94,13 +94,21 @@ places. Each node carries its Site's id as `topology.kubernetes.io/zone`;
 the nodes of a compute Site carry `openupstream.io/compute-site=true`, those
 of the default Home site also `openupstream.io/default-site=true`, every
 other node the taint `openupstream.io/third-site=true:NoSchedule`; the
-annotation `openupstream.io/site-description` is shown next to the id. The
-node setup scripts below set them; the install sets the labels from
-`COMPUTE_SITES`, `DEFAULT_SITE` and `SITE_DESCRIPTIONS` and checks them (at
-least two compute Sites and three Sites; the
+annotation `openupstream.io/site-description` is shown next to the id. Only
+the node setup scripts below set them: the labels and the taint as k3s
+`--node-label`/`--node-taint` flags when a node joins, the description with
+`kubectl annotate` right after. The install only checks them (at least two
+compute Sites and three Sites, exactly one default Site) and names the
+`kubectl` command for each problem; the alerts `SiteNodeWithoutRole` and
+`DefaultSiteNotOne` catch drift while the cluster runs. The
 [infra/dev-cluster](../infra/dev-cluster/README.md#sites) README has the
-details). A cluster installed before needs its compute Sites once:
-`COMPUTE_SITES="hetzner-fsn1 ovh-lim" ./install-multi-node.sh`.
+details and how to move the default Site. A cluster set up before needs
+the labels once:
+
+```bash
+kubectl label nodes -l 'topology.kubernetes.io/zone in (hetzner-fsn1,ovh-lim)' openupstream.io/compute-site=true
+kubectl label nodes -l topology.kubernetes.io/zone=hetzner-fsn1 openupstream.io/default-site=true
+```
 
 ### Hetzner Cloud: three Sites
 

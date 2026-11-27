@@ -144,6 +144,13 @@ prometheus:
       requests: {cpu: 100m, memory: 768Mi}
       limits: {memory: 1536Mi}
 
+kube-state-metrics:
+  # The nodes' Site labels (ADR-0007) as labels of kube_node_labels, for
+  # the alerts on Sites in rules.yaml; kube-state-metrics exports no node
+  # label unless allowed here.
+  metricLabelsAllowlist:
+    - nodes=[topology.kubernetes.io/zone,openupstream.io/compute-site,openupstream.io/default-site]
+
 prometheus-node-exporter:
   # Every node, the non-compute Sites' too.
   tolerations:
