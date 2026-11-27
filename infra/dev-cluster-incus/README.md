@@ -9,11 +9,12 @@ openupstream, with `snapshot.sh` to go back.
 
 | VM | Stands in for | Default size |
 | --- | --- | --- |
-| `oup-home-hetzner-fsn1` | `hetzner-fsn1`, compute Site | 6 CPUs, 12 GiB, 60 GiB disk + 40 GiB volume |
-| `oup-home-ovh-lim` | `ovh-lim`, compute Site | 6 CPUs, 12 GiB, 60 GiB disk + 40 GiB volume |
+| `oup-home-hetzner-fsn1` | `hetzner-fsn1`, compute Site | 6 CPUs, 10 GiB, 60 GiB disk + 40 GiB volume |
+| `oup-home-ovh-lim` | `ovh-lim`, compute Site | 6 CPUs, 10 GiB, 60 GiB disk + 40 GiB volume |
 | `oup-home-netcup-nbg` | `netcup-nbg`, third Site, tainted `openupstream.io/third-site` | 2 CPUs, 4 GiB, 60 GiB disk |
 
-The defaults fit a host with 32 GB of RAM (`COMPUTE_CPUS`,
+The defaults fit a host where Linux sees 28 GB of RAM, a 32 GB mini PC
+whose integrated GPU keeps 4 GB (`COMPUTE_CPUS`,
 `COMPUTE_MEMORY`, `THIRD_CPUS`, `THIRD_MEMORY`, `ROOT_SIZE`, `VOLUME_SIZE`
 change them; `PREFIX` the names). The compute VMs' volumes become the LVM
 volume group `openupstream` that TopoLVM allocates the Databases from, as
@@ -40,7 +41,7 @@ On the host, or on your machine with `INCUS_REMOTE` naming the host's
 Incus remote:
 
 ```bash
-INCUS_REMOTE=mini ./up.sh
+INCUS_REMOTE=um790 ./up.sh
 ```
 
 ```bash
@@ -76,11 +77,11 @@ first run): the DNS records and the kubeconfig name them.
 ## Snapshots
 
 ```bash
-INCUS_REMOTE=mini ./snapshot.sh create before-upgrade
+INCUS_REMOTE=um790 ./snapshot.sh create before-upgrade
 ```
 
 ```bash
-INCUS_REMOTE=mini ./snapshot.sh restore before-upgrade
+INCUS_REMOTE=um790 ./snapshot.sh restore before-upgrade
 ```
 
 Both stop all three VMs first and start them afterwards, so the etcd
@@ -94,7 +95,7 @@ limit.
 ## Delete
 
 ```bash
-INCUS_REMOTE=mini PLATFORM_DOMAIN=home.dev.example.com CUSTOMER_DOMAIN=home.dev.example.app ./down.sh
+INCUS_REMOTE=um790 PLATFORM_DOMAIN=home.dev.example.com CUSTOMER_DOMAIN=home.dev.example.app ./down.sh
 ```
 
 Both domains are required, as installed: without them the DNS cleanup
