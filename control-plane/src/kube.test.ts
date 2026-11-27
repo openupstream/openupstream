@@ -41,6 +41,10 @@ test('CPU quantities in millicores', () => {
     assert.equal(millicoresOf('250m'), 250);
     assert.equal(millicoresOf('2'), 2000);
     assert.equal(millicoresOf('0.5'), 500);
+    assert.equal(millicoresOf('1k'), 1_000_000);
+    assert.equal(millicoresOf('1e3'), 1_000_000);
+    assert.equal(millicoresOf('100u'), 1, 'rounded up, as the scheduler does');
+    assert.equal(millicoresOf('0.1'), 100);
     assert.equal(millicoresOf('1Gi'), undefined);
     assert.equal(millicoresOf(''), undefined);
 });
@@ -50,4 +54,7 @@ test("a pod's CPU request as the scheduler counts it", () => {
     assert.equal(podCpuRequest({ spec: { containers: [container('250m'), container('1')] } }), 1250);
     assert.equal(podCpuRequest({ spec: { containers: [container('100m')], initContainers: [container('500m')], overhead: { cpu: '10m' } } }), 510);
     assert.equal(podCpuRequest({ spec: { containers: [{ name: 'c' }] } }), 0, 'a Database before decision 150');
+    const sidecar = { ...container('200m'), restartPolicy: 'Always' };
+    assert.equal(podCpuRequest({ spec: { containers: [container('100m')], initContainers: [sidecar] } }), 300, 'a sidecar runs with the containers');
+    assert.equal(podCpuRequest({ spec: { containers: [container('100m')], initContainers: [sidecar, container('500m')] } }), 700, 'an init container after a sidecar runs next to it');
 });

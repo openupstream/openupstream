@@ -213,10 +213,13 @@ export const bytesOf = (quantity: string): number | undefined => {
     return match === null || unit === undefined ? undefined : Number(match[1]) * unit;
 };
 
-/** `250m` → 250, `2` → 2000, `0.5` → 500: CPU in millicores; undefined when not a CPU quantity. */
+const CPU_SUFFIXES: Readonly<Record<string, number>> = { n: 1e-9, u: 1e-6, m: 1e-3, '': 1, k: 1e3, M: 1e6, G: 1e9 };
+
+/** `250m` → 250, `2` → 2000, `0.5` → 500, `1e3` → 1000000: CPU in millicores, rounded up; undefined when not a CPU quantity. */
 export const millicoresOf = (quantity: string): number | undefined => {
-    const match = /^(\d+(?:\.\d+)?)(m?)$/.exec(quantity);
-    return match === null ? undefined : match[2] === 'm' ? Number(match[1]) : Math.round(Number(match[1]) * 1000);
+    const match = /^(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(n|u|m|k|M|G)?$/.exec(quantity);
+    const factor = CPU_SUFFIXES[match?.[2] ?? ''];
+    return match === null || factor === undefined ? undefined : Math.ceil(Number(match[1]) * factor * 1000 - 1e-9);
 };
 
 /** `512Mi` → 512, `10Gi` → 10: whole units only, as the operator writes them; undefined otherwise. */
@@ -289,7 +292,8 @@ interface PodObject {
     spec?: {
         nodeName?: string;
         containers?: { name: string; resources?: { requests?: Record<string, string> } }[];
-        initContainers?: { name: string; resources?: { requests?: Record<string, string> } }[];
+        /** `restartPolicy: Always` makes one a sidecar, which runs alongside the containers. */
+        initContainers?: { name: string; restartPolicy?: string; resources?: { requests?: Record<string, string> } }[];
         /** Set from the RuntimeClass (gVisor's) and counted by the scheduler. */
         overhead?: Record<string, string>;
     };
@@ -306,15 +310,21 @@ type Amounts = Record<string, string> | undefined;
 
 /**
  * What the scheduler reserves for a pod of one resource: its containers'
- * requests, or its largest init container's if that is more, plus the
- * RuntimeClass's overhead.
+ * and sidecars' requests, or its largest init container's (plus the sidecars
+ * started before it) if that is more, plus the RuntimeClass's overhead.
  */
 const podRequestOf =
     (amountOf: (amounts: Amounts) => number) =>
     (pod: Pick<PodObject, 'spec'>): number => {
-        const containers = (pod.spec?.containers ?? []).reduce((sum, container) => sum + amountOf(container.resources?.requests), 0);
-        const init = Math.max(0, ...(pod.spec?.initContainers ?? []).map((container) => amountOf(container.resources?.requests)));
-        return Math.max(containers, init) + amountOf(pod.spec?.overhead);
+        const inits = pod.spec?.initContainers ?? [];
+        const sidecarsBefore = (index: number) =>
+            inits.slice(0, index).reduce((sum, container) => sum + (container.restartPolicy === 'Always' ? amountOf(container.resources?.requests) : 0), 0);
+        const running = (pod.spec?.containers ?? []).reduce((sum, container) => sum + amountOf(container.resources?.requests), sidecarsBefore(inits.length));
+        const init = Math.max(
+            0,
+            ...inits.map((container, index) => (container.restartPolicy === 'Always' ? 0 : sidecarsBefore(index) + amountOf(container.resources?.requests))),
+        );
+        return Math.max(running, init) + amountOf(pod.spec?.overhead);
     };
 
 /** In bytes. */
