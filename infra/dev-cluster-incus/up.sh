@@ -34,9 +34,10 @@ STATE=.state
 IMAGE=${IMAGE:-images:ubuntu/24.04/cloud}
 K3S_VERSION=${K3S_VERSION:-v1.36.5+k3s1}
 BRIDGE=${BRIDGE:-br0}
-# Sized for a 32 GB host: 12 + 12 + 4 GiB, leaving about 4 GiB for it.
+# Sized for a 32 GB mini PC whose integrated GPU keeps 4 GB, so Linux sees
+# 28: 10 + 10 + 4 GiB, leaving about 4 GiB for the host.
 COMPUTE_CPUS=${COMPUTE_CPUS:-6}
-COMPUTE_MEMORY=${COMPUTE_MEMORY:-12GiB}
+COMPUTE_MEMORY=${COMPUTE_MEMORY:-10GiB}
 THIRD_CPUS=${THIRD_CPUS:-2}
 THIRD_MEMORY=${THIRD_MEMORY:-4GiB}
 ROOT_SIZE=${ROOT_SIZE:-60GiB}
@@ -101,7 +102,7 @@ for i in 0 1; do
   find_disk() { device=$(incus exec "$vm" -- sh -c 'ls /dev/disk/by-id/*incus_lvm 2>/dev/null | head -n 1'); [[ -n $device ]]; }
   until_ok "the disk lvm in $vm" find_disk
   echo "volume group on $site ($device)"
-  incus exec -T "$vm" -- bash -s -- "$device" <../topolvm/vgcreate.sh
+  incus exec -T --env DEBIAN_FRONTEND=noninteractive "$vm" -- bash -s -- "$device" <../topolvm/vgcreate.sh
 done
 
 # Our AppArmor profile for containers, before containerd loads its own
@@ -109,6 +110,9 @@ done
 for site in "${SITES[@]}"; do
   vm=$(instance "$site")
   if incus exec "$vm" -- test -d /sys/kernel/security/apparmor; then
+    # The Incus image's kernel has AppArmor, but the image lacks its tools.
+    incus exec --env DEBIAN_FRONTEND=noninteractive "$vm" -- sh -c \
+      'command -v apparmor_parser >/dev/null || { apt-get update -qq && apt-get install -y -qq apparmor >/dev/null; }'
     echo "installing the AppArmor profile cri-containerd.apparmor.d on $vm"
     incus exec -T "$vm" -- sh -c 'cat >/etc/apparmor.d/cri-containerd.apparmor.d && apparmor_parser -r /etc/apparmor.d/cri-containerd.apparmor.d' \
       <../apparmor/cri-containerd.apparmor.d
@@ -120,7 +124,7 @@ for site in "${SITES[0]}" "${SITES[1]}"; do
   vm=$(instance "$site")
   incus exec "$vm" -- test -x /usr/local/bin/runsc && continue
   echo "installing gVisor on $vm"
-  incus exec -T "$vm" -- bash -s <../gvisor/install.sh
+  incus exec -T --env DEBIAN_FRONTEND=noninteractive "$vm" -- bash -s <../gvisor/install.sh
 done
 
 # The same k3s settings as on the Hetzner dev cluster, except the address:
@@ -152,6 +156,15 @@ incus exec "$(instance "${SITES[0]}")" -- cat /etc/rancher/k3s/k3s.yaml |
   sed "s/127.0.0.1/$FIRST/; s/: default$/: $PREFIX/" >"$STATE/kubeconfig"
 chmod 600 "$STATE/kubeconfig"
 
+# `wait --all` only waits for nodes that exist; the last one may not have
+# registered yet. Each VM's hostname is its node's name.
+three_nodes() {
+  local site
+  for site in "${SITES[@]}"; do
+    KUBECONFIG=$STATE/kubeconfig kubectl get node "$PREFIX-$site" -o name >/dev/null 2>&1 || return 1
+  done
+}
+until_ok "all three nodes to register" three_nodes
 KUBECONFIG=$STATE/kubeconfig kubectl wait --for=condition=Ready node --all --timeout=5m
 KUBECONFIG=$STATE/kubeconfig kubectl apply -f ../gvisor/runtimeclass.yaml >/dev/null
 echo "export KUBECONFIG=$PWD/$STATE/kubeconfig"
