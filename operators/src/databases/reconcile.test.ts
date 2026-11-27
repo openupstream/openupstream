@@ -33,7 +33,7 @@ const invoices = database('7a2e4b55-1c3d-4e6f-8a9b-0c1d2e3f4a5b', 'invoices');
 const config: DatabaseConfig = {
     postgresImage: 'ghcr.io/openupstream/postgres@sha256:0000000000000000000000000000000000000000000000000000000000000000',
     storageClass: 'topolvm-provisioner',
-    backup: { bucket: 'openupstream-backups', credentialsSecret: 'backup-s3', retention: '30d', schedule: '0 0 3 * * *' },
+    backup: { bucket: 'openupstream-backups', prefix: 'c1', credentialsSecret: 'backup-s3', retention: '30d', schedule: '0 0 3 * * *' },
 };
 
 const credentials = { ACCESS_KEY_ID: 'aWQ=', ACCESS_SECRET_KEY: 'c2VjcmV0' };

@@ -37,17 +37,41 @@ cluster_layout() {
   esac
 }
 
-# Records the layout; refuses to change one already recorded.
+# The cluster's id, recorded next to the layout: its folder in the backup
+# bucket (decision 149), so clusters sharing the bucket, and a cluster
+# installed again, never find each other's archives. Generated once per
+# install as <date>-<random>; CLUSTER_ID chooses it (e.g. production).
+recorded_cluster_id() {
+  kubectl -n "$LAYOUT_NAMESPACE" get configmap "$LAYOUT_CONFIGMAP" --ignore-not-found -o jsonpath='{.data.clusterId}'
+}
+new_cluster_id() {
+  local id=${CLUSTER_ID:-$(date -u +%Y%m%d)-$(openssl rand -hex 3)}
+  [[ $id =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] ||
+    { echo "CLUSTER_ID must be lowercase letters, digits and dashes: $id" >&2; return 1; }
+  echo "$id"
+}
+write_layout() { # layout, cluster id
+  kubectl create namespace "$LAYOUT_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl -n "$LAYOUT_NAMESPACE" create configmap "$LAYOUT_CONFIGMAP" --dry-run=client -o yaml \
+    --from-literal=layout="$1" --from-literal=clusterId="$2" | kubectl apply -f - >/dev/null
+}
+
+# Records the layout and the cluster id; refuses to change either once
+# recorded.
 record_layout() { # single-node | multi-node
-  local recorded
+  local recorded id
   recorded=$(kubectl -n "$LAYOUT_NAMESPACE" get configmap "$LAYOUT_CONFIGMAP" --ignore-not-found -o jsonpath='{.data.layout}')
   if [[ -n $recorded && $recorded != "$1" ]]; then
     echo "this cluster was installed as $recorded; it cannot become $1" >&2
     return 1
   fi
-  kubectl create namespace "$LAYOUT_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-  kubectl -n "$LAYOUT_NAMESPACE" create configmap "$LAYOUT_CONFIGMAP" --dry-run=client -o yaml \
-    --from-literal=layout="$1" | kubectl apply -f - >/dev/null
+  id=$(recorded_cluster_id)
+  if [[ -n $id && -n ${CLUSTER_ID:-} && $id != "$CLUSTER_ID" ]]; then
+    echo "this cluster's id is $id; it cannot become $CLUSTER_ID" >&2
+    return 1
+  fi
+  [[ -n $id ]] || id=$(new_cluster_id)
+  write_layout "$1" "$id"
 }
 
 # Sets LAYOUT and what depends on it: SITE_REPLICAS, how many replicas run
@@ -56,6 +80,14 @@ record_layout() { # single-node | multi-node
 # longer than one session and staging certificates are not trusted.
 load_layout() {
   LAYOUT=$(cluster_layout)
+  # A cluster installed before decision 149 gets its id on the first step
+  # run again; its Databases then archive into a new, empty folder.
+  CLUSTER_ID=$(recorded_cluster_id)
+  if [[ -z $CLUSTER_ID ]]; then
+    CLUSTER_ID=$(new_cluster_id)
+    write_layout "$LAYOUT" "$CLUSTER_ID"
+    echo "recorded the cluster id $CLUSTER_ID" >&2
+  fi
   if [[ $LAYOUT == single-node ]]; then
     SITE_REPLICAS=1
     CLUSTER_ISSUER=${CLUSTER_ISSUER:-letsencrypt}
@@ -67,11 +99,12 @@ load_layout() {
 
 # Prints the DatabaseConfig for LAYOUT (after load_layout):
 # database-config.json with the layout, which decides whether a Database
-# gets a standby, and on a single node k3s's local-path storage instead of
+# gets a standby, the cluster id as the backup folder (decision 149), and on a single node k3s's local-path storage instead of
 # TopoLVM (decision 112).
 database_config() {
-  jq --arg layout "$LAYOUT" '. + {layout: $layout}
-    + (if $layout == "single-node" then {storageClass: "local-path"} else {} end)' database-config.json
+  jq --arg layout "$LAYOUT" --arg prefix "$CLUSTER_ID" '(. + {layout: $layout}
+    + (if $layout == "single-node" then {storageClass: "local-path"} else {} end))
+    | .backup.prefix = $prefix' database-config.json
 }
 
 # Sets PLATFORM_DOMAIN (decision 67) and CUSTOMER_DOMAIN (decision 68), after

@@ -34,7 +34,7 @@ const database: Database = {
 const config: DatabaseConfig = {
     postgresImage: 'ghcr.io/openupstream/postgres@sha256:0000000000000000000000000000000000000000000000000000000000000000',
     storageClass: 'topolvm-provisioner',
-    backup: { bucket: 'openupstream-backups', credentialsSecret: 'backup-s3', retention: '30d', schedule: '0 0 3 * * *' },
+    backup: { bucket: 'openupstream-backups', prefix: 'c1', credentialsSecret: 'backup-s3', retention: '30d', schedule: '0 0 3 * * *' },
 };
 
 const manifestsFor = (overrides: Partial<Database> = {}): DatabaseManifests => {
@@ -229,7 +229,7 @@ test('WAL is archived to Hetzner Object Storage NBG1 through the Barman Cloud Pl
 
 test('each Database archives into its own folder, named by ids', () => {
     const { objectStore } = manifestsFor();
-    assert.equal(objectStore.spec.configuration.destinationPath, `s3://openupstream-backups/project-${project.id}`);
+    assert.equal(objectStore.spec.configuration.destinationPath, `s3://openupstream-backups/c1/project-${project.id}`);
     // Barman appends the Cluster's name.
     assert.equal(objectStore.metadata.name, `db-${database.id}`);
 });

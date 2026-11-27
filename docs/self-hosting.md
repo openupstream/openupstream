@@ -312,6 +312,12 @@ where no Database runs, with credentials separate from the cluster's (#27).
 `infra/dev-cluster/operators.sh` copies the profile into the cluster as the
 Secret `openupstream-system/backup-s3`.
 
+Every cluster may use the same bucket: each archives into a folder named
+after its cluster id (`clusterId` in `openupstream-system/cluster-layout`,
+generated at install, #149), so the dev clusters, a reinstall and
+production never meet. Install production with `CLUSTER_ID=production` for
+a folder you recognise.
+
 ## 5. bunny.net: DNS
 
 All of openupstream's DNS zones are on bunny.net DNS, whose health checks

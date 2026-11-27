@@ -23,6 +23,7 @@ writeFileSync(
 [[ \${KUBECTL_FAIL:-} == 1 ]] && { echo "connection refused" >&2; exit 1; }
 args="$*"
 case $args in
+  *"get configmap cluster-layout"*clusterId*) printf '%s' "\${CLUSTER_ID_STUB:-}" ;;
   *"get configmap cluster-layout"*) printf '%s' "\${LAYOUT_STUB:-}" ;;
   *"create configmap"*) echo "configmap $args" >>"$STUB_LOG"; echo '{}' ;;
   *"create namespace"*) echo '{}' ;;
@@ -163,9 +164,32 @@ test('a recorded layout is never changed', () => {
     assert.match(same.log, /layout=multi-node/);
 });
 
+test('the cluster id is generated once, kept, and never changed', () => {
+    const fresh = run('set -euo pipefail; source ./lib.sh; record_layout multi-node');
+    assert.equal(fresh.status, 0, fresh.stderr);
+    assert.match(fresh.log, /clusterId=\d{8}-[0-9a-f]{6}/);
+    const kept = run('set -euo pipefail; source ./lib.sh; record_layout multi-node', { LAYOUT_STUB: 'multi-node', CLUSTER_ID_STUB: 'c1' });
+    assert.match(kept.log, /clusterId=c1/);
+    const chosen = run('set -euo pipefail; source ./lib.sh; record_layout multi-node', { CLUSTER_ID: 'production' });
+    assert.match(chosen.log, /clusterId=production/);
+    const changed = run('set -euo pipefail; source ./lib.sh; record_layout multi-node', { LAYOUT_STUB: 'multi-node', CLUSTER_ID_STUB: 'c1', CLUSTER_ID: 'c2' });
+    assert.notEqual(changed.status, 0);
+    assert.match(changed.stderr, /id is c1; it cannot become c2/);
+    const invalid = run('set -euo pipefail; source ./lib.sh; record_layout multi-node', { CLUSTER_ID: 'Prod/1' });
+    assert.notEqual(invalid.status, 0);
+    assert.equal(invalid.log, '');
+});
+
+test('a cluster installed without an id gets one on the next step, its layout kept', () => {
+    const { status, stderr, log } = run('set -euo pipefail; source ./lib.sh; load_layout; echo "$CLUSTER_ID"', { LAYOUT_STUB: 'single-node' });
+    assert.equal(status, 0, stderr);
+    assert.match(log, /layout=single-node --from-literal=clusterId=\d{8}-[0-9a-f]{6}/);
+    assert.match(stderr, /recorded the cluster id/);
+});
+
 test('platform.sh with SIGNUP=closed needs a waitlist host other than the platform domain, before it changes anything', () => {
     for (const env of [{}, { WAITLIST_DOMAIN: 'dev.openupstream.com' }]) {
-        const { status, stderr, log } = run('./platform.sh', { LAYOUT_STUB: 'multi-node', SIGNUP: 'closed', MAIL: 'log', ...env });
+        const { status, stderr, log } = run('./platform.sh', { LAYOUT_STUB: 'multi-node', CLUSTER_ID_STUB: 'c1', SIGNUP: 'closed', MAIL: 'log', ...env });
         assert.notEqual(status, 0);
         assert.match(stderr, /SIGNUP=closed needs WAITLIST_DOMAIN.*dev\.openupstream\.com serves the dashboard/);
         assert.equal(log, '');
@@ -174,7 +198,7 @@ test('platform.sh with SIGNUP=closed needs a waitlist host other than the platfo
 
 test("platform.sh refuses a WEBSITE_PROJECT_ID that is not a Project's id, before it changes anything", () => {
     for (const id of ['website', '7b0c1c0e-5d0a-4a43-9f3e']) {
-        const { status, stderr, log } = run('./platform.sh', { LAYOUT_STUB: 'multi-node', WEBSITE_PROJECT_ID: id });
+        const { status, stderr, log } = run('./platform.sh', { LAYOUT_STUB: 'multi-node', CLUSTER_ID_STUB: 'c1', WEBSITE_PROJECT_ID: id });
         assert.notEqual(status, 0);
         assert.match(stderr, /WEBSITE_PROJECT_ID must be the website Project's id/);
         assert.equal(log, '');
@@ -364,13 +388,14 @@ test('k3s-single-node.sh installs the AppArmor profile before k3s, on every run,
 
 test('the DatabaseConfig carries the layout, and a single node stores Databases on local-path', () => {
     const config = (layout) => {
-        const { status, stdout, stderr } = run('set -euo pipefail; source ./lib.sh; load_layout; database_config', { LAYOUT_STUB: layout });
+        const { status, stdout, stderr } = run('set -euo pipefail; source ./lib.sh; load_layout; database_config', { LAYOUT_STUB: layout, CLUSTER_ID_STUB: 'c1' });
         assert.equal(status, 0, stderr);
         return JSON.parse(stdout);
     };
     const original = JSON.parse(readFileSync(join(here, 'database-config.json'), 'utf8'));
-    assert.deepEqual(config('multi-node'), { ...original, layout: 'multi-node' });
-    assert.deepEqual(config('single-node'), { ...original, layout: 'single-node', storageClass: 'local-path' });
+    const backup = { ...original.backup, prefix: 'c1' };
+    assert.deepEqual(config('multi-node'), { ...original, backup, layout: 'multi-node' });
+    assert.deepEqual(config('single-node'), { ...original, backup, layout: 'single-node', storageClass: 'local-path' });
 });
 
 test('k3s-single-node.sh refuses a NODE_ADDRESS that an installed k3s does not have, unless REINSTALL=1', () => {
