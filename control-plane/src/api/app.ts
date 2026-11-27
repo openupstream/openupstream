@@ -339,7 +339,7 @@ const routeInput = z.union([
 
 /** In-cluster connection through the Database's PgBouncer; CloudNativePG's application user and database. */
 /** Who calls: the Accounts where their Member has a role, and the grants that count for them. */
-type Env = { Variables: { identity: Identity; accountIds: string[]; grants: CallerGrant[] } };
+type Env = { Variables: { identity: Identity; accountIds: string[]; grants: () => Promise<CallerGrant[]> } };
 
 export function createApi(deps: ApiDeps): Hono<Env> {
     const { pool, authenticate, kube, storage } = deps;
@@ -471,7 +471,10 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         c.set('identity', identity.value);
         c.set('accountIds', await accountsOf(pool, identity.value));
-        c.set('grants', await grantsOf(pool, identity.value.subject));
+        // Read once, and only by the routes that look at grants.
+        const subject = identity.value.subject;
+        let grants: Promise<CallerGrant[]> | undefined;
+        c.set('grants', () => (grants ??= grantsOf(pool, subject)));
         return next();
     });
 
@@ -616,7 +619,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     });
 
     app.get('/v1/projects', async (c) =>
-        c.json(await listProjects(pool, c.get('accountIds'), c.get('grants').map((grant) => grant.projectId))),
+        c.json(await listProjects(pool, c.get('accountIds'), (await c.get('grants')()).map((grant) => grant.projectId))),
     );
 
     app.post('/v1/projects', async (c) => {
@@ -651,7 +654,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (project !== undefined) {
             return { project };
         }
-        const grants = c.get('grants').filter((grant) => grant.projectId === id);
+        const grants = (await c.get('grants')()).filter((grant) => grant.projectId === id);
         const granted = grants[0] === undefined ? undefined : await projectOf([grants[0].accountId], id);
         return granted === undefined ? undefined : { project: granted, grants };
     };

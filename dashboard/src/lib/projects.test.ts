@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { projectNameProblem, projectsByAccount } from './projects';
+import { grantedDatabases, projectNameProblem, projectsByAccount } from './projects';
 
 test('a Project name is a DNS label that the Account does not have yet', () => {
     assert.equal(projectNameProblem('staging', [{ name: 'production' }]), undefined);
@@ -22,4 +22,18 @@ test('Projects are listed under their Account, by name; an Account without Proje
             ['b', []],
         ],
     );
+});
+
+test("a Member without a role sees only the Databases they hold a grant on, with its level", () => {
+    const databases = [{ id: 'd1', name: 'orders' }, { id: 'd2', name: 'events' }, { id: 'd3', name: 'audit' }];
+    const grants = [
+        { databaseId: 'd3', access: 'owner' as const },
+        { databaseId: 'd1', access: 'read' as const },
+        { databaseId: 'elsewhere', access: 'write' as const },
+    ];
+    assert.deepEqual(
+        grantedDatabases(databases, grants).map(({ database, access }) => `${database.name}:${access}`),
+        ['orders:read', 'audit:owner'],
+    );
+    assert.deepEqual(grantedDatabases(databases, []), []);
 });

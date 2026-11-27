@@ -225,7 +225,10 @@ Domain, deploys, changes, redeploys, starts and deletes its Jobs and lists
 their runs, lists and deletes its Secrets, whose values are set with `oup`
 only (#129), shows what every Resource uses now, with its instances
 (#124), and follows the output of a Service or of a run as it is written
-(#131). `/cli` explains `oup` to anyone, signed in or not,
+(#131). A Member without a role in the Account sees its Projects without
+create or delete, and a Project's page with only the Databases their
+grants name, each with its level and the `oup pg proxy` command (#139).
+`/cli` explains `oup` to anyone, signed in or not,
 in the words of `cli/README.md` and with the installation's own API address
 in the sign-in command (#125). One build serves every installation.
 

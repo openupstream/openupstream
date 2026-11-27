@@ -59,6 +59,9 @@ export function Projects() {
                             </p>
                         )}
                         <h2>Projects</h2>
+                        {account.role === null && (
+                            <p className="notice">You have no role in this Account: you see the Projects with Databases you were given access to.</p>
+                        )}
                         {projects.length === 0 ? (
                             <p>No Projects yet. A Project holds the Databases, Buckets and Services of one environment, e.g. staging or production.</p>
                         ) : (
@@ -71,28 +74,32 @@ export function Projects() {
                                             </a>
                                             <small>created {new Date(project.createdAt).toLocaleDateString()}</small>
                                         </span>
-                                        <button
-                                            type="button"
-                                            className="link danger"
-                                            onClick={() => {
-                                                if (window.confirm(`Delete the Project ${project.name} and everything in it? This cannot be undone.`)) {
-                                                    void change((client) => client.deleteProject(project.id));
-                                                }
-                                            }}
-                                        >
-                                            Delete
-                                        </button>
+                                        {account.role !== null && (
+                                            <button
+                                                type="button"
+                                                className="link danger"
+                                                onClick={() => {
+                                                    if (window.confirm(`Delete the Project ${project.name} and everything in it? This cannot be undone.`)) {
+                                                        void change((client) => client.deleteProject(project.id));
+                                                    }
+                                                }}
+                                            >
+                                                Delete
+                                            </button>
+                                        )}
                                     </li>
                                 ))}
                             </ul>
                         )}
-                        <NameForm
-                            label="New Project"
-                            placeholder="production"
-                            submit="Create Project"
-                            check={(name) => projectNameProblem(name, projects)}
-                            onSubmit={(name) => change((client) => client.createProject({ accountId: account.id, name }))}
-                        />
+                        {account.role !== null && (
+                            <NameForm
+                                label="New Project"
+                                placeholder="production"
+                                submit="Create Project"
+                                check={(name) => projectNameProblem(name, projects)}
+                                onSubmit={(name) => change((client) => client.createProject({ accountId: account.id, name }))}
+                            />
+                        )}
                     </section>
                 ))
             )}

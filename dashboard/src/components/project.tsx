@@ -16,10 +16,12 @@ import {
     type Secret,
     type ServiceDetails,
     type Site,
+    type DatabaseAccess,
 } from '@openupstream/sdk';
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { api, refused } from '../lib/session';
 import { databaseNameProblem, databaseSizes, databaseUrlVariable, resizeOf } from '../lib/usage';
+import { grantedDatabases } from '../lib/projects';
 import { servedAt, ingressOf } from '../lib/routing';
 import { JobCard, JobForm } from './jobs';
 import { BucketCard, BucketForm, DomainCard, DomainForm } from './routing';
@@ -34,6 +36,12 @@ import { Usage } from './usage';
  */
 type Loaded = {
     readonly project: Project;
+    /**
+     * Set when the caller has no role in the Project's Account and reaches it
+     * through grants (decision 139): the Databases they may use, with the
+     * level; everything else of the Project is closed to them, so it is empty.
+     */
+    readonly granted?: readonly { readonly database: DatabaseDetails; readonly access: DatabaseAccess }[];
     readonly databases: readonly DatabaseDetails[];
     readonly services: readonly ServiceDetails[];
     readonly jobs: readonly JobDetails[];
@@ -47,7 +55,39 @@ type Loaded = {
 /** How often the page asks again while it is in front. */
 const REFRESH_MS = 10_000;
 
+/** For a caller without a role in the Account: the Project and the Databases their grants name, nothing else. */
+const loadGranted = async (client: OpenUpstreamClient, project: Project): Promise<ApiResult<Loaded>> => {
+    const [databases, members] = await Promise.all([client.listDatabases(project.id), client.listMembers(project.accountId)]);
+    if (!databases.ok) {
+        return databases;
+    }
+    if (!members.ok) {
+        return members;
+    }
+    // Without a role, the list holds only the caller.
+    const grants = members.value.flatMap((member) => member.grants);
+    return {
+        ok: true,
+        value: {
+            project,
+            granted: grantedDatabases(databases.value, grants),
+            databases: databases.value,
+            services: [],
+            jobs: [],
+            secrets: [],
+            buckets: [],
+            domains: [],
+            routes: {},
+            usage: undefined,
+        },
+    };
+};
+
 const load = async (client: OpenUpstreamClient, id: string): Promise<ApiResult<Loaded>> => {
+    const [reached, accounts] = await Promise.all([client.getProject(id), client.listAccounts()]);
+    if (reached.ok && accounts.ok && accounts.value.find((account) => account.id === reached.value.accountId)?.role === null) {
+        return loadGranted(client, reached.value);
+    }
     const [project, databases, services, jobs, secrets, buckets, domains, usage] = await Promise.all([
         client.getProject(id),
         client.listDatabases(id),
@@ -147,6 +187,9 @@ export function ProjectPage({ id }: { readonly id: string }) {
                 {problem} <a href="/">To your Projects</a>
             </p>
         );
+    }
+    if (loaded.granted !== undefined) {
+        return <GrantedProject project={loaded.project} granted={loaded.granted} problem={problem} />;
     }
     const { project, databases, services, jobs, secrets, buckets, domains, routes, usage } = loaded;
     const defaultHostname = domains.find((domain) => domain.kind === 'default')?.hostname;
@@ -456,5 +499,50 @@ function SizesForm(props: {
             {props.note !== undefined && <small>{props.note}</small>}
             {problem !== undefined && <small role="alert">{problem}</small>}
         </form>
+    );
+}
+
+/**
+ * A Project as a Member without a role sees it (decision 139): only the
+ * Databases they hold a grant on, and how to reach each at its level.
+ */
+function GrantedProject({
+    project,
+    granted,
+    problem,
+}: {
+    readonly project: Project;
+    readonly granted: readonly { readonly database: DatabaseDetails; readonly access: DatabaseAccess }[];
+    readonly problem: string | undefined;
+}) {
+    return (
+        <>
+            <p>
+                <a href="/">← Projects</a>
+            </p>
+            <h1>{project.name}</h1>
+            {problem !== undefined && <p role="alert">{problem}</p>}
+            <p className="notice">You have no role in this Project&apos;s Account: you see the Databases you were given access to, and nothing else of the Project.</p>
+            <section>
+                <h2>Databases</h2>
+                {granted.length === 0 ? (
+                    <p>None any more.</p>
+                ) : (
+                    <ul className="resources">
+                        {granted.map(({ database, access }) => (
+                            <li key={database.id}>
+                                <h3>{database.name}</h3>
+                                <p>
+                                    Your access: <strong>{access}</strong>, and the levels below it.
+                                </p>
+                                <pre>
+                                    <code>{`oup pg proxy ${database.name} --project ${project.name} --access ${access}`}</code>
+                                </pre>
+                            </li>
+                        ))}
+                    </ul>
+                )}
+            </section>
+        </>
     );
 }

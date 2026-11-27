@@ -1,4 +1,4 @@
-import { type Account, DNS_LABEL, type Project } from '@openupstream/sdk';
+import { type Account, DNS_LABEL, type DatabaseAccess, type Grant, type Project } from '@openupstream/sdk';
 
 /** What is wrong with a Project name, before the API is asked; undefined when nothing is. */
 export const projectNameProblem = (name: string, existing: readonly Pick<Project, 'name'>[]): string | undefined =>
@@ -17,3 +17,16 @@ export const projectsByAccount = (
         account,
         projects: projects.filter((project) => project.accountId === account.id).toSorted((a, b) => a.name.localeCompare(b.name)),
     }));
+
+/**
+ * For a Member without a role (decision 139): each Database of the Project
+ * they hold a grant on, with the grant's level, in the API's order.
+ */
+export const grantedDatabases = <D extends { readonly id: string }>(
+    databases: readonly D[],
+    grants: readonly Pick<Grant, 'databaseId' | 'access'>[],
+): { readonly database: D; readonly access: DatabaseAccess }[] =>
+    databases.flatMap((database) => {
+        const grant = grants.find((candidate) => candidate.databaseId === database.id);
+        return grant === undefined ? [] : [{ database, access: grant.access }];
+    });
