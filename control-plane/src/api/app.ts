@@ -1,12 +1,15 @@
 /**
  * The public API (ARCHITECTURE.md, "Control plane"): the caller's Accounts,
  * and the Projects, Databases, Buckets, Services, Jobs, Domains, routing table and Secrets in them. Every route under /v1 except the
- * health check needs a madAuth session token or API key (./auth.ts); an
- * API key needs `openupstream:read` for GET and `openupstream:write` for
- * anything else. Another Account's Project answers 404, like one that does
+ * health check needs a madAuth session token or API key (./auth.ts), or an
+ * Account token (accounts/tokens.ts, decision 144); an API key needs
+ * `openupstream:read` for GET and `openupstream:write` for anything else. Another Account's Project answers 404, like one that does
  * not exist.
  */
 import {
+    ACCOUNT_TOKEN_MAX_DAYS,
+    ACCOUNT_TOKEN_PREFIX,
+    ACCOUNT_TOKEN_ROLES,
     API_KEY_SCOPES,
     BUCKET_NAME,
     COMPUTE_SITES,
@@ -28,6 +31,7 @@ import {
     UUID,
     type Bucket,
     type BucketDetails,
+    type Member,
     type Database,
     type DatabaseAccess,
     type DatabaseDetails,
@@ -63,7 +67,18 @@ import { getCookie } from 'hono/cookie';
 import { stream } from 'hono/streaming';
 import type pg from 'pg';
 import { z } from 'zod';
-import { createAccount, holdsOf, listAccounts } from '../accounts/store.js';
+import { createAccount, getAccount, holdsOf, listAccounts } from '../accounts/store.js';
+import {
+    createAccountToken,
+    listAccountTokens,
+    removeTokenGrant,
+    revokeAccountToken,
+    rollAccountToken,
+    setTokenGrant,
+    tokenBySecret,
+    tokenGrantsOf,
+    updateAccountToken,
+} from '../accounts/tokens.js';
 import { type CallerGrant, changeRole, grantsOf, listMembers, memberOf, removeGrant, removeMember, setGrant } from '../accounts/members.js';
 import { type BucketRecord, createBucket, deleteBucket, getBucket, listBuckets } from '../buckets/store.js';
 import { GiB, MiB, roomForGrowth, roomForNew } from '../databases/capacity.js';
@@ -98,7 +113,7 @@ import {
     sealedRegistryAuth,
     updateService,
 } from '../services/store.js';
-import { type Authenticate, type Identity, accountsOf } from './auth.js';
+import { type AccountTokenIdentity, type AuthError, type Authenticate, type Caller, type Identity, accountsOf } from './auth.js';
 
 export interface ApiDeps {
     readonly pool: pg.Pool;
@@ -159,6 +174,24 @@ const accountInput = z.strictObject({
 
 const memberPatch = z.strictObject({ role: z.enum(MEMBER_ROLES).nullable() });
 const grantInput = z.strictObject({ access: z.enum(DATABASE_ACCESS_LEVELS) });
+
+const DAY_MS = 86_400_000;
+/** An Account token's expiry: in the future, at most ACCOUNT_TOKEN_MAX_DAYS away (decision 144). */
+const tokenExpiry = z.iso
+    .datetime({ offset: true })
+    .transform((value) => new Date(value))
+    .refine((date) => date.getTime() > Date.now(), 'in the future')
+    .refine((date) => date.getTime() <= Date.now() + ACCOUNT_TOKEN_MAX_DAYS * DAY_MS, `at most ${ACCOUNT_TOKEN_MAX_DAYS} days away`);
+const tokenName = z.string().regex(DNS_LABEL, 'a DNS label: lowercase letters, digits and hyphens');
+const tokenInput = z.strictObject({ name: tokenName, role: z.enum(ACCOUNT_TOKEN_ROLES).nullable().optional(), expiresAt: tokenExpiry });
+const tokenPatch = z.strictObject({ name: tokenName.optional(), role: z.enum(ACCOUNT_TOKEN_ROLES).nullable().optional() });
+const tokenRoll = z.strictObject({ expiresAt: tokenExpiry });
+
+/** The madAuth user when the caller is one with a session or `oup`'s access token, not an API key or an Account token. */
+const signedIn = (caller: Caller): Identity | undefined => (caller.kind !== 'account-token' && caller.scopes === undefined ? caller : undefined);
+
+/** Whether the caller may make a request with `method` by its kind alone: an Account token may (its rights decide), an API key by its scopes. */
+const mayCall = (caller: Caller, method: string): boolean => caller.kind === 'account-token' || scopeAllows(caller.scopes, method);
 
 /** Whether a grant at `granted` allows `asked`: its level and those below it (decision 140). */
 export const accessAllows = (granted: DatabaseAccess, asked: DatabaseAccess): boolean =>
@@ -338,8 +371,8 @@ const routeInput = z.union([
 ]);
 
 /** In-cluster connection through the Database's PgBouncer; CloudNativePG's application user and database. */
-/** Who calls: the Accounts where their Member has a role, and the grants that count for them. */
-type Env = { Variables: { identity: Identity; accountIds: string[]; grants: () => Promise<CallerGrant[]> } };
+/** Who calls: the Accounts where their Member (or the Account token) has a role, and the grants that count for them. */
+type Env = { Variables: { identity: Caller; accountIds: string[]; grants: () => Promise<CallerGrant[]> } };
 
 export function createApi(deps: ApiDeps): Hono<Env> {
     const { pool, authenticate, kube, storage } = deps;
@@ -442,6 +475,19 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     // Before the authentication below: the CLI asks this before it has a token.
     app.get('/v1/login', (c) => (deps.cliLogin === undefined ? c.json(notFound, 404) : c.json(deps.cliLogin)));
 
+    /** The Account token a secret belongs to (decision 144), looked up on every request so a revoked one stops at once. */
+    const accountTokenCaller = async (secret: string): Promise<Result<AccountTokenIdentity, AuthError>> => {
+        const found = await tokenBySecret(pool, secret);
+        if (!found.ok) {
+            return err(
+                found.error === 'expired'
+                    ? { kind: 'expired', reason: 'this Account token has expired; an owner gives it a new secret with oup token roll' }
+                    : { kind: 'invalid', reason: 'unknown Account token' },
+            );
+        }
+        return ok({ kind: 'account-token', ...found.value });
+    };
+
     app.use('/v1/*', async (c, next) => {
         const token = /^Bearer (\S+)$/.exec(c.req.header('authorization') ?? '')?.[1];
         // The dashboard is served from the API's own host (decision 120), so
@@ -453,8 +499,14 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             token === undefined && deps.cookieSessions !== undefined && c.req.header('sec-fetch-site') === 'same-origin'
                 ? { value: getCookie(c, SESSION_COOKIE), verify: deps.cookieSessions }
                 : undefined;
-        const identity =
-            token !== undefined ? await authenticate(token) : cookie?.value !== undefined ? await cookie.verify(cookie.value) : undefined;
+        const identity: Result<Caller, AuthError> | undefined =
+            token !== undefined
+                ? token.startsWith(ACCOUNT_TOKEN_PREFIX)
+                    ? await accountTokenCaller(token)
+                    : await authenticate(token)
+                : cookie?.value !== undefined
+                  ? await cookie.verify(cookie.value)
+                  : undefined;
         if (identity === undefined) {
             return c.json({ error: 'bearer token required' }, 401);
         }
@@ -463,18 +515,19 @@ export function createApi(deps: ApiDeps): Hono<Env> {
                 deps.log?.({ msg: 'cannot verify tokens', error: identity.error.reason });
                 return c.json({ error: 'cannot verify tokens now' }, 503);
             }
-            return c.json({ error: 'invalid token' }, 401);
+            return c.json({ error: identity.error.kind === 'expired' ? identity.error.reason : 'invalid token' }, 401);
         }
-        if (!scopeAllows(identity.value.scopes, c.req.method)) {
+        const caller = identity.value;
+        if (!mayCall(caller, c.req.method)) {
             const needed = c.req.method === 'GET' ? API_KEY_SCOPES.read : API_KEY_SCOPES.write;
             return c.json({ error: `this API key lacks the scope ${needed}` }, 403);
         }
-        c.set('identity', identity.value);
-        c.set('accountIds', await accountsOf(pool, identity.value));
+        c.set('identity', caller);
+        // A token reaches its Account through its role, or only what its grants give.
+        c.set('accountIds', caller.kind === 'account-token' ? (caller.role === null ? [] : [caller.accountId]) : await accountsOf(pool, caller));
         // Read once, and only by the routes that look at grants.
-        const subject = identity.value.subject;
         let grants: Promise<CallerGrant[]> | undefined;
-        c.set('grants', () => (grants ??= grantsOf(pool, subject)));
+        c.set('grants', () => (grants ??= caller.kind === 'account-token' ? tokenGrantsOf(pool, caller.tokenId) : grantsOf(pool, caller.subject)));
         return next();
     });
 
@@ -487,14 +540,29 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     const held = (c: Context<Env>, holds: string[]) =>
         c.json({ error: `this Account may not create Resources now: ${holds.join(', ')}`, holds }, 402);
 
-    app.get('/v1/accounts', async (c) => c.json(await listAccounts(pool, c.get('identity').subject)));
+    /** A 403 for an Account token on a route that needs a person: it never manages the Account or sees its Members. */
+    const tokenRefused = (c: Context<Env>, what: string) => c.json({ error: `an Account token cannot ${what}` }, 403);
+
+    app.get('/v1/accounts', async (c) => {
+        const caller = c.get('identity');
+        if (caller.kind !== 'account-token') {
+            return c.json(await listAccounts(pool, caller.subject));
+        }
+        // A token's own Account, with its role in it.
+        const account = await getAccount(pool, caller.accountId);
+        return c.json(account === undefined ? [] : [{ ...account, role: caller.role }]);
+    });
 
     app.post('/v1/accounts', async (c) => {
         const input = accountInput.safeParse(await body(c));
         if (!input.success) {
             return c.json(invalid(input.error.issues), 400);
         }
-        const { subject, email } = c.get('identity');
+        const caller = c.get('identity');
+        if (caller.kind === 'account-token') {
+            return tokenRefused(c, 'create Accounts');
+        }
+        const { subject, email } = caller;
         if (email === undefined) {
             return c.json({ error: 'your madAuth user has no e-mail address' }, 400);
         }
@@ -507,31 +575,60 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     // only an owner changes or removes another, and anyone may leave. None
     // of it with an API key: a leaked key must not change who is in. The
     // schema keeps an owner in every Account.
-    const noKeys = { error: 'an API key cannot change the Account\'s Members; sign in' };
+    const CHANGE_MEMBERS = "change the Account's Members";
     const lastOwner = { error: 'the Account would have no owner; make another Member owner first' };
     const ownersOnly = { error: 'only an owner of the Account may do this' };
 
+    /**
+     * The 403 for a caller that may not manage the Account: an Account token,
+     * or an API key, which must sign in; undefined for a session or `oup`'s
+     * access token.
+     */
+    const managementRefused = (c: Context<Env>, what: string) => {
+        const caller = c.get('identity');
+        return caller.kind === 'account-token'
+            ? tokenRefused(c, what)
+            : caller.scopes !== undefined
+              ? c.json({ error: `an API key cannot ${what}; sign in` }, 403)
+              : undefined;
+    };
+    /** The signed-in caller's Member in the Account when it has a role and the ids are well-formed; else the 403 or 404 to answer. */
+    const managingMember = async (
+        c: Context<Env>,
+        accountId: string,
+        ids: readonly string[],
+        what: string,
+    ): Promise<{ readonly refused: Response; readonly caller?: undefined } | { readonly refused?: undefined; readonly caller: Member }> => {
+        const refused = managementRefused(c, what);
+        const user = signedIn(c.get('identity'));
+        if (refused !== undefined || user === undefined) {
+            return { refused: refused ?? c.json(notFound, 404) };
+        }
+        const caller = UUID.test(accountId) ? await memberOf(pool, accountId, user.subject) : undefined;
+        return caller?.role == null || !ids.every((id) => UUID.test(id)) ? { refused: c.json(notFound, 404) } : { caller };
+    };
+
     app.get('/v1/accounts/:accountId/members', async (c) => {
         const accountId = c.req.param('accountId');
+        const identity = c.get('identity');
+        if (identity.kind === 'account-token') {
+            return tokenRefused(c, "see the Account's Members");
+        }
         if (c.get('accountIds').includes(accountId)) {
             return c.json(await listMembers(pool, accountId));
         }
         // A Member without a role sees themselves and their grants, no one else.
-        const self = UUID.test(accountId) ? await memberOf(pool, accountId, c.get('identity').subject) : undefined;
+        const self = UUID.test(accountId) ? await memberOf(pool, accountId, identity.subject) : undefined;
         return self === undefined ? c.json(notFound, 404) : c.json([self]);
     });
 
     app.patch('/v1/accounts/:accountId/members/:memberId', async (c) => {
-        const identity = c.get('identity');
-        if (identity.scopes !== undefined) {
-            return c.json(noKeys, 403);
-        }
         const { accountId, memberId } = c.req.param();
-        const caller = UUID.test(accountId) ? await memberOf(pool, accountId, identity.subject) : undefined;
-        if (caller?.role == null || !UUID.test(memberId)) {
-            return c.json(notFound, 404);
+        const managing = await managingMember(c, accountId, [memberId], CHANGE_MEMBERS);
+        if (managing.refused !== undefined) {
+            return managing.refused;
         }
-        if (caller.role !== 'owner') {
+        if (managing.caller.role !== 'owner') {
             return c.json(ownersOnly, 403);
         }
         const input = memberPatch.safeParse(await body(c));
@@ -552,14 +649,8 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     // API key. A lower level or none drops the Member's Postgres roles above
     // it while they have no role.
     const grantRefusal = async (c: Context<Env>, accountId: string, memberId: string, databaseId: string) => {
-        if (c.get('identity').scopes !== undefined) {
-            return c.json(noKeys, 403);
-        }
-        const caller = UUID.test(accountId) ? await memberOf(pool, accountId, c.get('identity').subject) : undefined;
-        if (caller?.role == null || !UUID.test(memberId) || !UUID.test(databaseId)) {
-            return c.json(notFound, 404);
-        }
-        return caller.role === 'owner' ? undefined : c.json(ownersOnly, 403);
+        const managing = await managingMember(c, accountId, [memberId, databaseId], CHANGE_MEMBERS);
+        return managing.refused ?? (managing.caller.role === 'owner' ? undefined : c.json(ownersOnly, 403));
     };
 
     app.put('/v1/accounts/:accountId/members/:memberId/grants/:databaseId', async (c) => {
@@ -596,9 +687,10 @@ export function createApi(deps: ApiDeps): Hono<Env> {
 
     // `me` is the caller: leaving the Account.
     app.delete('/v1/accounts/:accountId/members/:memberId', async (c) => {
-        const identity = c.get('identity');
-        if (identity.scopes !== undefined) {
-            return c.json(noKeys, 403);
+        const refused = managementRefused(c, CHANGE_MEMBERS);
+        const identity = signedIn(c.get('identity'));
+        if (refused !== undefined || identity === undefined) {
+            return refused ?? c.json(notFound, 404);
         }
         const { accountId, memberId } = c.req.param();
         const caller = UUID.test(accountId) ? await memberOf(pool, accountId, identity.subject) : undefined;
@@ -614,6 +706,122 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             return removed.error.kind === 'last-owner' ? c.json(lastOwner, 409) : c.json(notFound, 404);
         }
         // The operator drops the roles from the Clusters; their passwords and open `owner` sessions go here.
+        await forgetDroppedRoles(pool, kube, removed.value, deps.log ?? (() => undefined));
+        return c.body(null, 204);
+    });
+
+    // Account tokens (decision 144): owners create, change, roll and revoke
+    // them, with a session or `oup login` only; owners and developers list
+    // them, never with their secrets. A token itself manages none.
+    const MANAGE_TOKENS = 'manage Account tokens';
+    /** The 403 or 404 for a caller that may not change the Account's tokens, or undefined for an owner with a session. */
+    const tokenChangeRefusal = async (c: Context<Env>, accountId: string, ids: readonly string[]) => {
+        const managing = await managingMember(c, accountId, ids, MANAGE_TOKENS);
+        return managing.refused ?? (managing.caller.role === 'owner' ? undefined : c.json(ownersOnly, 403));
+    };
+    const tokenNameTaken = (name: string) => ({ error: `an Account token named ${name} exists` });
+
+    app.get('/v1/accounts/:accountId/account-tokens', async (c) => {
+        const accountId = c.req.param('accountId');
+        if (c.get('identity').kind === 'account-token') {
+            return tokenRefused(c, MANAGE_TOKENS);
+        }
+        return c.get('accountIds').includes(accountId) ? c.json(await listAccountTokens(pool, accountId)) : c.json(notFound, 404);
+    });
+
+    app.post('/v1/accounts/:accountId/account-tokens', async (c) => {
+        const accountId = c.req.param('accountId');
+        const refused = await tokenChangeRefusal(c, accountId, []);
+        if (refused !== undefined) {
+            return refused;
+        }
+        const input = tokenInput.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const created = await createAccountToken(pool, accountId, { name: input.data.name, role: input.data.role ?? null, expiresAt: input.data.expiresAt });
+        if (!created.ok) {
+            return created.error.kind === 'name-taken' ? c.json(tokenNameTaken(created.error.name), 409) : c.json(notFound, 404);
+        }
+        c.header('location', `/v1/accounts/${accountId}/account-tokens/${created.value.id}`);
+        return c.json(created.value, 201);
+    });
+
+    app.patch('/v1/accounts/:accountId/account-tokens/:tokenId', async (c) => {
+        const { accountId, tokenId } = c.req.param();
+        const refused = await tokenChangeRefusal(c, accountId, [tokenId]);
+        if (refused !== undefined) {
+            return refused;
+        }
+        const input = tokenPatch.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const changed = await updateAccountToken(pool, accountId, tokenId, input.data);
+        if (!changed.ok) {
+            return changed.error.kind === 'name-taken' ? c.json(tokenNameTaken(changed.error.name), 409) : c.json(notFound, 404);
+        }
+        // Without the role, the Postgres roles its grants do not allow are dropped, as for a Member.
+        await forgetDroppedRoles(pool, kube, changed.value.dropped, deps.log ?? (() => undefined));
+        return c.json(changed.value.value);
+    });
+
+    app.post('/v1/accounts/:accountId/account-tokens/:tokenId/roll', async (c) => {
+        const { accountId, tokenId } = c.req.param();
+        const refused = await tokenChangeRefusal(c, accountId, [tokenId]);
+        if (refused !== undefined) {
+            return refused;
+        }
+        const input = tokenRoll.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const rolled = await rollAccountToken(pool, accountId, tokenId, input.data.expiresAt);
+        return rolled.ok ? c.json(rolled.value) : c.json(notFound, 404);
+    });
+
+    app.delete('/v1/accounts/:accountId/account-tokens/:tokenId', async (c) => {
+        const { accountId, tokenId } = c.req.param();
+        const refused = await tokenChangeRefusal(c, accountId, [tokenId]);
+        if (refused !== undefined) {
+            return refused;
+        }
+        const revoked = await revokeAccountToken(pool, accountId, tokenId);
+        if (!revoked.ok) {
+            return c.json(notFound, 404);
+        }
+        await forgetDroppedRoles(pool, kube, revoked.value, deps.log ?? (() => undefined));
+        return c.body(null, 204);
+    });
+
+    app.put('/v1/accounts/:accountId/account-tokens/:tokenId/grants/:databaseId', async (c) => {
+        const { accountId, tokenId, databaseId } = c.req.param();
+        const refused = await tokenChangeRefusal(c, accountId, [tokenId, databaseId]);
+        if (refused !== undefined) {
+            return refused;
+        }
+        const input = grantInput.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const granted = await setTokenGrant(pool, accountId, tokenId, databaseId, input.data.access);
+        if (!granted.ok) {
+            return c.json(notFound, 404);
+        }
+        await forgetDroppedRoles(pool, kube, granted.value.dropped, deps.log ?? (() => undefined));
+        return c.json(granted.value.value, granted.value.created ? 201 : 200);
+    });
+
+    app.delete('/v1/accounts/:accountId/account-tokens/:tokenId/grants/:databaseId', async (c) => {
+        const { accountId, tokenId, databaseId } = c.req.param();
+        const refused = await tokenChangeRefusal(c, accountId, [tokenId, databaseId]);
+        if (refused !== undefined) {
+            return refused;
+        }
+        const removed = await removeTokenGrant(pool, accountId, tokenId, databaseId);
+        if (!removed.ok) {
+            return c.json(notFound, 404);
+        }
         await forgetDroppedRoles(pool, kube, removed.value, deps.log ?? (() => undefined));
         return c.body(null, 204);
     });
@@ -825,11 +1033,17 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         const identity = c.get('identity');
         // An API key gets roles of its own, which needs madAuth's id for it.
-        if (identity.scopes !== undefined && identity.apiKeyId === undefined) {
+        if (identity.kind !== 'account-token' && identity.scopes !== undefined && identity.apiKeyId === undefined) {
             return c.json({ error: 'madAuth did not name this API key; cannot give it a role' }, 503);
         }
         const access = input.data.access ?? 'read';
-        const role = await roleFor(pool, deps.kek, database, { subject: identity.subject, apiKeyId: identity.apiKeyId }, access);
+        const role = await roleFor(
+            pool,
+            deps.kek,
+            database,
+            identity.kind === 'account-token' ? { accountTokenId: identity.tokenId } : { subject: identity.subject, apiKeyId: identity.apiKeyId },
+            access,
+        );
         if (!role.ok && role.error.kind === 'project-not-found') {
             // The Database went, or the caller was removed from the Account, while the request ran.
             return c.json(notFound, 404);
@@ -864,7 +1078,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     // a new Project's tunnel route does not exist yet, which `oup` waits
     // out, and a refusal must end its wait.
     app.get('/v1/database-tunnel', async (c) => {
-        if (!scopeAllows(c.get('identity').scopes, 'POST')) {
+        if (!mayCall(c.get('identity'), 'POST')) {
             return c.json({ error: `this API key lacks the scope ${API_KEY_SCOPES.write}` }, 403);
         }
         const projectId = tunnelProjectOf(c.req.header('x-forwarded-host') ?? '', deps.customerDomain);
@@ -884,13 +1098,13 @@ export function createApi(deps: ApiDeps): Hono<Env> {
      * The Bucket with its key. The secret only for a caller that may write,
      * since the key may write too; Garage keeps it, so it is asked each time.
      */
-    const detailsOf = async (bucket: BucketRecord, identity: Identity): Promise<Result<BucketDetails, string>> => {
+    const detailsOf = async (bucket: BucketRecord, identity: Caller): Promise<Result<BucketDetails, string>> => {
         const access = {
             endpoint: `https://${bucket.name}.s3.${deps.customerDomain}`,
             region: GARAGE_REGION,
             accessKeyId: bucket.accessKeyId,
         };
-        if (!scopeAllows(identity.scopes, 'POST')) {
+        if (!mayCall(identity, 'POST')) {
             return ok({ ...publicBucket(bucket), access });
         }
         const secret = await storage.secretOf(bucket.accessKeyId);

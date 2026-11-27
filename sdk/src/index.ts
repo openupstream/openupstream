@@ -34,6 +34,11 @@ import type {
     JobRunInput,
     LogEntry,
     LogQuery,
+    AccountToken,
+    AccountTokenInput,
+    AccountTokenPatch,
+    AccountTokenRoll,
+    AccountTokenWithSecret,
     Grant,
     GrantInput,
     Member,
@@ -55,7 +60,7 @@ export const DEFAULT_API_URL = 'https://console.openupstream.com/api';
 
 export interface ClientOptions {
     baseUrl?: string;
-    /** A madAuth session token, an access token of `oup`, or one of the user's madAuth API keys (`madauth_…`). */
+    /** A madAuth session token, an access token of `oup`, one of the user's madAuth API keys (`madauth_…`) or an Account token (`oup_tok_…`). */
     token: string;
 }
 
@@ -143,6 +148,41 @@ export class OpenUpstreamClient {
      */
     removeMember(accountId: Id, memberId: Id | 'me'): Promise<ApiResult<void>> {
         return this.#call('DELETE', `/v1/accounts/${encodeURIComponent(accountId)}/members/${encodeURIComponent(memberId)}`);
+    }
+
+    /** The Account's tokens, without their secrets; owners and developers see them, never with an Account token. */
+    listAccountTokens(accountId: Id): Promise<ApiResult<AccountToken[]>> {
+        return this.#call('GET', accountTokenPath(accountId));
+    }
+
+    /** A new Account token and its secret, shown only now (decision 144); owners only, never with an API key. */
+    createAccountToken(accountId: Id, input: AccountTokenInput): Promise<ApiResult<AccountTokenWithSecret>> {
+        return this.#call('POST', accountTokenPath(accountId), input);
+    }
+
+    /** Renames an Account token or changes its role; owners only, never with an API key. */
+    updateAccountToken(accountId: Id, tokenId: Id, patch: AccountTokenPatch): Promise<ApiResult<AccountToken>> {
+        return this.#call('PATCH', accountTokenPath(accountId, tokenId), patch);
+    }
+
+    /** A new secret and expiry for an Account token; the previous secret works 24 hours more. Owners only. */
+    rollAccountToken(accountId: Id, tokenId: Id, input: AccountTokenRoll): Promise<ApiResult<AccountTokenWithSecret>> {
+        return this.#call('POST', `${accountTokenPath(accountId, tokenId)}/roll`, input);
+    }
+
+    /** Revokes an Account token at once and drops its Postgres roles; owners only, never with an API key. */
+    deleteAccountToken(accountId: Id, tokenId: Id): Promise<ApiResult<void>> {
+        return this.#call('DELETE', accountTokenPath(accountId, tokenId));
+    }
+
+    /** Gives an Account token access to one Database at a level, or another level; as setGrant for a Member. */
+    setAccountTokenGrant(accountId: Id, tokenId: Id, databaseId: Id, input: GrantInput): Promise<ApiResult<Grant>> {
+        return this.#call('PUT', `${accountTokenPath(accountId, tokenId)}/grants/${encodeURIComponent(databaseId)}`, input);
+    }
+
+    /** Takes an Account token's grant on a Database away, and with it its Postgres roles there while it has no role. */
+    removeAccountTokenGrant(accountId: Id, tokenId: Id, databaseId: Id): Promise<ApiResult<void>> {
+        return this.#call('DELETE', `${accountTokenPath(accountId, tokenId)}/grants/${encodeURIComponent(databaseId)}`);
     }
 
     listProjects(): Promise<ApiResult<Project[]>> {
@@ -434,6 +474,9 @@ export function errorMessage(body: unknown, statusText: string): string {
     );
     return details.length === 0 ? body.error : `${body.error} (${details.join('; ')})`;
 }
+
+const accountTokenPath = (accountId: Id, tokenId?: Id): string =>
+    `/v1/accounts/${encodeURIComponent(accountId)}/account-tokens${tokenId === undefined ? '' : `/${encodeURIComponent(tokenId)}`}`;
 
 const grantPath = (accountId: Id, memberId: Id, databaseId: Id): string =>
     `/v1/accounts/${encodeURIComponent(accountId)}/members/${encodeURIComponent(memberId)}/grants/${encodeURIComponent(databaseId)}`;

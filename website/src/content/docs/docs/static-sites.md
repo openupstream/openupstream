@@ -63,7 +63,9 @@ Files uploaded with another S3 client keep the headers that client set.
 
 ## Deploy from CI
 
-Set `OUP_API_KEY` to an API key and `OUP_PROJECT` to the Project, then run
+Set `OUP_API_KEY` to an Account token with the developer role
+(`oup token create ci --developer --expires 90d`) or an API key, and
+`OUP_PROJECT` to the Project, then run
 the same command:
 
 ```sh

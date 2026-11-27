@@ -22,8 +22,11 @@ if (project.ok) {
 
 ## Authentication
 
-The token is an API key. A key with the scope `openupstream:read` may read
-everything, one with `openupstream:write` may do everything.
+The token is an Account token (`oup_tok_…`, from `oup token create`) or an
+API key. An Account token may do what its role or grants allow, in its own
+Account. A key with the scope `openupstream:read` may read everything its
+Member may, one with `openupstream:write` may do everything its Member
+may. Neither manages the Account's Members or tokens.
 
 ## Another installation
 

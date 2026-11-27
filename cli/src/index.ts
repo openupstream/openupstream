@@ -8,6 +8,8 @@
  *   oup link <project>                       this directory's Project (.openupstream.json)
  *   oup member list | role <email> owner|developer|none | remove <email> | leave [--account <name|id>]
  *   oup member grant <email> read|write|owner --database <name> | revoke <email> --database <name> [--project <name|id>]
+ *   oup token list | create <name> --expires <days|date> [--developer] | role <name> developer|none | roll <name> --expires … | delete <name>
+ *   oup token grant <name> read|write|owner --database <name> | revoke <name> --database <name> [--project <name|id>]
  *   oup pg list | show <name> | delete <name>
  *   oup pg create <name> [--memory <MB>] [--storage <GB>] [--site …]   waits until ready
  *   oup pg restore <source> <name> [--time <RFC 3339>] …   a new Database as a copy of <source>
@@ -32,7 +34,7 @@
  * Database, service, job, secret, bucket, domain, route and usage commands act on the linked Project; `--project`
  * or `OUP_PROJECT` names another.
  *
- * `OUP_API_KEY` (a madAuth API key) replaces `oup login`, e.g. in CI, with
+ * `OUP_API_KEY` (a madAuth API key or an Account token) replaces `oup login`, e.g. in CI, with
  * `OUP_API_URL` for another API than https://console.openupstream.com/api.
  */
 import { spawn } from 'node:child_process';
@@ -47,6 +49,7 @@ import {
     DEFAULT_API_URL,
     type Account,
     type ApiResult,
+    type DatabaseAccess,
     type Bucket,
     type BucketDetails,
     type Domain,
@@ -67,6 +70,7 @@ import { deploy } from './deploy.js';
 import { discover, emailOf, startDeviceSignIn, waitForApproval } from './oidc.js';
 import { accountFor, findLink, formatProjects, projectFor, resolveProject, writeLink } from './project.js';
 import { LAST_OWNER_HINT, formatMembers, memberByEmail, parseGrantAccess, parseRole } from './members.js';
+import { formatTokens, parseExpiry, parseTokenRole, tokenByName } from './tokens.js';
 import {
     type DesiredJob,
     JOB_FLAGS,
@@ -102,6 +106,13 @@ const USAGE = `usage:
   oup member revoke <email> --database <name> [--project <name|id>]
   oup member remove <email> [--account <name|id>]
   oup member leave [--account <name|id>]
+  oup token list [--account <name|id>]
+  oup token create <name> --expires <days|date> [--developer] [--account <name|id>]   (prints the secret once)
+  oup token role <name> developer|none [--account <name|id>]
+  oup token grant <name> read|write|owner --database <name> [--project <name|id>]
+  oup token revoke <name> --database <name> [--project <name|id>]
+  oup token roll <name> --expires <days|date> [--account <name|id>]   (a new secret; the old one works 24 hours more)
+  oup token delete <name> [--account <name|id>]
   oup pg list
   oup pg show <name>
   oup pg create <name> [--memory <MB>] [--storage <GB>] [--site hetzner-fsn1|ovh-lim] [--max-storage <GB> | --no-auto-grow] [--no-wait]
@@ -175,6 +186,14 @@ Only owners change roles and grants and remove Members; anyone may leave.
 An Account always keeps an owner. Postgres roles a Member may no longer use
 are dropped. These commands need oup login: an API key cannot change who
 is in an Account.
+
+token manages Account tokens: secrets of the Account, not of a person, for
+CI, BI tools and scripts. A token has the developer role (--developer) or
+only the grants given to it, never owner, and expires after at most a year
+(--expires 90d or a date). create and roll print the secret alone on
+stdout, once; pipe it into where it is kept, e.g. | gh secret set
+OUP_API_KEY. oup and the SDK use it as OUP_API_KEY. Owners manage tokens
+with oup login; developers list them. delete revokes a token at once.
 
 logs prints the last lines (100 by default) of every replica or of a run,
 with -f also new ones as they are written, for up to an hour. Nothing is
@@ -1209,6 +1228,140 @@ async function member(args: string[]): Promise<void> {
     );
 }
 
+/** `oup token`: the Account's tokens (decision 144); create and roll print the secret alone on stdout. */
+async function token(args: string[]): Promise<void> {
+    const [verb, ...rest] = args;
+    const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: {
+            account: { type: 'string' },
+            database: { type: 'string' },
+            project: { type: 'string' },
+            expires: { type: 'string' },
+            developer: { type: 'boolean' },
+        },
+    });
+    const [name, word, ...extra] = positionals;
+    const arity = { list: 0, create: 1, role: 2, grant: 2, revoke: 1, roll: 1, delete: 1 }[verb ?? ''];
+    if (arity === undefined || positionals.length !== arity || extra.length > 0) {
+        return fail(USAGE);
+    }
+    const onDatabase = verb === 'grant' || verb === 'revoke';
+    if (onDatabase && values.database === undefined) {
+        return fail(`oup token ${verb} needs --database <name>`);
+    }
+    if (onDatabase ? values.account !== undefined : values.database !== undefined || values.project !== undefined) {
+        return fail(onDatabase ? `oup token ${verb} acts in the Database's Account; it takes no --account` : `oup token ${verb} takes no --database or --project`);
+    }
+    if (values.expires !== undefined && verb !== 'create' && verb !== 'roll') {
+        return fail(`oup token ${verb} takes no --expires`);
+    }
+    if (values.developer !== undefined && verb !== 'create') {
+        return fail(`oup token ${verb} takes no --developer; oup token role <name> developer gives it the role`);
+    }
+    const now = new Date();
+    const expiry = verb === 'create' || verb === 'roll' ? parseExpiry(values.expires, now) : undefined;
+    if (expiry !== undefined && !expiry.ok) {
+        return fail(expiry.error);
+    }
+    const role = verb === 'role' ? parseTokenRole(word) : undefined;
+    if (role !== undefined && !role.ok) {
+        return fail(role.error);
+    }
+    const access = verb === 'grant' ? parseGrantAccess(word) : undefined;
+    if (access !== undefined && !access.ok) {
+        return fail(access.error);
+    }
+    if (onDatabase) {
+        return tokenGrant(name ?? '', access?.value, values.database ?? '', values.project);
+    }
+    const client = await apiClient();
+    const account = accountFor(await listAccounts(client), values.account);
+    if (!account.ok) {
+        return fail(account.error);
+    }
+    if (verb === 'create') {
+        const input = { name: name ?? '', role: values.developer === true ? ('developer' as const) : null, expiresAt: expiry?.ok === true ? expiry.value.toISOString() : '' };
+        const created = await client.createAccountToken(account.value.id, input);
+        if (!created.ok) {
+            return fail(created.error.message);
+        }
+        const rights = created.value.role === null ? `no rights yet: oup token grant ${created.value.name} read --database <name> gives some` : 'the developer role';
+        console.error(`Created the Account token ${created.value.name} in ${account.value.name}, with ${rights}, until ${created.value.expiresAt.slice(0, 10)}.`);
+        console.error('Its secret follows, shown only now; use it as OUP_API_KEY:');
+        return console.log(created.value.secret);
+    }
+    const tokens = await client.listAccountTokens(account.value.id);
+    if (!tokens.ok) {
+        return fail(tokens.error.message);
+    }
+    if (verb === 'list') {
+        const lines = formatTokens(tokens.value, now);
+        return console.log(lines.length === 0 ? 'No Account tokens; oup token create <name> --expires 90d makes one.' : lines.join('\n'));
+    }
+    const target = tokenByName(tokens.value, name ?? '');
+    if (!target.ok) {
+        return fail(target.error);
+    }
+    if (verb === 'delete') {
+        const deleted = await client.deleteAccountToken(account.value.id, target.value.id);
+        return deleted.ok
+            ? console.log(`Revoked the Account token ${target.value.name}; it stops working now, and its Postgres roles are dropped.`)
+            : fail(deleted.error.message);
+    }
+    if (verb === 'roll') {
+        const rolled = await client.rollAccountToken(account.value.id, target.value.id, { expiresAt: expiry?.ok === true ? expiry.value.toISOString() : '' });
+        if (!rolled.ok) {
+            return fail(rolled.error.message);
+        }
+        const previous = rolled.value.previousSecretValidUntil;
+        console.error(`Rolled the Account token ${rolled.value.name}, now valid until ${rolled.value.expiresAt.slice(0, 10)}.`);
+        console.error(previous === undefined ? 'The previous secret had expired.' : `The previous secret works until ${previous}.`);
+        console.error('The new secret follows, shown only now:');
+        return console.log(rolled.value.secret);
+    }
+    const changed = await client.updateAccountToken(account.value.id, target.value.id, { role: role?.ok === true ? role.value : null });
+    if (!changed.ok) {
+        return fail(changed.error.message);
+    }
+    return console.log(
+        changed.value.role === null
+            ? `The Account token ${changed.value.name} now has no role, only its grants; its Postgres roles beyond those are dropped.`
+            : `The Account token ${changed.value.name} now has the role ${changed.value.role}.`,
+    );
+}
+
+/** `oup token grant` and `revoke`: a token's access to one Database of the linked Project (decision 139). */
+async function tokenGrant(name: string, access: DatabaseAccess | undefined, databaseName: string, projectFlag: string | undefined): Promise<void> {
+    const { client, project } = await inProject(projectFlag);
+    const databases = await client.listDatabases(project.id);
+    if (!databases.ok) {
+        return fail(databases.error.message);
+    }
+    const database = databases.value.find((candidate) => candidate.name === databaseName) ?? fail(`no Database ${databaseName} in ${project.name}`);
+    const tokens = await client.listAccountTokens(project.accountId);
+    if (!tokens.ok) {
+        return fail(tokens.error.message);
+    }
+    const target = tokenByName(tokens.value, name);
+    if (!target.ok) {
+        return fail(target.error);
+    }
+    const where = `${project.name}/${database.name}`;
+    if (access === undefined) {
+        const removed = await client.removeAccountTokenGrant(project.accountId, target.value.id, database.id);
+        return removed.ok
+            ? console.log(`The Account token ${name} has no grant on ${where} any more.${target.value.role === null ? ' Its Postgres roles there are dropped.' : ''}`)
+            : fail(removed.error.status === 404 ? `the Account token ${name} has no grant on ${where}` : removed.error.message);
+    }
+    const granted = await client.setAccountTokenGrant(project.accountId, target.value.id, database.id, { access });
+    const note = target.value.role === null ? '' : ` It counts only once the token has no role (it is ${target.value.role}).`;
+    return granted.ok
+        ? console.log(`The Account token ${name} may use ${where} at ${granted.value.access}: oup pg proxy ${database.name} --access ${granted.value.access} or lower.${note}`)
+        : fail(granted.error.message);
+}
+
 /** `oup member grant` and `revoke`: a Member's access to one Database of the linked Project (decision 139). */
 async function memberGrant(verb: 'grant' | 'revoke', email: string, level: string | undefined, name: string, projectFlag: string | undefined): Promise<void> {
     const access = verb === 'grant' ? parseGrantAccess(level) : undefined;
@@ -1312,6 +1465,8 @@ const run = async (): Promise<void> => {
             return project(rest);
         case 'link':
             return link(rest);
+        case 'token':
+            return token(rest);
         case 'member':
             return member(rest);
         case 'pg':

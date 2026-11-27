@@ -4,6 +4,8 @@ import { type CryptoKey, SignJWT, createLocalJWKSet, createRemoteJWKSet, exportJ
 import {
     API_KEY_SCOPES,
     type Account,
+    type AccountToken,
+    type AccountTokenWithSecret,
     type Bucket,
     type BucketDetails,
     type DatabaseDetails,
@@ -26,6 +28,7 @@ import {
 import { getAccountRecord, liftHold, placeHold } from '../accounts/store.js';
 import { listDatabaseRows } from '../databases/rows.js';
 import { removeUser } from '../accounts/members.js';
+import { dropExpiredTokenRoles } from '../accounts/tokens.js';
 import { LAST_OWNER } from '../db/errors.js';
 import { forgetDroppedRoles, revokeApiKey, roleFor } from '../databases/roles.js';
 import { syncProjectSecrets } from '../secrets/render.js';
@@ -748,6 +751,212 @@ describe('Grants on Databases', () => {
         assert.equal((await call('DELETE', `/v1/projects/${other}/databases/${doomed.id}`, 'gina')).status, 202);
         assert.deepEqual(await (await call('GET', '/v1/projects', 'gus')).json(), []);
         assert.deepEqual(((await (await call('GET', `/v1/accounts/${accountId}/members`, 'gus')).json()) as Member[])[0]?.grants, []);
+    });
+});
+
+describe('Account tokens', () => {
+    let accountId: string;
+    let shop: string;
+    let orders: DatabaseDetails;
+    let events: DatabaseDetails;
+    const inDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString();
+    const tokensPath = () => `/v1/accounts/${accountId}/account-tokens`;
+    const create = (by: string, body: unknown) => call('POST', tokensPath(), by, body);
+    const withSecret = (secret: string, method: string, path: string, body?: unknown) =>
+        api.request(path, {
+            method,
+            headers: { authorization: `Bearer ${secret}`, ...(body === undefined ? {} : { 'content-type': 'application/json' }) },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+    const tunnel = (secret: string, database: DatabaseDetails, target: string) =>
+        api.request('/v1/database-tunnel', {
+            headers: {
+                authorization: `Bearer ${secret}`,
+                'x-forwarded-host': `pg-${shop}.openupstream.test`,
+                'x-forwarded-uri': `/databases/${database.id}/${target}`,
+                'x-forwarded-method': 'GET',
+            },
+        });
+    const liveRoles = async (database: DatabaseDetails, tokenId: string) =>
+        (
+            await db.pool.query<{ access: string }>(
+                'select access from database_roles where database_id = $1 and account_token_id = $2 and dropped_at is null order by access',
+                [database.id, tokenId],
+            )
+        ).rows.map((row) => row.access);
+    const newToken = async (name: string, role: string | null = null) => {
+        const created = await create('tina', { name, role, expiresAt: inDays(30) });
+        assert.equal(created.status, 201);
+        return (await created.json()) as AccountTokenWithSecret;
+    };
+
+    before(async () => {
+        accountId = ((await (await call('POST', '/v1/accounts', 'tina', { name: 'Tina SE' })).json()) as Account).id;
+        await db.pool.query(`insert into members (account_id, auth_subject, email, role) values ($1, 'ted', 'ted@tina.test', 'developer')`, [accountId]);
+        shop = ((await (await call('POST', '/v1/projects', 'tina', { accountId, name: 'shop' })).json()) as Project).id;
+        orders = (await (await call('POST', `/v1/projects/${shop}/databases`, 'tina', { name: 'orders', memoryMb: 256, storageGb: 1 })).json()) as DatabaseDetails;
+        events = (await (await call('POST', `/v1/projects/${shop}/databases`, 'tina', { name: 'events', memoryMb: 256, storageGb: 1 })).json()) as DatabaseDetails;
+    });
+
+    test('an owner creates one and sees its secret once; developers list them; keys, tokens and bad input are refused', async () => {
+        const created = await create('tina', { name: 'ci', role: 'developer', expiresAt: inDays(90) });
+        assert.equal(created.status, 201);
+        const token = (await created.json()) as AccountTokenWithSecret;
+        assert.match(token.secret, /^oup_tok_[A-Za-z0-9_-]{43}$/);
+        assert.deepEqual([token.name, token.role, token.grants, token.lastUsedAt], ['ci', 'developer', [], null]);
+        assert.equal(created.headers.get('location'), `${tokensPath()}/${token.id}`);
+        const stored = await db.pool.query('select 1 from account_token_secrets where hash = sha256($1::text::bytea)', [token.secret]);
+        assert.equal(stored.rowCount, 1, 'only its hash is kept');
+
+        const listed = (await (await call('GET', tokensPath(), 'ted')).json()) as AccountToken[];
+        assert.deepEqual(listed.map((t) => t.name), ['ci']);
+        assert.equal('secret' in (listed[0] ?? {}), false, 'never the secret again');
+        assert.equal((await create('ted', { name: 'mine', expiresAt: inDays(1) })).status, 403, 'developers only list');
+        assert.equal((await create('tina', { name: 'ci', expiresAt: inDays(1) })).status, 409);
+        assert.equal((await create('tina', { name: 'Bad_Name', expiresAt: inDays(1) })).status, 400);
+        assert.equal((await create('tina', { name: 'old', expiresAt: inDays(-1) })).status, 400, 'in the past');
+        assert.equal((await create('tina', { name: 'long', expiresAt: inDays(366) })).status, 400, 'more than a year');
+        assert.equal((await create('tina', { name: 'nope', role: 'owner', expiresAt: inDays(1) })).status, 400, 'never owner');
+        assert.equal((await create('tina', { name: 'nope' })).status, 400, 'expiry is required');
+        const keyed = await withSecret('madauth_tina_write', 'POST', tokensPath(), { name: 'keyed', expiresAt: inDays(1) });
+        assert.equal(keyed.status, 403);
+        assert.match(((await keyed.json()) as { error: string }).error, /API key cannot manage Account tokens/);
+        assert.equal((await withSecret(token.secret, 'POST', tokensPath(), { name: 'self', expiresAt: inDays(1) })).status, 403);
+        assert.equal((await withSecret(token.secret, 'GET', tokensPath())).status, 403);
+        assert.equal((await call('GET', tokensPath(), 'bob')).status, 404, "another Account's");
+    });
+
+    test('a developer token works as a developer in its Account, and never on the Account itself', async () => {
+        const token = await newToken('deploy', 'developer');
+        const accounts = (await (await withSecret(token.secret, 'GET', '/v1/accounts')).json()) as Account[];
+        assert.deepEqual(accounts.map((account) => [account.name, account.role]), [['Tina SE', 'developer']]);
+        assert.deepEqual(((await (await withSecret(token.secret, 'GET', '/v1/projects')).json()) as Project[]).map((p) => p.name), ['shop']);
+        const created = await withSecret(token.secret, 'POST', '/v1/projects', { accountId, name: 'from-ci' });
+        assert.equal(created.status, 201);
+        assert.equal((await withSecret(token.secret, 'DELETE', `/v1/projects/${((await created.json()) as Project).id}`)).status, 202);
+        assert.equal((await withSecret(token.secret, 'POST', '/v1/projects', { accountId: accountA, name: 'x' })).status, 403, 'only its own Account');
+        assert.equal((await withSecret(token.secret, 'POST', `/v1/projects/${shop}/databases/${orders.id}/proxy`, { access: 'owner' })).status, 201);
+        assert.equal((await tunnel(token.secret, orders, 'primary')).status, 204);
+        assert.equal((await withSecret(token.secret, 'GET', `/v1/accounts/${accountId}/members`)).status, 403);
+        const member = (await db.pool.query<{ id: string }>(`select id from members where auth_subject = 'ted'`)).rows[0]?.id;
+        assert.equal((await withSecret(token.secret, 'PATCH', `/v1/accounts/${accountId}/members/${member}`, { role: null })).status, 403);
+        assert.equal((await withSecret(token.secret, 'POST', '/v1/accounts', { name: 'by a token' })).status, 403);
+        assert.equal((await withSecret('oup_tok_unknown', 'GET', '/v1/projects')).status, 401);
+        const used = (await (await call('GET', tokensPath(), 'tina')).json()) as AccountToken[];
+        assert.notEqual(used.find((t) => t.name === 'deploy')?.lastUsedAt, null, 'its last use is recorded');
+    });
+
+    test('a token with grants reaches its Databases up to their level and nothing else', async () => {
+        const token = await newToken('metabase');
+        assert.deepEqual(await (await withSecret(token.secret, 'GET', '/v1/projects')).json(), [], 'nothing before a grant');
+        const grantPath = `${tokensPath()}/${token.id}/grants/${orders.id}`;
+        assert.equal((await call('PUT', grantPath, 'ted', { access: 'read' })).status, 403, 'owners only');
+        const granted = await call('PUT', grantPath, 'tina', { access: 'write' });
+        assert.equal(granted.status, 201);
+        assert.equal(((await granted.json()) as Grant).databaseName, 'orders');
+        assert.deepEqual(((await (await call('GET', tokensPath(), 'tina')).json()) as AccountToken[]).find((t) => t.id === token.id)?.grants.map((g) => g.access), ['write']);
+
+        assert.deepEqual(((await (await withSecret(token.secret, 'GET', '/v1/projects')).json()) as Project[]).map((p) => p.name), ['shop']);
+        const databases = (await (await withSecret(token.secret, 'GET', `/v1/projects/${shop}/databases`)).json()) as DatabaseDetails[];
+        assert.deepEqual(databases.map((database) => database.name), ['orders']);
+        assert.equal((await withSecret(token.secret, 'GET', `/v1/projects/${shop}/secrets`)).status, 404);
+        assert.equal((await withSecret(token.secret, 'POST', '/v1/projects', { accountId, name: 'x' })).status, 403);
+        const proxy = (database: DatabaseDetails, access: string) =>
+            withSecret(token.secret, 'POST', `/v1/projects/${shop}/databases/${database.id}/proxy`, { access });
+        assert.equal((await proxy(orders, 'read')).status, 201);
+        assert.equal((await proxy(orders, 'write')).status, 201);
+        assert.equal((await proxy(orders, 'read')).status, 200, 'the same role on the next ask');
+        assert.equal((await proxy(orders, 'owner')).status, 403);
+        assert.equal((await proxy(events, 'read')).status, 404);
+        assert.equal((await tunnel(token.secret, orders, 'pooler')).status, 204);
+        assert.equal((await tunnel(token.secret, orders, 'primary')).status, 403);
+        assert.deepEqual(await liveRoles(orders, token.id), ['read', 'write']);
+
+        removedObjects.length = 0;
+        assert.equal((await call('PUT', grantPath, 'tina', { access: 'read' })).status, 200);
+        assert.deepEqual(await liveRoles(orders, token.id), ['read'], 'a lower grant drops the roles above it');
+        assert.equal(removedObjects.filter((object) => object.kind === 'Secret').length, 1);
+        assert.equal((await call('DELETE', grantPath, 'tina')).status, 204);
+        assert.equal((await call('DELETE', grantPath, 'tina')).status, 404);
+        assert.deepEqual(await liveRoles(orders, token.id), []);
+        assert.deepEqual(await (await withSecret(token.secret, 'GET', '/v1/projects')).json(), []);
+    });
+
+    test('losing the role keeps what the grants allow', async () => {
+        const token = await newToken('etl', 'developer');
+        const proxy = (database: DatabaseDetails, access: string) =>
+            withSecret(token.secret, 'POST', `/v1/projects/${shop}/databases/${database.id}/proxy`, { access });
+        assert.equal((await proxy(orders, 'owner')).status, 201);
+        assert.equal((await proxy(events, 'read')).status, 201);
+        assert.equal((await call('PUT', `${tokensPath()}/${token.id}/grants/${events.id}`, 'tina', { access: 'read' })).status, 201);
+        const changed = await call('PATCH', `${tokensPath()}/${token.id}`, 'tina', { role: null, name: 'etl-reader' });
+        assert.equal(changed.status, 200);
+        const body = (await changed.json()) as AccountToken;
+        assert.deepEqual([body.name, body.role], ['etl-reader', null]);
+        assert.deepEqual(await liveRoles(orders, token.id), []);
+        assert.deepEqual(await liveRoles(events, token.id), ['read']);
+        assert.equal((await call('PATCH', `${tokensPath()}/${token.id}`, 'tina', { name: 'ci' })).status, 409, 'names stay unique');
+    });
+
+    test('a roll gives a new secret, keeps the old one for 24 hours, and keeps the roles', async () => {
+        const token = await newToken('bi');
+        assert.equal((await call('PUT', `${tokensPath()}/${token.id}/grants/${orders.id}`, 'tina', { access: 'read' })).status, 201);
+        const before = (await (await withSecret(token.secret, 'POST', `/v1/projects/${shop}/databases/${orders.id}/proxy`, { access: 'read' })).json()) as DatabaseProxy;
+        assert.equal((await call('POST', `${tokensPath()}/${token.id}/roll`, 'ted', { expiresAt: inDays(60) })).status, 403);
+        const rolled = await call('POST', `${tokensPath()}/${token.id}/roll`, 'tina', { expiresAt: inDays(60) });
+        assert.equal(rolled.status, 200);
+        const fresh = (await rolled.json()) as AccountTokenWithSecret;
+        assert.notEqual(fresh.secret, token.secret);
+        assert.equal(fresh.expiresAt.slice(0, 10), inDays(60).slice(0, 10));
+        const overlap = new Date(fresh.previousSecretValidUntil ?? 0).getTime() - Date.now();
+        assert.ok(overlap > 23 * 3_600_000 && overlap <= 24 * 3_600_000, 'the old secret has 24 hours left');
+        assert.equal((await withSecret(token.secret, 'GET', '/v1/projects')).status, 200, 'the old secret still works');
+        const after = (await (await withSecret(fresh.secret, 'POST', `/v1/projects/${shop}/databases/${orders.id}/proxy`, { access: 'read' })).json()) as DatabaseProxy;
+        assert.deepEqual([after.user, after.password], [before.user, before.password], 'the same Postgres role');
+
+        await db.pool.query(
+            `update account_token_secrets set valid_until = now() - interval '1 second' where account_token_id = $1 and valid_until < now() + interval '2 days'`,
+            [token.id],
+        );
+        assert.equal((await withSecret(token.secret, 'GET', '/v1/projects')).status, 401, 'after 24 hours, the old one ends');
+        assert.equal((await withSecret(fresh.secret, 'GET', '/v1/projects')).status, 200);
+    });
+
+    test('revoking ends it at once and drops its roles; an expired one is refused and its roles go', async () => {
+        const token = await newToken('gone', 'developer');
+        assert.equal((await withSecret(token.secret, 'POST', `/v1/projects/${shop}/databases/${orders.id}/proxy`, { access: 'owner' })).status, 201);
+        const tunnelPods = `project-${shop} openupstream.io/component=database-tunnel`;
+        pods.set(tunnelPods, [{ name: 'database-tunnel-gone', nodeName: 'n1', containers: [] }]);
+        removedObjects.length = 0;
+        assert.equal((await call('DELETE', `${tokensPath()}/${token.id}`, 'ted')).status, 403);
+        assert.equal((await call('DELETE', `${tokensPath()}/${token.id}`, 'tina')).status, 204);
+        assert.equal((await withSecret(token.secret, 'GET', '/v1/projects')).status, 401);
+        assert.deepEqual(await liveRoles(orders, token.id), []);
+        assert.deepEqual(
+            removedObjects.map((object) => object.kind),
+            ['Secret', 'Pod'],
+            'its Secret goes, and its open owner session with the tunnel pod',
+        );
+        pods.delete(tunnelPods);
+        assert.equal((await call('DELETE', `${tokensPath()}/${token.id}`, 'tina')).status, 404);
+        assert.equal(((await (await call('GET', tokensPath(), 'tina')).json()) as AccountToken[]).some((t) => t.name === 'gone'), false);
+        assert.equal((await newToken('gone')).name, 'gone', 'its name is free again');
+
+        const expiring = await newToken('expiring', 'developer');
+        assert.equal((await withSecret(expiring.secret, 'POST', `/v1/projects/${shop}/databases/${events.id}/proxy`, { access: 'read' })).status, 201);
+        await db.pool.query(
+            `with t as (update account_tokens set expires_at = now() - interval '1 second' where id = $1)
+             update account_token_secrets set valid_until = now() - interval '1 second' where account_token_id = $1`,
+            [expiring.id],
+        );
+        const refused = await withSecret(expiring.secret, 'GET', '/v1/projects');
+        assert.equal(refused.status, 401);
+        assert.match(((await refused.json()) as { error: string }).error, /expired.*oup token roll/);
+        assert.equal(await dropExpiredTokenRoles(db.pool), 1);
+        assert.deepEqual(await liveRoles(events, expiring.id), []);
+        const revived = (await (await call('POST', `${tokensPath()}/${expiring.id}/roll`, 'tina', { expiresAt: inDays(7) })).json()) as AccountTokenWithSecret;
+        assert.equal(revived.previousSecretValidUntil, undefined, 'an expired secret is not kept');
+        assert.equal((await withSecret(revived.secret, 'GET', '/v1/projects')).status, 200, 'a roll brings an expired token back');
     });
 });
 

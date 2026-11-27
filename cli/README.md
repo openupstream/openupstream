@@ -64,6 +64,32 @@ oup site deploy dist --bucket my-site
 - `oup member leave`: leaves the Account; its last owner cannot. `oup
   member` changes need `oup login`: an API key cannot change who is in an
   Account.
+- `oup token list [--account <name|id>]`: the Account's tokens (decision
+  144), secrets of the Account rather than of a person, for CI, BI tools
+  and scripts: each with its role, expiry, last use and grants, never its
+  secret. Owners and developers see them.
+- `oup token create <name> --expires <days|date> [--developer] [--account <name|id>]`:
+  a new token that expires after `90d` or on a date, at most a year away.
+  `--developer` gives it the developer role (every Project and everything
+  in it, never the Account itself); without it, it reaches only what
+  `oup token grant` gives. The secret (`oup_tok_…`) is printed alone on
+  stdout, only now, so it can go straight to where it is kept, e.g.
+  `oup token create ci --developer --expires 90d | gh secret set OUP_API_KEY`.
+- `oup token grant <name> read|write|owner --database <name> [--project <name|id>]`
+  and `oup token revoke <name> --database <name>`: a token's access to one
+  Database of the linked Project, as for a Member, e.g. `read` for a BI
+  tool. A grant counts only while the token has no role.
+- `oup token role <name> developer|none`: gives a token the developer role
+  or takes it; without it, its Postgres roles beyond its grants are
+  dropped.
+- `oup token roll <name> --expires <days|date>`: a new secret with a new
+  expiry, printed like `create`'s; the old one keeps working for 24 hours,
+  so CI can be switched over. Its name, rights and Postgres roles stay, so
+  a BI tool's saved database login keeps working. It also brings back an
+  expired token.
+- `oup token delete <name>`: revokes the token at once and drops its
+  Postgres roles. Changing tokens needs an owner with `oup login`; neither
+  an API key nor a token can.
 - `oup pg create <name> [--memory <MB>] [--storage <GB>] [--site hetzner-fsn1|ovh-lim] [--max-storage <GB> | --no-auto-grow] [--no-wait]`:
   a Database with its primary in the Site (default `hetzner-fsn1`) and a
   standby in the other one, 256 MB and 1 GB unless told otherwise. Its
@@ -102,8 +128,8 @@ oup site deploy dist --bucket my-site
   5 connections at once, which end when the primary restarts. The same role
   and password every time, on any machine. Connections travel through a
   WebSocket on port 443; nothing else needs installing or opening. With
-  `OUP_API_KEY` (which needs `openupstream:write`), the key gets roles of
-  its own.
+  `OUP_API_KEY` (an API key needs `openupstream:write`), the key or the
+  Account token gets roles of its own.
 - `oup service deploy <name> --image <ref> [--port <n> | --no-port] [--replicas <n>]
   [--memory <MB>] [--cpu <millicores>] [--site hetzner-fsn1|ovh-lim]
   [--registry-user <user> --registry-password-stdin] [--no-wait]`: brings
@@ -203,8 +229,10 @@ oup site deploy dist --bucket my-site
   headers come from the name: hashed assets a year and immutable,
   `index.html` `no-cache`, the rest five minutes.
 
-In CI, set `OUP_API_KEY` to a madAuth API key instead of signing in, and
-`OUP_API_URL` for another API than `https://console.openupstream.com/api`.
+In CI, set `OUP_API_KEY` instead of signing in: preferably to an Account
+token (`oup token create`), which belongs to the Account and keeps working
+when the person who made it leaves, or to a madAuth API key of your own.
+`OUP_API_URL` names another API than `https://console.openupstream.com/api`.
 
 <!-- docs:end -->
 

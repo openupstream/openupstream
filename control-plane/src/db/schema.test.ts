@@ -342,6 +342,45 @@ describe('Projects', () => {
     });
 });
 
+describe('Account tokens', () => {
+    test('a token is never owner, and its name is unique among the live ones of its Account', async () => {
+        const accountId = await createAccount();
+        const create = (name: string, role: string | null) =>
+            db.pool.query(`insert into account_tokens (account_id, name, role, expires_at) values ($1, $2, $3, now() + interval '1 day') returning id`, [
+                accountId,
+                name,
+                role,
+            ]);
+        const first = (await create('ci', 'developer')).rows[0]?.id;
+        await rejectsWith(create('bi', 'owner'), CHECK_VIOLATION);
+        await rejectsWith(create('Bad_Name', null), CHECK_VIOLATION);
+        await rejectsWith(create('ci', null), UNIQUE_VIOLATION);
+        await db.pool.query('update account_tokens set revoked_at = now() where id = $1', [first]);
+        await create('ci', null);
+    });
+
+    test("a Postgres role belongs to a madAuth user (and maybe their API key) or to a token, never both", async () => {
+        const { accountId, projectId } = await newProject();
+        const databaseId = await insert(
+            "insert into databases (project_id, name, home_site, memory_mb, storage_gb) values ($1, $2, 'hetzner-fsn1', 256, 1)",
+            [projectId, unique('db')],
+        );
+        const tokenId = await insert("insert into account_tokens (account_id, name, expires_at) values ($1, 'bi', now() + interval '1 day')", [accountId]);
+        const role = (subject: string | null, apiKeyId: string | null, token: string | null) =>
+            db.pool.query(
+                `insert into database_roles (id, database_id, auth_subject, api_key_id, account_token_id, access, password)
+                 values (gen_random_uuid(), $1, $2, $3, $4, 'read', '\\x00')`,
+                [databaseId, subject, apiKeyId, token],
+            );
+        await role('usr_1', null, null);
+        await role(null, null, tokenId);
+        await rejectsWith(role(null, null, tokenId), UNIQUE_VIOLATION);
+        await rejectsWith(role('usr_1', null, tokenId), CHECK_VIOLATION);
+        await rejectsWith(role(null, 'key_1', tokenId), CHECK_VIOLATION);
+        await rejectsWith(role(null, null, null), CHECK_VIOLATION);
+    });
+});
+
 describe('Usage events', () => {
     const insertEvent = (unit: string, quantity: number, resourceKind = 'service', length = "interval '1 hour'") =>
         db.pool.query(

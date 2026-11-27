@@ -28,6 +28,14 @@ Project's Databases is closed once, so tools reconnect within seconds.
 Deleting your sign-in removes you from every Account in the same way,
 and revoking an API key drops the Postgres roles it had.
 
+An **Account token** is a secret that belongs to the Account rather than
+to a person, for CI, BI tools and scripts. It has the developer role or
+only grants, never owner, expires after at most a year, and keeps working
+when the person who made it leaves. Owners make one with
+`oup token create`, which shows its secret once; `oup token roll` gives
+it a new secret and keeps the old one working for 24 hours. Revoking it
+(`oup token delete`) stops it at once and drops its Postgres roles.
+
 An Account can have a **Hold**: a reason it may not create Resources now,
 such as a missing payment method. Its existing Resources keep running.
 

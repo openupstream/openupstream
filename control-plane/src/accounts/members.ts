@@ -17,7 +17,7 @@ import { LAST_OWNER, unlessCodes } from '../db/errors.js';
 import { inTransaction } from '../db/transaction.js';
 import { type Result, err, ok } from '../result.js';
 
-interface GrantJson {
+export interface GrantJson {
     databaseId: string;
     databaseName: string;
     projectId: string;
@@ -36,7 +36,7 @@ interface MemberRow {
     created_at: Date;
 }
 
-const toGrant = (grant: GrantJson): Grant => ({ ...grant, createdAt: new Date(grant.createdAt).toISOString() });
+export const toGrant = (grant: GrantJson): Grant => ({ ...grant, createdAt: new Date(grant.createdAt).toISOString() });
 
 const toMember = (row: MemberRow): Member => ({
     id: row.id,
@@ -48,8 +48,8 @@ const toMember = (row: MemberRow): Member => ({
     createdAt: row.created_at.toISOString(),
 });
 
-/** A grant's JSON from `g` joined with its Database `d` and Project `p`. */
-const GRANT_JSON = `jsonb_build_object('databaseId', d.id, 'databaseName', d.name, 'projectId', p.id, 'projectName', p.name,
+/** A grant's JSON from `g` (a Member's or an Account token's) joined with its Database `d` and Project `p`. */
+export const GRANT_JSON = `jsonb_build_object('databaseId', d.id, 'databaseName', d.name, 'projectId', p.id, 'projectName', p.name,
                                        'access', g.access, 'createdAt', g.created_at)`;
 /** The grants on live Databases of the Member `m`. */
 const GRANTS = `coalesce((
@@ -82,7 +82,7 @@ const memberById = async (client: pg.PoolClient, accountId: Id, memberId: Id): P
     return row === undefined ? undefined : toMember(row);
 };
 
-/** A Database the caller may use through a grant, while their Member in its Account has no role. */
+/** A Database the caller may use through a grant, while their Member in its Account, or the Account token, has no role. */
 export interface CallerGrant {
     readonly accountId: Id;
     readonly projectId: Id;

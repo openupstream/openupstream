@@ -59,12 +59,14 @@ the Account itself), or have no role and only grants: access to single
 Databases at a level, such as read-only for an analyst. Owners change
 roles and grants and remove Members, and Postgres roles a Member may no
 longer use are dropped within the next operator pass, as are those of a
-deleted user and of a revoked API key.
+deleted user and of a revoked API key. Account tokens give CI and tools
+outside the platform the developer role or such access without belonging
+to a person: owners create them with an expiry of at most a year, roll
+their secret and revoke them.
 Designed, not built yet:
 owners invite people by e-mail with a role or with grants, and invited people may
-sign up while sign-up is closed; Account tokens give CI and tools outside
-the platform the developer role or such access without belonging to a
-person.
+sign up while sign-up is closed; Account tokens limited to source IP
+ranges, and an e-mail to the owners before a token expires.
 
 ## Deliberately not offered
 
