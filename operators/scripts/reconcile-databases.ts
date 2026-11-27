@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs';
 import { KubeConfig } from '@kubernetes/client-node';
 import { PLATFORM_ROWS } from '@openupstream/sdk';
-import type { DatabaseConfig } from '../src/databases/manifests.js';
+import { databaseConfigProblem, type DatabaseConfig } from '../src/databases/manifests.js';
 import { type DatabaseRow, reconcileDatabases } from '../src/databases/reconcile.js';
 import { kubeFrom } from '../src/kube.js';
 
@@ -31,6 +31,11 @@ const rows: DatabaseRow[] =
         ? [...PLATFORM_ROWS]
         : JSON.parse(readFileSync(rowsPath, 'utf8'));
 const config: DatabaseConfig = JSON.parse(readFileSync(configPath, 'utf8'));
+const problem = databaseConfigProblem(config);
+if (problem !== undefined) {
+    console.error(`${configPath}: ${problem}`);
+    process.exit(1);
+}
 
 const kubeConfig = new KubeConfig();
 kubeConfig.loadFromDefault();

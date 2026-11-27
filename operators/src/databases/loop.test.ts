@@ -10,7 +10,7 @@ import type { DatabaseConfig } from './manifests.js';
 const config: DatabaseConfig = {
     postgresImage: 'ghcr.io/cloudnative-pg/postgresql:17-standard-trixie',
     storageClass: 'local-path',
-    backup: { bucket: 'b', credentialsSecret: 'backup-s3', retention: '7d', schedule: '0 0 3 * * *' },
+    backup: { bucket: 'b', prefix: 'c1', credentialsSecret: 'backup-s3', retention: '7d', schedule: '0 0 3 * * *' },
 };
 const options = { backupCredentials: { namespace: 'openupstream-system', name: 'backup-s3' } };
 const credentials = { ACCESS_KEY_ID: 'aWQ=', ACCESS_SECRET_KEY: 'c2VjcmV0' };

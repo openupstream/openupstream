@@ -135,6 +135,19 @@ const presentRole = (role: DatabaseRoleRow) => ({
     connectionLimit: role.access === 'owner' ? OWNER_CONNECTION_LIMIT : -1,
 });
 
+/** A cluster's backup folder: what `backup.prefix` must look like (decision 149). */
+export const CLUSTER_PREFIX = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/**
+ * What is wrong with a DatabaseConfig read from JSON, or undefined. Without a
+ * prefix every cluster would archive into the same folders again.
+ */
+export function databaseConfigProblem(config: Partial<DatabaseConfig>): string | undefined {
+    return CLUSTER_PREFIX.test(config.backup?.prefix ?? '')
+        ? undefined
+        : 'backup.prefix must be the cluster id (lowercase letters, digits, dashes)';
+}
+
 /** Platform settings that are the same for every Database. */
 export interface DatabaseConfig {
     /** Our Postgres image (`images/postgres`), pinned by digest. */
@@ -144,6 +157,12 @@ export interface DatabaseConfig {
     readonly backup: {
         /** Bucket in the separate Hetzner project for backups. */
         readonly bucket: string;
+        /**
+         * This cluster's folder in the bucket, generated once per install
+         * (decision 149), so clusters sharing the bucket, or installed again,
+         * never find each other's archives.
+         */
+        readonly prefix: string;
         /**
          * Secret in the Project's namespace with that project's S3
          * credentials under BACKUP_CREDENTIAL_KEYS.
@@ -236,9 +255,11 @@ const objectStoreFor = (meta: ObjectMeta, config: DatabaseConfig): ObjectStoreMa
     spec: {
         configuration: {
             // Barman appends the Cluster's name, so each Database gets
-            // s3://<bucket>/project-<id>/db-<id>/. Ids, not names: a new
-            // Database under an old name must not find the old archive.
-            destinationPath: `s3://${config.backup.bucket}/${meta.namespace}`,
+            // s3://<bucket>/<cluster prefix>/project-<id>/db-<id>/. Ids, not
+            // names: a new Database under an old name must not find the old
+            // archive; the prefix does the same across clusters, whose
+            // platform Databases share their ids.
+            destinationPath: `s3://${config.backup.bucket}/${config.backup.prefix}/${meta.namespace}`,
             endpointURL: BACKUP_ENDPOINT,
             s3Credentials: {
                 accessKeyId: { name: config.backup.credentialsSecret, key: BACKUP_CREDENTIAL_KEYS.accessKeyId },

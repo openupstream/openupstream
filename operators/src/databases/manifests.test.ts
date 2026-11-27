@@ -8,6 +8,7 @@ import {
     BARMAN_CLOUD_PLUGIN,
     type DatabaseConfig,
     type DatabaseManifests,
+    databaseConfigProblem,
     databaseManifests,
     restoredDatabaseManifests,
 } from './manifests.js';
@@ -34,7 +35,7 @@ const database: Database = {
 const config: DatabaseConfig = {
     postgresImage: 'ghcr.io/openupstream/postgres@sha256:0000000000000000000000000000000000000000000000000000000000000000',
     storageClass: 'topolvm-provisioner',
-    backup: { bucket: 'openupstream-backups', credentialsSecret: 'backup-s3', retention: '30d', schedule: '0 0 3 * * *' },
+    backup: { bucket: 'openupstream-backups', prefix: 'c1', credentialsSecret: 'backup-s3', retention: '30d', schedule: '0 0 3 * * *' },
 };
 
 const manifestsFor = (overrides: Partial<Database> = {}): DatabaseManifests => {
@@ -229,7 +230,7 @@ test('WAL is archived to Hetzner Object Storage NBG1 through the Barman Cloud Pl
 
 test('each Database archives into its own folder, named by ids', () => {
     const { objectStore } = manifestsFor();
-    assert.equal(objectStore.spec.configuration.destinationPath, `s3://openupstream-backups/project-${project.id}`);
+    assert.equal(objectStore.spec.configuration.destinationPath, `s3://openupstream-backups/c1/project-${project.id}`);
     // Barman appends the Cluster's name.
     assert.equal(objectStore.metadata.name, `db-${database.id}`);
 });
@@ -393,5 +394,13 @@ test('target times must exist on the calendar', () => {
     }
     for (const targetTime of ['2028-02-29T10:00:00Z', '2026-10-17T10:30:00.123+02:00', '2026-12-31T23:59:59-05:30']) {
         assert.ok(restoredDatabaseManifests(project, restoredDatabase, config, { ...source, targetTime }).ok, targetTime);
+    }
+});
+
+test('a DatabaseConfig without a valid backup prefix is refused, so clusters never share backup folders', () => {
+    assert.equal(databaseConfigProblem(config), undefined);
+    for (const prefix of [undefined, '', 'a/b', 'Upper']) {
+        const backup = { ...config.backup, prefix } as unknown as DatabaseConfig['backup'];
+        assert.match(databaseConfigProblem({ ...config, backup }) ?? '', /backup.prefix must be the cluster id/, String(prefix));
     }
 });

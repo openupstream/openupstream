@@ -7,6 +7,7 @@ const env = {
     AUTH_ISSUER: 'https://console.openupstream.com',
     MADAUTH_URL: 'http://madauth.project-00000000-0000-4000-8000-000000000002.svc:8787',
     BACKUP_BUCKET: 'openupstream-pg-backup',
+    BACKUP_PREFIX: '20261127-a1b2c3',
     ACCESS_KEY_ID: 'id',
     ACCESS_SECRET_KEY: 'secret',
     BACKUP_RETENTION: '30d',
@@ -83,6 +84,7 @@ test('every problem is reported at once', () => {
         'MADAUTH_URL is not set',
         'AUTH_JWKS must be a JWKS document: {"keys": [...]}',
         'BACKUP_BUCKET is not set',
+        'BACKUP_PREFIX is not set',
         'ACCESS_KEY_ID is not set',
         'ACCESS_SECRET_KEY is not set',
         'BACKUP_RETENTION must be days, e.g. 30d',
@@ -166,4 +168,12 @@ test("WEBSITE_PROJECT_ID names the Project that may claim the waitlist's host; i
     assert.equal(without.value.websiteProjectId, undefined);
     const bad = configFrom({ ...waitlistEnv, WEBSITE_PROJECT_ID: 'website' });
     assert.deepEqual(bad.ok ? [] : bad.error, ['WEBSITE_PROJECT_ID must be the id of a Project']);
+});
+
+test('BACKUP_PREFIX becomes the backup folder and must be a plain name', () => {
+    const config = configFrom(env);
+    assert.ok(config.ok);
+    assert.equal(config.value.backup.prefix, '20261127-a1b2c3');
+    const bad = configFrom({ ...env, BACKUP_PREFIX: 'a/b' });
+    assert.deepEqual(bad.ok ? [] : bad.error, ['BACKUP_PREFIX must be lowercase letters, digits and dashes, e.g. 20261127-a1b2c3']);
 });

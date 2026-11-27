@@ -15,7 +15,13 @@ below in order. Each step reads the layout from there, so one may be run
 again on its own and installs the same way; the two scripts refuse a
 cluster whose nodes do not match (a multi-node cluster needs a node in each
 of `hetzner-fsn1`, `ovh-lim` and `netcup-nbg`, a single-node one exactly
-one node), and a recorded layout never changes. The Databases' volumes come
+one node), and a recorded layout never changes. Next to the layout they
+record the cluster id, generated once as `<date>-<random>` (`CLUSTER_ID`
+chooses it, e.g. `production`): the folder in the backup bucket that all of
+the cluster's Databases archive into (decision 149). A cluster installed
+before it gets one when a step next runs; its Databases then archive into
+that new, empty folder, with a base backup only from the next scheduled
+one (03:00). The Databases' volumes come
 from TopoLVM with one node per Site (decision 109) and from k3s's
 local-path provisioner on a single node (decision 112).
 
@@ -264,13 +270,12 @@ where `rows.json` is `[{ "project": …, "database": … }]` and `config.json` a
 `DatabaseConfig` (storage class `topolvm-provisioner`, or `local-path` on a
 single node; `layout` `single-node` for one instance per Database).
 
-The platform Project's Databases have the same ids on every dev cluster,
-so their WAL goes to the same path in the backup bucket each time and
-archiving fails with `Expected empty archive` (the Cluster's
-`ContinuousArchiving` is `False`). Their backups do not work on a dev
-cluster, and after a Site failover the old primary cannot rejoin until its
-pod and PVC are deleted, after which CloudNativePG clones a new standby.
-Customer Databases get new ids and are not affected.
+The platform Project's Databases have the same ids on every cluster. Before
+the cluster id (decision 149) their WAL went to the same path in the backup
+bucket on every install, archiving failed with `Expected empty archive`,
+and after a Site failover the old primary could not rejoin until its pod and
+PVC were deleted. A `ContinuousArchiving` condition of `False` on a
+cluster installed since then is a new problem, not this one.
 
 When done with the Hetzner dev cluster, `../dev-cluster-hetzner/down.sh`
 deletes it (its README). A single node stays until you remove it:

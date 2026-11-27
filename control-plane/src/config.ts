@@ -3,7 +3,7 @@
  * Every problem is reported at once, before anything starts.
  */
 import { DNS_LABEL, PLATFORM, UUID, projectNamespace } from '@openupstream/sdk';
-import { BACKUP_ENDPOINT } from './backups.js';
+import { BACKUP_ENDPOINT, CLUSTER_PREFIX } from './backups.js';
 import { retentionInterval } from './cleanup.js';
 import type { GarageConfig } from './garage.js';
 import { type KeyEncryptionKey, parseKeyEncryptionKey } from './secrets/envelope.js';
@@ -44,6 +44,8 @@ export interface Config {
         readonly endpoint: string;
         readonly region: string;
         readonly bucket: string;
+        /** This cluster's folder in the bucket, before every Database's (decision 149). */
+        readonly prefix: string;
         readonly accessKeyId: string;
         readonly secretAccessKey: string;
         /** A Postgres interval, e.g. `7 days`. */
@@ -137,6 +139,10 @@ export function configFrom(env: Env): Result<Config, string[]> {
         problems.push('AUTH_JWKS must be a JWKS document: {"keys": [...]}');
     }
     const bucket = required('BACKUP_BUCKET');
+    const backupPrefix = required('BACKUP_PREFIX');
+    if (backupPrefix !== '' && !CLUSTER_PREFIX.test(backupPrefix)) {
+        problems.push('BACKUP_PREFIX must be lowercase letters, digits and dashes, e.g. 20261127-a1b2c3');
+    }
     const accessKeyId = required('ACCESS_KEY_ID');
     const secretAccessKey = required('ACCESS_SECRET_KEY');
     const retention = retentionInterval(required('BACKUP_RETENTION'));
@@ -212,6 +218,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
             endpoint: env['BACKUP_ENDPOINT'] ?? BACKUP_ENDPOINT,
             region: env['BACKUP_REGION'] ?? 'nbg1',
             bucket,
+            prefix: backupPrefix,
             accessKeyId,
             secretAccessKey,
             retention,

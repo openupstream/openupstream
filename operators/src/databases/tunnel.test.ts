@@ -29,7 +29,7 @@ const orders = database('5d1c2a33-90b4-4c8f-8f3e-6c2b9d0e7f44');
 const config: DatabaseConfig = {
     postgresImage: 'ghcr.io/openupstream/postgres@sha256:0000000000000000000000000000000000000000000000000000000000000000',
     storageClass: 'topolvm-provisioner',
-    backup: { bucket: 'openupstream-backups', credentialsSecret: 'backup-s3', retention: '30d', schedule: '0 0 3 * * *' },
+    backup: { bucket: 'openupstream-backups', prefix: 'c1', credentialsSecret: 'backup-s3', retention: '30d', schedule: '0 0 3 * * *' },
 };
 const credentials = { ACCESS_KEY_ID: 'aWQ=', ACCESS_SECRET_KEY: 'c2VjcmV0' };
 const tunnel: TunnelSettings = {

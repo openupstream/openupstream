@@ -20,7 +20,11 @@ before the target time, in about a minute.
   for a deleted Database too, until the backup retention window after its
   deletion has passed (ARCHITECTURE.md, decision 60), as long as its Project
   is not deleted: nothing can be created in a deleted Project. Its archive
-  is `s3://<bucket>/project-<project id>/db-<source id>/`.
+  is `s3://<bucket>/<cluster id>/project-<project id>/db-<source id>/`; the
+  cluster id is `clusterId` in the ConfigMap
+  `openupstream-system/cluster-layout` (decision 149). Backups from before
+  the cluster had an id lie at the same path without it; restoring to such a
+  time needs an ObjectStore with that older `destinationPath`.
 - A base backup older than the target time: check
   `kubectl -n project-<project id> get backups`.
 - A new Database id (lowercase UUID) and name for the restored Database. Its

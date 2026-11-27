@@ -221,6 +221,7 @@ kubectl -n "$PLATFORM_NS" create configmap control-plane-config --dry-run=client
   --from-literal=AUTH_ISSUER="$MADAUTH_ISSUER" \
   --from-literal=MADAUTH_URL="http://madauth.$PLATFORM_NS.svc:8787" \
   --from-literal=BACKUP_BUCKET="$(jq -r .backup.bucket "$CONFIG")" \
+  --from-literal=BACKUP_PREFIX="$(jq -r .backup.prefix "$CONFIG")" \
   --from-literal=BACKUP_RETENTION="$(jq -r .backup.retention "$CONFIG")" \
   --from-literal=NEW_ACCOUNT_HOLDS="$NEW_ACCOUNT_HOLDS" \
   --from-literal=BILLING_CALLERS="$BILLING_CALLERS" \
