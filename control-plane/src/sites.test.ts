@@ -56,16 +56,22 @@ test('a Site is chosen when it is a compute Site, the default when none is given
     assert.deepEqual(chooseSite(sitesOf([]), undefined), err({ kind: 'none' }));
 });
 
-test('the node list is read again after the TTL, and the last list stays when reading fails', async () => {
+test('the node list is read again after the TTL; a failed read is logged and keeps the last list for another TTL', async () => {
     let clock = 0;
     const answers = [ok([node('a', 'one')]), err('down'), ok([node('a', 'two')])];
     let calls = 0;
-    const read = siteReader(async () => answers[calls++] ?? err('none left'), 1000, () => clock);
+    const logged: Record<string, unknown>[] = [];
+    const read = siteReader(async () => answers[calls++] ?? err('none left'), 1000, () => clock, (entry) => logged.push(entry));
     assert.deepEqual((await read()).ok && (await read()).ok, true);
     assert.equal(calls, 1, 'cached within the TTL');
     clock = 1000;
     const stale = await read();
     assert.ok(stale.ok && stale.value.default === 'one', 'the failed read keeps the last list');
+    assert.equal(logged[0]?.['error'], 'down');
+    clock = 1500;
+    assert.ok((await read()).ok);
+    assert.equal(calls, 2, 'not asked again within the TTL after a failure');
+    clock = 2000;
     const fresh = await read();
     assert.ok(fresh.ok && fresh.value.default === 'two');
     assert.equal(calls, 3);

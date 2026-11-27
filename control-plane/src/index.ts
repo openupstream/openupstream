@@ -39,7 +39,7 @@ import { tokenReviewAuthenticator } from './internal/auth.js';
 import { createInternalServer } from './internal/server.js';
 import { controlPlaneKube } from './kube.js';
 import { siteReader } from './sites.js';
-import { seedPlatform } from './platform.js';
+import { platformRowsMissing, seedPlatform } from './platform.js';
 import { type Message, sesClient, sesSend } from './mail.js';
 import { registryDeps } from './registry.js';
 import { err, ok } from './result.js';
@@ -122,15 +122,20 @@ async function main(): Promise<void> {
     const kubeConfig = new KubeConfig();
     kubeConfig.loadFromDefault();
     const kube = controlPlaneKube(kubeConfig);
-    const sites = siteReader(() => kube.listNodes());
-    // The platform's Databases are seeded in the default Site (ADR-0007).
-    const startSites = await sites();
-    if (!startSites.ok || startSites.value.default === undefined) {
-        log({ msg: 'cannot read the compute Sites from the nodes', error: startSites.ok ? 'no node carries the compute label' : startSites.error });
-        process.exit(1);
-    }
+    const sites = siteReader(() => kube.listNodes(), undefined, undefined, log);
     // A billing service needs its Database (ARCHITECTURE.md, decision 79).
-    await seedPlatform(pool, { billing: config.value.billingCallers.size > 0, homeSite: startSites.value.default });
+    const billing = config.value.billingCallers.size > 0;
+    // The platform's Databases are seeded in the default Site (ADR-0007). Only
+    // a missing row needs it: a cluster whose nodes are not labelled yet still
+    // starts, and its requests that need a Site answer 503 until they are.
+    if (await platformRowsMissing(pool, { billing })) {
+        const startSites = await sites();
+        if (!startSites.ok || startSites.value.default === undefined) {
+            log({ msg: 'cannot seed the platform Databases: no default Site', error: startSites.ok ? 'no node carries the compute label' : startSites.error });
+            process.exit(1);
+        }
+        await seedPlatform(pool, { billing, homeSite: startSites.value.default });
+    }
     const domains = await ensureDefaultDomains(pool, config.value.customerDomain);
     if (domains > 0) {
         log({ msg: 'default Domains created for existing Projects', domains });

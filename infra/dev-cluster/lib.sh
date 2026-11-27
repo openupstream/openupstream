@@ -153,7 +153,8 @@ label_sites() { # single-node | multi-node
     fi
     found= text=
     for entry in ${entries[@]+"${entries[@]}"}; do
-      if [[ $entry == *=* && $(trim "${entry%%=*}") == "$site" ]]; then found=1 text=$(trim "${entry#*=}"); fi
+      # Whitespace runs collapsed, as the nodes' descriptions are read above.
+      if [[ $entry == *=* && $(trim "${entry%%=*}") == "$site" ]]; then found=1 text=$(trim "$(tr -s '[:space:]' ' ' <<<"${entry#*=}")"); fi
     done
     if [[ -n $found && $text != "$current" ]]; then
       if [[ -n $text ]]; then

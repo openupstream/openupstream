@@ -55,16 +55,28 @@ export const SITES_TTL_MS = 30_000;
 export type ReadSites = () => Promise<Result<Sites, string>>;
 
 /**
- * Reads the Sites at most every `ttlMs`. When reading fails, the last list
- * read stays in use however old it is; without one, the error is returned.
+ * Reads the Sites at most every `ttlMs`. When reading fails, the failure is
+ * logged and the last list read stays in use for another `ttlMs`, however
+ * old it is, so an unreachable API server is not asked on every request;
+ * without one, the error is returned.
  */
-export function siteReader(listNodes: () => Promise<Result<readonly NodeLabels[], string>>, ttlMs = SITES_TTL_MS, now: () => number = Date.now): ReadSites {
+export function siteReader(
+    listNodes: () => Promise<Result<readonly NodeLabels[], string>>,
+    ttlMs = SITES_TTL_MS,
+    now: () => number = Date.now,
+    log?: (entry: Record<string, unknown>) => void,
+): ReadSites {
     let cached: { readonly at: number; readonly sites: Sites } | undefined;
     let pending: Promise<Result<Sites, string>> | undefined;
     const refresh = async (): Promise<Result<Sites, string>> => {
         const nodes = await listNodes();
         if (!nodes.ok) {
-            return cached === undefined ? err(nodes.error) : ok(cached.sites);
+            log?.({ msg: 'cannot list the nodes; the last Sites read stay in use', error: nodes.error, stale: cached !== undefined });
+            if (cached === undefined) {
+                return err(nodes.error);
+            }
+            cached = { at: now(), sites: cached.sites };
+            return ok(cached.sites);
         }
         cached = { at: now(), sites: sitesOf(nodes.value) };
         return ok(cached.sites);

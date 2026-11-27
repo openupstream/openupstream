@@ -4,6 +4,7 @@
  */
 import {
     COMPUTE_SITE_LABEL,
+    DEFAULT_SITE_LABEL,
     ZONE_LABEL,
     type Id,
     type Project,
@@ -167,6 +168,18 @@ export { DNS_LABEL, UUID } from '@openupstream/sdk';
 
 // Named by id; the control plane needs the same names, so they live in the sdk.
 export { projectNamespace } from '@openupstream/sdk';
+
+/**
+ * The default Site the nodes' labels name: the zone of a node labelled both
+ * compute and default, the first by id if they disagree; undefined when no
+ * node is labelled so (the install labels exactly one Site).
+ */
+export const defaultSiteOf = (nodes: readonly { readonly labels?: Readonly<Record<string, string>> }[]): string | undefined =>
+    nodes
+        .flatMap((node) =>
+            node.labels?.[COMPUTE_SITE_LABEL] === 'true' && node.labels[DEFAULT_SITE_LABEL] === 'true' && node.labels[ZONE_LABEL] ? [node.labels[ZONE_LABEL]] : [],
+        )
+        .sort()[0];
 
 /** Restricts pods to the compute Sites' nodes (their label, ADR-0007), whatever they tolerate. */
 export const requireComputeSite = () => ({

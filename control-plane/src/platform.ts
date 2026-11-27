@@ -9,6 +9,14 @@
 import { PLATFORM, type Site } from '@openupstream/sdk';
 import type pg from 'pg';
 
+/** Whether any of the platform's Database rows (the billing one with `billing`) is not there yet. */
+export async function platformRowsMissing(pool: pg.Pool, options: { readonly billing: boolean }): Promise<boolean> {
+    const { database, authDatabase, billingDatabase } = PLATFORM;
+    const ids = (options.billing ? [database, authDatabase, billingDatabase] : [database, authDatabase]).map((d) => d.id);
+    const { rows } = await pool.query<{ count: number }>('select count(*)::int as count from databases where id = any($1::uuid[])', [ids]);
+    return (rows[0]?.count ?? 0) < ids.length;
+}
+
 /**
  * Inserts the rows that are missing, in one statement, the Databases with
  * `homeSite` (the default Site); never changes or removes existing ones.

@@ -355,7 +355,8 @@ test('label_sites sets, keeps and removes the SITE_DESCRIPTIONS on every node of
             ['b', 'site-b', { compute: true, description: 'Home VM B' }],
             ['c', 'site-c', { tainted: true, description: 'old' }],
         ),
-        SITE_DESCRIPTIONS: 'site-a=Home VM A; site-b = Home VM B ;site-c=',
+        // Runs of whitespace count as one space, as they are read from the nodes.
+        SITE_DESCRIPTIONS: 'site-a=Home VM A; site-b = Home  VM B ;site-c=',
     });
     assert.equal(status, 0, stderr);
     assert.deepEqual(labelCalls(log), [

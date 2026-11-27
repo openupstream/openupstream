@@ -15,10 +15,11 @@
  */
 import { readFileSync } from 'node:fs';
 import { KubeConfig, KubernetesObjectApi } from '@kubernetes/client-node';
-import { COMPUTE_SITE_LABEL, DEFAULT_SITE_LABEL, ZONE_LABEL, platformRows } from '@openupstream/sdk';
+import { COMPUTE_SITE_LABEL, DEFAULT_SITE_LABEL, platformRows } from '@openupstream/sdk';
 import { databaseConfigProblem, type DatabaseConfig } from '../src/databases/manifests.js';
 import { type DatabaseRow, reconcileDatabases } from '../src/databases/reconcile.js';
 import { kubeFrom } from '../src/kube.js';
+import { defaultSiteOf } from '../src/kubernetes.js';
 
 const args = process.argv.slice(2);
 const platform = args.includes('--platform');
@@ -38,19 +39,10 @@ if (problem !== undefined) {
 const kubeConfig = new KubeConfig();
 kubeConfig.loadFromDefault();
 
-/** The zone of the nodes labelled as the default compute Site; undefined when none is. */
+/** The default Site the nodes' labels name; undefined when none does. */
 const defaultSite = async (): Promise<string | undefined> => {
-    const nodes = await KubernetesObjectApi.makeApiClient(kubeConfig).list(
-        'v1',
-        'Node',
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        `${COMPUTE_SITE_LABEL}=true,${DEFAULT_SITE_LABEL}=true`,
-    );
-    return nodes.items.flatMap((node) => node.metadata?.labels?.[ZONE_LABEL] ?? []).sort()[0];
+    const nodes = await KubernetesObjectApi.makeApiClient(kubeConfig).list('v1', 'Node');
+    return defaultSiteOf(nodes.items.map((node) => ({ ...(node.metadata?.labels === undefined ? {} : { labels: node.metadata.labels }) })));
 };
 
 const homeSite = platform ? await defaultSite() : undefined;

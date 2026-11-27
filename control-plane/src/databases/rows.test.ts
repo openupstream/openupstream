@@ -2,7 +2,7 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PLATFORM } from '@openupstream/sdk';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
-import { seedPlatform } from '../platform.js';
+import { platformRowsMissing, seedPlatform } from '../platform.js';
 import { listDatabaseRows } from './rows.js';
 
 let db: TestDatabase;
@@ -37,7 +37,10 @@ test('seeding never changes an existing platform row', async () => {
 });
 
 test("with a billing service the billing service's Database is seeded too", async () => {
+    assert.equal(await platformRowsMissing(db.pool, { billing: false }), false, 'seeded above');
+    assert.equal(await platformRowsMissing(db.pool, { billing: true }), true, 'no billing row yet');
     await seedPlatform(db.pool, { billing: true, homeSite: 'home-a' });
+    assert.equal(await platformRowsMissing(db.pool, { billing: true }), false);
     const billing = (await listDatabaseRows(db.pool)).find((row) => row.database.id === PLATFORM.billingDatabase.id);
     assert.deepEqual(billing?.database, { ...PLATFORM.billingDatabase, homeSite: 'home-a', createdAt: '2026-10-20T00:00:00.000Z' });
 });

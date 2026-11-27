@@ -88,10 +88,11 @@ The Sites are what the nodes say. Nothing in the code names a Site.
 - A request that validates a Site reads the node list, from a 30 s cache;
   the control plane needs `list` on nodes. When the API server cannot be
   asked and nothing is cached, the request fails with 503 instead of
-  accepting a Site nobody checked. The control plane does not start
-  without a compute Site, since it seeds the platform's own Database rows
-  in the default Site; so does the bootstrap (`reconcile-databases.ts
-  --platform`).
+  accepting a Site nobody checked. The control plane starts without a
+  compute Site unless a platform Database row is still to be seeded,
+  which needs the default Site; so does the bootstrap
+  (`reconcile-databases.ts --platform`). Until the nodes are labelled, its
+  requests that need a Site answer 503.
 - Breaking for SDK users who imported `COMPUTE_SITES` or relied on `Site`
   being a union of two names.
 - Amends ADR-0002, which still describes production; its "two compute
