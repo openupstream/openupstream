@@ -72,9 +72,73 @@ export interface Grant {
     createdAt: Timestamp;
 }
 
-/** Gives a Member a grant, or another level; owners only, never with an API key. */
+/** Gives a Member or an Account token a grant, or another level; owners only, never with an API key. */
 export interface GrantInput {
     access: DatabaseAccess;
+}
+
+/**
+ * What an Account token may do in the whole Account (decision 144):
+ * `developer`, as a Member with that role; never `owner`, so a token
+ * cannot manage the Account.
+ */
+export const ACCOUNT_TOKEN_ROLES = ['developer'] as const;
+export type AccountTokenRole = (typeof ACCOUNT_TOKEN_ROLES)[number];
+
+/** How an Account token's secret starts; `oup` and the SDK send it like an API key (`OUP_API_KEY`). */
+export const ACCOUNT_TOKEN_PREFIX = 'oup_tok_';
+
+/** An Account token expires at most this many days after it is created or rolled. */
+export const ACCOUNT_TOKEN_MAX_DAYS = 365;
+
+/**
+ * A named secret that belongs to the Account, not to a person, for CI, BI
+ * tools and scripts outside the platform (decision 144). It has the
+ * developer role or grants, and keeps working when the Member who made it
+ * leaves. The secret is shown once, when it is created or rolled.
+ */
+export interface AccountToken {
+    id: Id;
+    accountId: Id;
+    /** DNS label, unique within the Account. */
+    name: string;
+    /** null: the token reaches only what its grants give. */
+    role: AccountTokenRole | null;
+    /** Its grants, oldest first; they count only while the token has no role. */
+    grants: Grant[];
+    expiresAt: Timestamp;
+    /** The last request made with it, to the minute; null if none yet. */
+    lastUsedAt: Timestamp | null;
+    createdAt: Timestamp;
+}
+
+/** A new Account token; owners only, with a session or `oup login`. */
+export interface AccountTokenInput {
+    name: string;
+    /** Default null: only its grants, given afterwards. */
+    role?: AccountTokenRole | null;
+    /** In the future, at most ACCOUNT_TOKEN_MAX_DAYS away. */
+    expiresAt: Timestamp;
+}
+
+/** Renames an Account token or changes its role; a lost role drops its Postgres roles its grants do not allow. */
+export interface AccountTokenPatch {
+    name?: string;
+    role?: AccountTokenRole | null;
+}
+
+/** A new secret for an Account token, with a new expiry; its name, rights and Postgres roles stay. */
+export interface AccountTokenRoll {
+    /** In the future, at most ACCOUNT_TOKEN_MAX_DAYS away. */
+    expiresAt: Timestamp;
+}
+
+/** The answer to creating or rolling an Account token: the only time its secret is shown. */
+export interface AccountTokenWithSecret extends AccountToken {
+    /** `oup_tok_…`. */
+    secret: string;
+    /** After a roll: until when the previous secret still works (24 hours at most); absent when none does. */
+    previousSecretValidUntil?: Timestamp;
 }
 
 /** The unit of isolation and lifecycle; deleting it deletes everything in it. */

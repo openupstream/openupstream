@@ -80,8 +80,11 @@ allows 5 connections at once, which end when the primary restarts or
 fails over. Owners and developers may pick any level. When a Member leaves
 or is removed, their roles, and those of their API keys, are dropped.
 
-In CI, `OUP_API_KEY` works too: the key needs `openupstream:write`, and
-gets roles of its own, dropped when you revoke the key.
+In CI, `OUP_API_KEY` works too, with an Account token or an API key (which
+needs `openupstream:write`). Either gets roles of its own, dropped when you
+revoke it. For a BI tool, an Account token with a `read` grant on one
+Database is enough: `oup token create metabase --expires 365d`, then
+`oup token grant metabase read --database main`.
 
 ## Resize
 

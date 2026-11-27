@@ -1,8 +1,8 @@
 /**
  * Callers' own Postgres roles (ARCHITECTURE.md, decision 126; ADR-0005).
  *
- * A caller is a Member, or one of a Member's API keys, which gets roles of
- * its own. It has at most one role per Database and access level, created
+ * A caller is a Member, one of a Member's API keys, which gets roles of
+ * its own, or an Account token (decision 144). It has at most one role per Database and access level, created
  * the first time it asks. The password is generated here and sealed with
  * the Project's data key; the control plane returns it to that caller on
  * every ask and writes it into the Secret CloudNativePG reads it from
@@ -21,17 +21,21 @@ import {
 } from '@openupstream/sdk';
 import type pg from 'pg';
 import { type DroppedRole, lockCaller } from '../accounts/members.js';
+import { lockAccountToken } from '../accounts/tokens.js';
 import { inTransaction } from '../db/transaction.js';
 import type { ControlPlaneKube, SecretManifest } from '../kube.js';
 import { type Result, err, ok } from '../result.js';
 import type { KeyEncryptionKey } from '../secrets/envelope.js';
 import { type SecretStoreError, openProjectValue, sealProjectValue } from '../secrets/store.js';
 
-/** Who asks: the madAuth user, and the API key when it is one. */
-export interface Caller {
-    readonly subject: string;
-    readonly apiKeyId?: string | undefined;
-}
+/** Who asks: the madAuth user, and the API key when it is one; or an Account token. */
+export type Caller =
+    | { readonly subject: string; readonly apiKeyId?: string | undefined }
+    | { readonly accountTokenId: Id };
+
+/** The caller's columns in database_roles: auth_subject, api_key_id, account_token_id. */
+const callerColumns = (caller: Caller): [string | null, string | null, string | null] =>
+    'accountTokenId' in caller ? [null, null, caller.accountTokenId] : [caller.subject, caller.apiKeyId ?? null, null];
 
 export interface DatabaseRole {
     readonly id: Id;
@@ -57,9 +61,9 @@ interface RoleRow {
 const findRole = async (pool: pg.Pool, databaseId: Id, caller: Caller, access: DatabaseAccess): Promise<RoleRow | undefined> => {
     const { rows } = await pool.query<RoleRow>(
         `select id, access, password from database_roles
-         where database_id = $1 and auth_subject = $2 and coalesce(api_key_id, '') = coalesce($3, '') and access = $4
-           and dropped_at is null`,
-        [databaseId, caller.subject, caller.apiKeyId ?? null, access],
+         where database_id = $1 and coalesce(auth_subject, '') = coalesce($2, '') and coalesce(api_key_id, '') = coalesce($3, '')
+           and coalesce(account_token_id::text, '') = coalesce($4, '') and access = $5 and dropped_at is null`,
+        [databaseId, ...callerColumns(caller), access],
     );
     return rows[0];
 };
@@ -116,10 +120,31 @@ async function insertRole(
     // Under the caller's lock, and only while their role or a grant at this level or above still
     // allows it: a removal, a lost role or a lower grant that runs meanwhile either sees this row and
     // marks it, or came first and nothing is inserted.
-    // An API key's own lock and the revoked keys do the same for a revocation (revokeApiKey).
+    // An API key's own lock and the revoked keys do the same for a revocation (revokeApiKey), an
+    // Account token's lock for its revocation, a lost role or a lower grant (accounts/tokens.ts).
     const inserted = await inTransaction(
         pool,
         async (client) => {
+            if ('accountTokenId' in caller) {
+                await client.query(`select ${lockAccountToken('$1')}`, [caller.accountTokenId]);
+                return client.query<RoleRow>(
+                    `insert into database_roles (id, database_id, account_token_id, access, password)
+                     select $1, $2, $3, $4, $5
+                     where exists (
+                         select 1 from databases d join projects p on p.id = d.project_id
+                         join account_tokens t on t.account_id = p.account_id and t.id = $3
+                         where d.id = $2 and d.deleted_at is null and t.revoked_at is null and t.expires_at > now()
+                           and (t.role is not null or exists (
+                               select 1 from account_token_grants g
+                               where g.account_token_id = t.id and g.database_id = d.id
+                                 and database_access_rank(g.access) >= database_access_rank($4)
+                           ))
+                     )
+                     on conflict do nothing
+                     returning id, access, password`,
+                    [id, database.id, caller.accountTokenId, access, sealed.value],
+                );
+            }
             await client.query(
                 `select ${lockCaller('p.account_id', '$1')} from databases d join projects p on p.id = d.project_id where d.id = $2`,
                 [caller.subject, database.id],

@@ -38,6 +38,13 @@ export async function listAccounts(pool: pg.Pool, subject: string): Promise<Acco
     return rows.map((row) => ({ ...toAccount(row), role: row.role }));
 }
 
+/** The Account itself, without a caller's role; undefined if there is none. */
+export async function getAccount(pool: pg.Pool, id: string): Promise<Account | undefined> {
+    const { rows } = await pool.query<AccountRow>(`select a.id, a.name, a.created_at, ${HOLDS} from accounts a where a.id = $1`, [id]);
+    const row = rows[0];
+    return row === undefined ? undefined : toAccount(row);
+}
+
 /** The Account, its first Member (its owner) and its first Holds, in one statement. */
 export async function createAccount(
     pool: pg.Pool,

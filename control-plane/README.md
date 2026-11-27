@@ -7,10 +7,10 @@ Garage's admin API for Buckets.
 Responsibilities:
 
 - accounts, members with their roles (owner, developer) and grants on
-  Databases, API keys (sign-in and keys via madAuth), and the Holds that
-  stop an Account from creating Resources; invitations and Account tokens
-  are designed in `docs/adr/0006-invitations-roles-account-tokens.md`, not
-  built yet
+  Databases, API keys (sign-in and keys via madAuth), Account tokens (the
+  Account's own secrets, with the developer role or grants), and the Holds
+  that stop an Account from creating Resources; invitations are designed
+  in `docs/adr/0006-invitations-roles-account-tokens.md`, not built yet
 - projects and their resources: databases, buckets, sites, services, jobs
 - the routing table (`domain → prefix → target`)
 - secrets (envelope-encrypted, injected into containers as env)
@@ -76,7 +76,12 @@ an access token `oup login` got (`typ: at+jwt`, verified the same way, with
 `aud` = `CLI_CLIENT_ID`), which may do what a session may; or an API key
 (`madauth_…`), which madAuth checks for us; a key needs `openupstream:read`
 for GET and `openupstream:write` for anything else. The caller acts for
-every Account its madAuth user is a Member of. A Project of another
+every Account its madAuth user is a Member of. An Account token
+(`oup_tok_…`, decision 144) is looked up by the control plane itself, by
+the SHA-256 of the secret, on every request: it acts in its own Account
+with the developer role or only its grants, never manages the Account or
+sees its Members (403), and an expired one gets 401 with a hint to roll
+it. A Project of another
 Account answers 404, like one that does not exist. An Account with a Hold
 gets 402 when it creates a Resource, with `{error, holds}`.
 
@@ -98,6 +103,12 @@ what the control plane sees.
 | `PUT /v1/accounts/{id}/members/{id}/grants/{databaseId}` | `{access: read\|write\|owner}` → 201 for a new grant, 200 for another level (decision 139); owners only (403), never with an API key (403); 404 for a Database outside the Account. A lower level drops the Member's Postgres roles above it while they have no role |
 | `DELETE /v1/accounts/{id}/members/{id}/grants/{databaseId}` | 204: the grant goes, and with it the Member's Postgres roles on that Database while they have no role; 404 when there is none |
 | `DELETE /v1/accounts/{id}/members/{id}` | 204: removes the Member, owners only, and drops their and their API keys' Postgres roles in the Account's Databases, deleting the database tunnel's pod in each Project where they had `owner` (the secrets pass retries it within the hour); `me` leaves the Account, which anyone may. 409 for the last owner. Never with an API key (403) |
+| `GET /v1/accounts/{id}/account-tokens` | the Account's tokens that are not revoked: `{id, name, role, grants, expiresAt, lastUsedAt, createdAt}`, never a secret; owners and developers (also with an API key), 404 for anyone else, 403 for an Account token |
+| `POST /v1/accounts/{id}/account-tokens` | `{name, role?: developer\|null, expiresAt}` → 201 with the token and its `secret` (`oup_tok_…`), shown only now; `expiresAt` in the future and at most 365 days away; 409 for a name taken in the Account. Owners only (403), never with an API key or an Account token (403) |
+| `PATCH /v1/accounts/{id}/account-tokens/{id}` | `{name?, role?}`; without the role, its Postgres roles beyond what its grants allow are dropped. Owners only, never with an API key |
+| `POST /v1/accounts/{id}/account-tokens/{id}/roll` | `{expiresAt}` → 200 with a new `secret` and `previousSecretValidUntil`: the old secret works 24 hours more (not past its own expiry), name, rights and Postgres roles stay. Also brings back an expired token. Owners only, never with an API key |
+| `DELETE /v1/accounts/{id}/account-tokens/{id}` | 204: revoked at once, its secrets deleted, its Postgres roles dropped (and the tunnel pod deleted where it had `owner`). Owners only, never with an API key |
+| `PUT`, `DELETE /v1/accounts/{id}/account-tokens/{id}/grants/{databaseId}` | as a Member's grants: `{access}` → 201 or 200, 204 on removal; they count while the token has no role |
 | `GET /v1/projects` | the Projects of the caller's Accounts |
 | `POST /v1/projects` | `{accountId, name}` → 201, with its default Domain `<name>-<random>.<CUSTOMER_DOMAIN>`; 409 if the name is taken in the Account |
 | `GET /v1/projects/{id}` | |
@@ -230,7 +241,9 @@ into a new one (`restoreFrom` on create, decision 108); while a restore
 from it is unfinished (for at most `RESTORE_GRACE`, a day) it is not
 purged. Each pass first records restores whose Cluster has a ready
 instance as finished (`restore_finished_at`); the operator then renders
-their Cluster without the source's ObjectStore.
+their Cluster without the source's ObjectStore. Each pass also marks the
+Postgres roles of expired Account tokens to be dropped, as a revocation
+does; the secrets pass deletes their Secrets.
 
 A deleted Bucket keeps nothing: the next pass deletes its key, if the
 DELETE could not already (so nothing written meanwhile is lost unnoticed),

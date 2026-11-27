@@ -13,14 +13,19 @@
  *   locally like a session and allowed what a session is.
  *
  * The user is a madAuth identity (`usr_…`), which can be a Member of several
- * Accounts.
+ * Accounts. An Account token (`oup_tok_…`, decision 144) is no madAuth
+ * identity: the API looks it up itself (accounts/tokens.ts), and its caller
+ * is an AccountTokenIdentity.
  */
 import { createHash } from 'node:crypto';
 import { type JWTVerifyGetKey, createLocalJWKSet, createRemoteJWKSet, decodeProtectedHeader, jwtVerify } from 'jose';
 import type pg from 'pg';
+import type { AccountTokenRole } from '@openupstream/sdk';
 import { type Result, err, ok } from '../result.js';
 
 export interface Identity {
+    /** Tells a user apart from an Account token (`account-token`); absent means a user. */
+    readonly kind?: 'user';
     /** madAuth's user id, e.g. `usr_…`. */
     readonly subject: string;
     readonly email: string | undefined;
@@ -30,11 +35,24 @@ export interface Identity {
     readonly apiKeyId?: string;
 }
 
+/** An Account token (decision 144): it belongs to one Account, with the developer role or only grants. */
+export interface AccountTokenIdentity {
+    readonly kind: 'account-token';
+    readonly tokenId: string;
+    readonly accountId: string;
+    readonly role: AccountTokenRole | null;
+}
+
+/** Whoever makes a request: a madAuth user (session, `oup`'s access token or API key) or an Account token. */
+export type Caller = Identity | AccountTokenIdentity;
+
 export type AuthError =
     /** The token is not one we accept: 401. */
     | { readonly kind: 'invalid'; readonly reason: string }
     /** madAuth or its keys could not be reached: 503, so clients retry. */
-    | { readonly kind: 'unavailable'; readonly reason: string };
+    | { readonly kind: 'unavailable'; readonly reason: string }
+    /** An Account token past its expiry: 401, with a hint to roll it. */
+    | { readonly kind: 'expired'; readonly reason: string };
 
 export type Authenticate = (token: string) => Promise<Result<Identity, AuthError>>;
 

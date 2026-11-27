@@ -9,7 +9,11 @@ removing Members, leaving, and dropping a removed Member's Postgres roles
 run on the Hetzner dev cluster on 2026-11-17 and 18 (see
 `ARCHITECTURE.md`, "Control plane"); madAuth's `user.deleted` and
 `user.api_key_revoked` on 2026-11-24, tested against Postgres in Docker,
-not yet on a cluster. Decisions 138 to 145
+not yet on a cluster; grants on Databases (points 2 and 3) on 2026-11-27,
+run on the dev cluster the same day; Account tokens (point 7) on
+2026-11-27 without source IP ranges and the expiry e-mail, tested against
+Postgres in Docker, not yet on a cluster (decision 148 has their API and
+`oup token`). Decisions 138 to 145 and 148
 in `ARCHITECTURE.md` index it. It settles Open question 9 and the
 invitation part of Open question 16.
 

@@ -3,7 +3,8 @@
  * only marks rows deleted; each pass then, in this order:
  *
  * 0. deletes the waitlist's addresses nobody confirmed in time (decision
- *    86), first, so a failing later step does not keep them;
+ *    86), first, so a failing later step does not keep them, and marks the
+ *    Postgres roles of expired Account tokens to be dropped (decision 144);
  * 1. removes a deleted Database's Cluster, Pooler and ScheduledBackup (with
  *    the Cluster go its volumes); it records that only once the deletion is
  *    older than OPERATOR_GRACE, because an operator pass that fetched its
@@ -31,6 +32,7 @@ import type pg from 'pg';
 import type { BackupStore } from './backups.js';
 import type { ObjectStorage } from './garage.js';
 import type { ControlPlaneKube, ObjectRef } from './kube.js';
+import { dropExpiredTokenRoles } from './accounts/tokens.js';
 import { purgeUnconfirmed } from './waitlist/store.js';
 
 export interface CleanupDeps {
@@ -191,6 +193,10 @@ export async function cleanupPass(deps: CleanupDeps): Promise<void> {
     const unconfirmed = await purgeUnconfirmed(deps.pool);
     if (unconfirmed > 0) {
         deps.log({ msg: 'cleanup: unconfirmed waitlist addresses deleted', count: unconfirmed });
+    }
+    const expired = await dropExpiredTokenRoles(deps.pool);
+    if (expired > 0) {
+        deps.log({ msg: 'cleanup: Postgres roles of expired Account tokens dropped', count: expired });
     }
     await removeRunningObjects(deps);
     await recordFinishedRestores(deps);
