@@ -816,6 +816,7 @@ describe('Account tokens', () => {
         assert.equal((await create('tina', { name: 'Bad_Name', expiresAt: inDays(1) })).status, 400);
         assert.equal((await create('tina', { name: 'old', expiresAt: inDays(-1) })).status, 400, 'in the past');
         assert.equal((await create('tina', { name: 'long', expiresAt: inDays(366) })).status, 400, 'more than a year');
+        assert.equal((await create('tina', { name: 'max', expiresAt: new Date(Date.now() + 365 * 86_400_000 + 5_000).toISOString() })).status, 201, 'a clock a little ahead');
         assert.equal((await create('tina', { name: 'nope', role: 'owner', expiresAt: inDays(1) })).status, 400, 'never owner');
         assert.equal((await create('tina', { name: 'nope' })).status, 400, 'expiry is required');
         const keyed = await withSecret('madauth_tina_write', 'POST', tokensPath(), { name: 'keyed', expiresAt: inDays(1) });

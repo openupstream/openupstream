@@ -176,12 +176,14 @@ const memberPatch = z.strictObject({ role: z.enum(MEMBER_ROLES).nullable() });
 const grantInput = z.strictObject({ access: z.enum(DATABASE_ACCESS_LEVELS) });
 
 const DAY_MS = 86_400_000;
+const CLOCK_SLACK_MS = 60_000;
 /** An Account token's expiry: in the future, at most ACCOUNT_TOKEN_MAX_DAYS away (decision 144). */
 const tokenExpiry = z.iso
     .datetime({ offset: true })
     .transform((value) => new Date(value))
     .refine((date) => date.getTime() > Date.now(), 'in the future')
-    .refine((date) => date.getTime() <= Date.now() + ACCOUNT_TOKEN_MAX_DAYS * DAY_MS, `at most ${ACCOUNT_TOKEN_MAX_DAYS} days away`);
+    // A minute's slack, so a client whose clock runs a little ahead may still ask for the maximum.
+    .refine((date) => date.getTime() <= Date.now() + ACCOUNT_TOKEN_MAX_DAYS * DAY_MS + CLOCK_SLACK_MS, `at most ${ACCOUNT_TOKEN_MAX_DAYS} days away`);
 const tokenName = z.string().regex(DNS_LABEL, 'a DNS label: lowercase letters, digits and hyphens');
 const tokenInput = z.strictObject({ name: tokenName, role: z.enum(ACCOUNT_TOKEN_ROLES).nullable().optional(), expiresAt: tokenExpiry });
 const tokenPatch = z.strictObject({ name: tokenName.optional(), role: z.enum(ACCOUNT_TOKEN_ROLES).nullable().optional() });

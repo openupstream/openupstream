@@ -1249,7 +1249,7 @@ async function token(args: string[]): Promise<void> {
     }
     const onDatabase = verb === 'grant' || verb === 'revoke';
     if (onDatabase && values.database === undefined) {
-        return fail(`oup token ${verb} needs --database <name>`);
+        return fail(`oup token ${verb} needs --database <name>${verb === 'revoke' ? `; oup token delete ${name ?? '<name>'} revokes the token itself` : ''}`);
     }
     if (onDatabase ? values.account !== undefined : values.database !== undefined || values.project !== undefined) {
         return fail(onDatabase ? `oup token ${verb} acts in the Database's Account; it takes no --account` : `oup token ${verb} takes no --database or --project`);
