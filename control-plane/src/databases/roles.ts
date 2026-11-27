@@ -113,8 +113,9 @@ async function insertRole(
     if (!sealed.ok) {
         return sealed;
     }
-    // Under the caller's lock, and only while they are still a Member with a role: a removal that
-    // runs meanwhile either sees this row and marks it, or has removed them and nothing is inserted.
+    // Under the caller's lock, and only while their role or a grant at this level or above still
+    // allows it: a removal, a lost role or a lower grant that runs meanwhile either sees this row and
+    // marks it, or came first and nothing is inserted.
     // An API key's own lock and the revoked keys do the same for a revocation (revokeApiKey).
     const inserted = await inTransaction(
         pool,
@@ -131,8 +132,13 @@ async function insertRole(
                  select $1, $2, $3, $4, $5, $6
                  where exists (
                      select 1 from databases d join projects p on p.id = d.project_id
-                     join members m on m.account_id = p.account_id and m.auth_subject = $3 and m.role is not null
+                     join members m on m.account_id = p.account_id and m.auth_subject = $3
                      where d.id = $2 and d.deleted_at is null
+                       and (m.role is not null or exists (
+                           select 1 from grants g
+                           where g.member_id = m.id and g.database_id = d.id
+                             and database_access_rank(g.access) >= database_access_rank($5)
+                       ))
                  )
                  and not exists (select 1 from revoked_api_keys where api_key_id = $4)
                  on conflict do nothing

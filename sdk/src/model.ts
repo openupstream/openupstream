@@ -41,14 +41,40 @@ export interface Member {
     /** The madAuth subject this Member signs in as. */
     authSubject: string;
     email: string;
-    /** null: the Member reaches only what grants give them (not built yet). */
+    /** null: the Member reaches only what their grants give them. */
     role: MemberRole | null;
+    /** Their grants, oldest first; they count only while the Member has no role (decision 139). */
+    grants: Grant[];
     createdAt: Timestamp;
 }
 
-/** Changes a Member's role; only an owner may, with a session or `oup login`, never an API key. */
+/**
+ * Changes a Member's role; only an owner may, with a session or `oup login`,
+ * never an API key. null leaves them only their grants: their Postgres roles
+ * above what the grants allow are dropped (decision 143).
+ */
 export interface MemberPatch {
-    role: MemberRole;
+    role: MemberRole | null;
+}
+
+/**
+ * Access for one Member to one Database at a level (decision 139): they see
+ * the Database and its Project's name and open `oup pg proxy` at that level
+ * or below (decision 140), nothing else of the Project. A Member with a role
+ * needs none.
+ */
+export interface Grant {
+    databaseId: Id;
+    databaseName: string;
+    projectId: Id;
+    projectName: string;
+    access: DatabaseAccess;
+    createdAt: Timestamp;
+}
+
+/** Gives a Member a grant, or another level; owners only, never with an API key. */
+export interface GrantInput {
+    access: DatabaseAccess;
 }
 
 /** The unit of isolation and lifecycle; deleting it deletes everything in it. */

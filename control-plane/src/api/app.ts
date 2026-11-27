@@ -29,6 +29,7 @@ import {
     type Bucket,
     type BucketDetails,
     type Database,
+    type DatabaseAccess,
     type DatabaseDetails,
     type DatabaseProxy,
     type DatabaseState,
@@ -37,6 +38,7 @@ import {
     type JobRow,
     type JobRun,
     type JobState,
+    type Project,
     JOB_ID_LABEL,
     type RegistryAuth,
     type RouteInput,
@@ -62,7 +64,7 @@ import { stream } from 'hono/streaming';
 import type pg from 'pg';
 import { z } from 'zod';
 import { createAccount, holdsOf, listAccounts } from '../accounts/store.js';
-import { changeRole, listMembers, memberOf, removeMember } from '../accounts/members.js';
+import { type CallerGrant, changeRole, grantsOf, listMembers, memberOf, removeGrant, removeMember, setGrant } from '../accounts/members.js';
 import { type BucketRecord, createBucket, deleteBucket, getBucket, listBuckets } from '../buckets/store.js';
 import { GiB, MiB, roomForGrowth, roomForNew } from '../databases/capacity.js';
 import { checkRestore, restoreCheckMessage } from '../databases/restore.js';
@@ -155,7 +157,12 @@ const accountInput = z.strictObject({
     name: z.string().trim().min(1).max(200),
 });
 
-const memberPatch = z.strictObject({ role: z.enum(MEMBER_ROLES) });
+const memberPatch = z.strictObject({ role: z.enum(MEMBER_ROLES).nullable() });
+const grantInput = z.strictObject({ access: z.enum(DATABASE_ACCESS_LEVELS) });
+
+/** Whether a grant at `granted` allows `asked`: its level and those below it (decision 140). */
+export const accessAllows = (granted: DatabaseAccess, asked: DatabaseAccess): boolean =>
+    DATABASE_ACCESS_LEVELS.indexOf(granted) >= DATABASE_ACCESS_LEVELS.indexOf(asked);
 
 /** Whether an API key with `scopes` may make a request with `method`; a session (undefined) may make any. */
 export const scopeAllows = (scopes: readonly string[] | undefined, method: string): boolean =>
@@ -331,7 +338,8 @@ const routeInput = z.union([
 ]);
 
 /** In-cluster connection through the Database's PgBouncer; CloudNativePG's application user and database. */
-type Env = { Variables: { identity: Identity; accountIds: string[] } };
+/** Who calls: the Accounts where their Member has a role, and the grants that count for them. */
+type Env = { Variables: { identity: Identity; accountIds: string[]; grants: CallerGrant[] } };
 
 export function createApi(deps: ApiDeps): Hono<Env> {
     const { pool, authenticate, kube, storage } = deps;
@@ -463,6 +471,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         c.set('identity', identity.value);
         c.set('accountIds', await accountsOf(pool, identity.value));
+        c.set('grants', await grantsOf(pool, identity.value.subject));
         return next();
     });
 
@@ -501,7 +510,12 @@ export function createApi(deps: ApiDeps): Hono<Env> {
 
     app.get('/v1/accounts/:accountId/members', async (c) => {
         const accountId = c.req.param('accountId');
-        return c.get('accountIds').includes(accountId) ? c.json(await listMembers(pool, accountId)) : c.json(notFound, 404);
+        if (c.get('accountIds').includes(accountId)) {
+            return c.json(await listMembers(pool, accountId));
+        }
+        // A Member without a role sees themselves and their grants, no one else.
+        const self = UUID.test(accountId) ? await memberOf(pool, accountId, c.get('identity').subject) : undefined;
+        return self === undefined ? c.json(notFound, 404) : c.json([self]);
     });
 
     app.patch('/v1/accounts/:accountId/members/:memberId', async (c) => {
@@ -522,11 +536,59 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             return c.json(invalid(input.error.issues), 400);
         }
         const changed = await changeRole(pool, accountId, memberId, input.data.role);
-        return changed.ok
-            ? c.json(changed.value)
-            : changed.error.kind === 'last-owner'
-              ? c.json(lastOwner, 409)
-              : c.json(notFound, 404);
+        if (!changed.ok) {
+            return changed.error.kind === 'last-owner' ? c.json(lastOwner, 409) : c.json(notFound, 404);
+        }
+        // Without a role, the Postgres roles their grants do not allow are dropped, as on a removal.
+        await forgetDroppedRoles(pool, kube, changed.value.dropped, deps.log ?? (() => undefined));
+        return c.json(changed.value.value);
+    });
+
+    // Grants (decision 139): an owner gives a Member access to one Database
+    // of the Account at a level, changes it or takes it away; never with an
+    // API key. A lower level or none drops the Member's Postgres roles above
+    // it while they have no role.
+    const grantRefusal = async (c: Context<Env>, accountId: string, memberId: string, databaseId: string) => {
+        if (c.get('identity').scopes !== undefined) {
+            return c.json(noKeys, 403);
+        }
+        const caller = UUID.test(accountId) ? await memberOf(pool, accountId, c.get('identity').subject) : undefined;
+        if (caller?.role == null || !UUID.test(memberId) || !UUID.test(databaseId)) {
+            return c.json(notFound, 404);
+        }
+        return caller.role === 'owner' ? undefined : c.json(ownersOnly, 403);
+    };
+
+    app.put('/v1/accounts/:accountId/members/:memberId/grants/:databaseId', async (c) => {
+        const { accountId, memberId, databaseId } = c.req.param();
+        const refused = await grantRefusal(c, accountId, memberId, databaseId);
+        if (refused !== undefined) {
+            return refused;
+        }
+        const input = grantInput.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const granted = await setGrant(pool, accountId, memberId, databaseId, input.data.access);
+        if (!granted.ok) {
+            return c.json(notFound, 404);
+        }
+        await forgetDroppedRoles(pool, kube, granted.value.dropped, deps.log ?? (() => undefined));
+        return c.json(granted.value.value, granted.value.created ? 201 : 200);
+    });
+
+    app.delete('/v1/accounts/:accountId/members/:memberId/grants/:databaseId', async (c) => {
+        const { accountId, memberId, databaseId } = c.req.param();
+        const refused = await grantRefusal(c, accountId, memberId, databaseId);
+        if (refused !== undefined) {
+            return refused;
+        }
+        const removed = await removeGrant(pool, accountId, memberId, databaseId);
+        if (!removed.ok) {
+            return c.json(notFound, 404);
+        }
+        await forgetDroppedRoles(pool, kube, removed.value, deps.log ?? (() => undefined));
+        return c.body(null, 204);
     });
 
     // `me` is the caller: leaving the Account.
@@ -553,7 +615,9 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         return c.body(null, 204);
     });
 
-    app.get('/v1/projects', async (c) => c.json(await listProjects(pool, c.get('accountIds'))));
+    app.get('/v1/projects', async (c) =>
+        c.json(await listProjects(pool, c.get('accountIds'), c.get('grants').map((grant) => grant.projectId))),
+    );
 
     app.post('/v1/projects', async (c) => {
         const input = projectInput.safeParse(await body(c));
@@ -575,10 +639,36 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     const projectOf = (accountIds: string[], id: string) =>
         UUID.test(id) ? getProject(pool, accountIds, id) : Promise.resolve(undefined);
     const notFound = { error: 'not found' };
+    /**
+     * The caller's live Project through a role, with `grants` undefined (every
+     * Database at every level), or through grants on some of its Databases
+     * (decision 139), with those. Only the routes that read a Project or its
+     * Databases and open `oup pg proxy` use it; every other route stays with
+     * `projectOf` and so needs a role.
+     */
+    const reachedProjectOf = async (c: Context<Env>, id: string): Promise<{ project: Project; grants?: CallerGrant[] } | undefined> => {
+        const project = await projectOf(c.get('accountIds'), id);
+        if (project !== undefined) {
+            return { project };
+        }
+        const grants = c.get('grants').filter((grant) => grant.projectId === id);
+        const granted = grants[0] === undefined ? undefined : await projectOf([grants[0].accountId], id);
+        return granted === undefined ? undefined : { project: granted, grants };
+    };
+    /** The Database and the highest level the caller may use there: `owner` with a role, else their grant's (decision 140). */
+    const usableDatabaseOf = async (c: Context<Env>, projectId: string, id: string) => {
+        const reached = await reachedProjectOf(c, projectId);
+        const grant = reached?.grants?.find((candidate) => candidate.databaseId === id);
+        if (reached === undefined || !UUID.test(id) || (reached.grants !== undefined && grant === undefined)) {
+            return undefined;
+        }
+        const database = await getDatabase(pool, reached.project.id, id);
+        return database === undefined ? undefined : { database, access: grant?.access ?? ('owner' as DatabaseAccess) };
+    };
 
     app.get('/v1/projects/:projectId', async (c) => {
-        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
-        return project === undefined ? c.json(notFound, 404) : c.json(project);
+        const reached = await reachedProjectOf(c, c.req.param('projectId'));
+        return reached === undefined ? c.json(notFound, 404) : c.json(reached.project);
     });
 
     app.delete('/v1/projects/:projectId', async (c) => {
@@ -588,11 +678,13 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     });
 
     app.get('/v1/projects/:projectId/databases', async (c) => {
-        const project = await projectOf(c.get('accountIds'), c.req.param('projectId'));
-        if (project === undefined) {
+        const reached = await reachedProjectOf(c, c.req.param('projectId'));
+        if (reached === undefined) {
             return c.json(notFound, 404);
         }
-        return c.json(await Promise.all((await listDatabases(pool, project.id)).map(details)));
+        const granted = new Set(reached.grants?.map((grant) => grant.databaseId));
+        const databases = (await listDatabases(pool, reached.project.id)).filter((database) => reached.grants === undefined || granted.has(database.id));
+        return c.json(await Promise.all(databases.map(details)));
     });
 
     app.post('/v1/projects/:projectId/databases', async (c) => {
@@ -661,8 +753,8 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     };
 
     app.get('/v1/projects/:projectId/databases/:databaseId', async (c) => {
-        const database = await databaseOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('databaseId'));
-        return database === undefined ? c.json(notFound, 404) : c.json(await details(database));
+        const usable = await usableDatabaseOf(c, c.req.param('projectId'), c.req.param('databaseId'));
+        return usable === undefined ? c.json(notFound, 404) : c.json(await details(usable.database));
     });
 
     app.patch('/v1/projects/:projectId/databases/:databaseId', async (c) => {
@@ -716,13 +808,17 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     // POST, since the first ask creates the role: an API key needs
     // openupstream:write at every level, `read` included (decision 64).
     app.post('/v1/projects/:projectId/databases/:databaseId/proxy', async (c) => {
-        const database = await databaseOf(c.get('accountIds'), c.req.param('projectId'), c.req.param('databaseId'));
-        if (database === undefined) {
+        const usable = await usableDatabaseOf(c, c.req.param('projectId'), c.req.param('databaseId'));
+        if (usable === undefined) {
             return c.json(notFound, 404);
         }
+        const { database } = usable;
         const input = proxyInput.safeParse((await body(c)) ?? {});
         if (!input.success) {
             return c.json(invalid(input.error.issues), 400);
+        }
+        if (!accessAllows(usable.access, input.data.access ?? 'read')) {
+            return c.json({ error: `your grant on this Database allows ${usable.access} at most` }, 403);
         }
         const identity = c.get('identity');
         // An API key gets roles of its own, which needs madAuth's id for it.
@@ -774,8 +870,9 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (projectId === undefined || path?.[1] === undefined || (c.req.header('x-forwarded-method') ?? 'GET') !== 'GET') {
             return c.json(refused, 403);
         }
-        const database = await databaseOf(c.get('accountIds'), projectId, path[1]);
-        return database === undefined ? c.json(refused, 403) : c.body(null, 204);
+        // The primary only for a role or an `owner` grant (decision 140).
+        const usable = await usableDatabaseOf(c, projectId, path[1]);
+        return usable === undefined || (path[2] === 'primary' && usable.access !== 'owner') ? c.json(refused, 403) : c.body(null, 204);
     });
 
     /** The Bucket without its Garage ids, which are ours. */

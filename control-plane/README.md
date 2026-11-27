@@ -6,10 +6,11 @@ Garage's admin API for Buckets.
 
 Responsibilities:
 
-- accounts, members with their roles (owner, developer), API keys
-  (sign-in and keys via madAuth), and the Holds that stop an Account from
-  creating Resources; grants, invitations and Account tokens are designed
-  in `docs/adr/0006-invitations-roles-account-tokens.md`, not built yet
+- accounts, members with their roles (owner, developer) and grants on
+  Databases, API keys (sign-in and keys via madAuth), and the Holds that
+  stop an Account from creating Resources; invitations and Account tokens
+  are designed in `docs/adr/0006-invitations-roles-account-tokens.md`, not
+  built yet
 - projects and their resources: databases, buckets, sites, services, jobs
 - the routing table (`domain → prefix → target`)
 - secrets (envelope-encrypted, injected into containers as env)
@@ -92,8 +93,10 @@ what the control plane sees.
 | `GET /v1/login` | no token needed: `{issuer, clientId}`, where `oup login` signs in with the device grant; 404 without `CLI_CLIENT_ID` |
 | `GET /v1/accounts` | the caller's Accounts, each with its `holds` and the caller's `role` in it |
 | `POST /v1/accounts` | `{name}` → 201: a new Account, the caller its first Member and owner |
-| `GET /v1/accounts/{id}/members` | the Members with their `role` (`owner`, `developer`, or null), for owners and developers; 404 for anyone else |
-| `PATCH /v1/accounts/{id}/members/{id}` | `{role}`: another role, owners only (403 otherwise); 409 when the Account would have no owner. Never with an API key (403) |
+| `GET /v1/accounts/{id}/members` | the Members with their `role` (`owner`, `developer`, or null) and `grants` (`{databaseId, databaseName, projectId, projectName, access}`), for owners and developers; a Member without a role gets only themselves; 404 for anyone else |
+| `PATCH /v1/accounts/{id}/members/{id}` | `{role}`: another role, or `null` for only the grants, owners only (403 otherwise); without a role, their Postgres roles beyond what their grants allow are dropped as on a removal. 409 when the Account would have no owner. Never with an API key (403) |
+| `PUT /v1/accounts/{id}/members/{id}/grants/{databaseId}` | `{access: read\|write\|owner}` → 201 for a new grant, 200 for another level (decision 139); owners only (403), never with an API key (403); 404 for a Database outside the Account. A lower level drops the Member's Postgres roles above it while they have no role |
+| `DELETE /v1/accounts/{id}/members/{id}/grants/{databaseId}` | 204: the grant goes, and with it the Member's Postgres roles on that Database while they have no role; 404 when there is none |
 | `DELETE /v1/accounts/{id}/members/{id}` | 204: removes the Member, owners only, and drops their and their API keys' Postgres roles in the Account's Databases, deleting the database tunnel's pod in each Project where they had `owner` (the secrets pass retries it within the hour); `me` leaves the Account, which anyone may. 409 for the last owner. Never with an API key (403) |
 | `GET /v1/projects` | the Projects of the caller's Accounts |
 | `POST /v1/projects` | `{accountId, name}` → 201, with its default Domain `<name>-<random>.<CUSTOMER_DOMAIN>`; 409 if the name is taken in the Account |
@@ -105,8 +108,8 @@ what the control plane sees.
 | `GET /v1/projects/{id}/databases/{id}` | `state` read live from the Cluster |
 | `PATCH /v1/projects/{id}/databases/{id}` | `{memoryMb?, storageGb?, autoGrow?, maxStorageGb?}` → 200 with `state: resizing` until the Cluster has the new sizes (decision 110); 400 for a smaller `storageGb` (a volume cannot shrink), 402 for growing while the Account has a Hold, 507 when the nodes holding its instances lack the extra disk (TopoLVM's CSIStorageCapacity) or memory (allocatable less requests); 400 for a `maxStorageGb` below the storage (`null` removes the limit) |
 | `DELETE /v1/projects/{id}/databases/{id}` | 202 |
-| `POST /v1/projects/{id}/databases/{id}/proxy` | `{access?: read\|write\|owner}` (default `read`) → 201 on the first ask, 200 after: the caller's own Postgres role at that level, `{access, user, password, database, tunnelUrl}` (decision 126). The control plane generates the password, keeps it sealed with the Project's data key and writes it into the role's Secret `pg-role-<id>`, which CloudNativePG reads; the Databases operator adds the role. `tunnelUrl` is `wss://pg-<project id>.<CUSTOMER_DOMAIN>/databases/<id>/pooler`, or `/primary` at `owner`. An API key gets roles of its own and needs `openupstream:write` at every level; 503 when madAuth did not name the key |
-| `GET /v1/database-tunnel` | for Traefik's ForwardAuth in front of a tunnel, never routed by the platform's ingress: 204 when the caller is a Member of the Account of the Project named by `X-Forwarded-Host` and the Database named by `X-Forwarded-Uri` is live, otherwise 403, never 404: Traefik answers 404 itself while a new Project's tunnel route does not exist yet, which `oup` waits out |
+| `POST /v1/projects/{id}/databases/{id}/proxy` | `{access?: read\|write\|owner}` (default `read`) → 201 on the first ask, 200 after: the caller's own Postgres role at that level (any level with a role, up to the grant's otherwise, 403 above it), `{access, user, password, database, tunnelUrl}` (decision 126). The control plane generates the password, keeps it sealed with the Project's data key and writes it into the role's Secret `pg-role-<id>`, which CloudNativePG reads; the Databases operator adds the role. `tunnelUrl` is `wss://pg-<project id>.<CUSTOMER_DOMAIN>/databases/<id>/pooler`, or `/primary` at `owner`. An API key gets roles of its own and needs `openupstream:write` at every level; 503 when madAuth did not name the key |
+| `GET /v1/database-tunnel` | for Traefik's ForwardAuth in front of a tunnel, never routed by the platform's ingress: 204 when the caller has a role in the Account of the Project named by `X-Forwarded-Host`, or a grant on the Database named by `X-Forwarded-Uri` (at `owner` for `/primary`), and it is live, otherwise 403, never 404: Traefik answers 404 itself while a new Project's tunnel route does not exist yet, which `oup` waits out |
 | `GET /v1/projects/{id}/buckets` | the Buckets, without their keys |
 | `POST /v1/projects/{id}/buckets` | `{name}` → 201 with `access`: the Bucket's `endpoint`, `region` and its own key; 409 if the name is taken in any Project, also by a Bucket still being deleted; 402 if the Account has a Hold; 503 if Garage cannot be reached |
 | `GET /v1/projects/{id}/buckets/{id}` | with `access`, the secret read from Garage; an API key with only `openupstream:read` gets no secret, since the Bucket's key may write |
