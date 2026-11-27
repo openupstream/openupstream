@@ -34,9 +34,10 @@ STATE=.state
 IMAGE=${IMAGE:-images:ubuntu/24.04/cloud}
 K3S_VERSION=${K3S_VERSION:-v1.36.5+k3s1}
 BRIDGE=${BRIDGE:-br0}
-# Sized for a 32 GB host: 12 + 12 + 4 GiB, leaving about 4 GiB for it.
+# Sized for a 32 GB mini PC whose integrated GPU keeps 4 GB, so Linux sees
+# 28: 10 + 10 + 4 GiB, leaving about 4 GiB for the host.
 COMPUTE_CPUS=${COMPUTE_CPUS:-6}
-COMPUTE_MEMORY=${COMPUTE_MEMORY:-12GiB}
+COMPUTE_MEMORY=${COMPUTE_MEMORY:-10GiB}
 THIRD_CPUS=${THIRD_CPUS:-2}
 THIRD_MEMORY=${THIRD_MEMORY:-4GiB}
 ROOT_SIZE=${ROOT_SIZE:-60GiB}

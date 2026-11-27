@@ -110,63 +110,120 @@ shows in `hcloud volume list --selector openupstream=dev`.
 
 Three Incus VMs on one x86_64 machine in your home network (#137); see
 [infra/dev-cluster-incus](../infra/dev-cluster-incus/README.md). The
-defaults need 32 GB of RAM and about 260 GB of disk, allocated as used.
-Nothing needs to be reachable from the internet.
+defaults need 28 GB of RAM visible to Linux (`free -g`; a 32 GB mini PC
+with an integrated GPU shows about 28) and about 260 GB of disk, allocated
+as used. Nothing needs to be reachable from the internet. Set up first on
+a Minisforum UM790 Pro with Ubuntu Server 26.04 (2026-11-27).
 
-1. Install Ubuntu Server 24.04 on the machine and give it a fixed address
-   in the router (a DHCP reservation).
-2. Put its network port on a bridge, so the VMs get addresses from the
-   router. Find the port's name with `ip -br link` (e.g. `enp2s0`), then
-   replace the netplan file the installer wrote
-   (`/etc/netplan/50-cloud-init.yaml`) with one like this and apply it
-   with `sudo netplan try` (it rolls back unless confirmed):
+1. Install Ubuntu Server (24.04 or 26.04, not minimized) with "Use an
+   entire disk" and LVM, no encryption (it would ask for a passphrase at
+   every boot), the root volume at its default of about 100 GB and the
+   rest of the volume group left free, and OpenSSH. Give the machine a
+   fixed address in the router (a DHCP reservation; on a Fritz!Box,
+   "IPv4-Adresse dauerhaft zuweisen").
+2. Log in with a key of its own, then allow sudo without a password (the
+   scripts and the steps below need it) and turn password logins off:
+
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/um790 -C um790
+   ```
+
+   ```bash
+   ssh-copy-id -i ~/.ssh/um790.pub <user>@<host address>
+   ```
+
+   ```bash
+   ssh -t <user>@<host address> 'echo "<user> ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/90-<user> && sudo chmod 440 /etc/sudoers.d/90-<user>'
+   ```
+
+   ```bash
+   ssh <user>@<host address> 'echo "PasswordAuthentication no" | sudo tee /etc/ssh/sshd_config.d/10-key-only.conf && sudo systemctl reload ssh'
+   ```
+
+3. Put its network port on a bridge, so the VMs get addresses from the
+   router. Find the port's name and MAC address with `ip -br link` (e.g.
+   `enp1s0`), then replace the netplan file the installer wrote
+   (`/etc/netplan/00-installer-config.yaml` or `50-cloud-init.yaml`) with
+   `/etc/netplan/60-br0.yaml` (mode 600). The bridge takes the port's MAC
+   address, so the router's reservation keeps the machine's address:
 
    ```yaml
    network:
      version: 2
      ethernets:
-       enp2s0:
+       enp1s0:
+         match:
+           macaddress: "58:47:ca:71:4f:7d"
+         set-name: enp1s0
          dhcp4: false
+         dhcp6: false
+         accept-ra: false
      bridges:
        br0:
-         interfaces: [enp2s0]
+         interfaces: [enp1s0]
+         macaddress: "58:47:ca:71:4f:7d"
          dhcp4: true
+         dhcp6: true
+         parameters:
+           stp: false
+           forward-delay: 0
    ```
 
-   The bridge takes over the machine's address; the router may see it
-   with a new MAC address, so check the reservation.
-3. Install Incus and set it up. A btrfs pool gives instant snapshots;
-   use a disk or partition of its own if there is one
-   (`source=/dev/nvme1n1`), otherwise a file of the size given:
+   Over SSH, apply it with a way back: schedule the old file's return
+   first, apply, reconnect, and only then cancel the return:
+
+   ```bash
+   sudo systemd-run --unit=netplan-rollback --on-active=180 sh -c "rm -f /etc/netplan/60-br0.yaml; install -m 600 /root/00-installer-config.yaml.bak /etc/netplan/00-installer-config.yaml; netplan apply"
+   ```
+
+   ```bash
+   sudo systemd-run --unit=netplan-apply-br0 sh -c "sleep 2; netplan apply"
+   ```
+
+   ```bash
+   sudo systemctl stop netplan-rollback.timer
+   ```
+
+4. Install Incus and give it a btrfs storage pool named `default` on a
+   logical volume of its own from the free space (instant snapshots, and
+   the VMs cannot fill the root filesystem). No Incus network is needed:
+   the VMs use `br0`.
 
    ```bash
    sudo apt install incus btrfs-progs && sudo adduser $USER incus-admin
    ```
 
    ```bash
-   sudo incus admin init --minimal && sudo incus storage create oup btrfs size=300GiB
+   sudo lvcreate -L 700G -n incus ubuntu-vg && sudo incus storage create default btrfs source=/dev/ubuntu-vg/incus
    ```
-
-   Pass `POOL=oup` to the scripts then. No Incus network is needed: the
-   VMs use `br0`.
-4. To run the scripts from your machine instead of the host, let the host
-   listen and trust your machine; the token is printed once and is only
-   for `remote add`:
 
    ```bash
-   sudo incus config set core.https_address :8443 && sudo incus config trust add my-laptop
+   sudo incus profile device add default root disk path=/ pool=default
    ```
 
-   On your machine (`brew install incus` brings the client), paste the
-   token when asked:
+5. To run the scripts from your machine, let the host's API listen on its
+   address and trust your machine's client certificate. Copying the
+   certificate needs no token; it is public:
 
    ```bash
-   incus remote add mini <host address>
+   brew install incus && incus remote generate-certificate
    ```
 
-5. Pick two domains and add them to your router's DNS rebinding
+   ```bash
+   scp ~/Library/Application\ Support/incus/client.crt <user>@<host address>:/tmp/client.crt
+   ```
+
+   ```bash
+   ssh <user>@<host address> 'sudo incus config set core.https_address <host address>:8443 && sudo incus config trust add-certificate /tmp/client.crt --name my-laptop && rm /tmp/client.crt'
+   ```
+
+   ```bash
+   incus remote add um790 https://<host address>:8443 --accept-certificate
+   ```
+
+6. Pick two domains and add them to your router's DNS rebinding
    exceptions, as for a single node below (steps 3 and 4).
-6. Run `up.sh` and `install-multi-node.sh` as the
+7. Run `up.sh` and `install-multi-node.sh` as the
    [infra/dev-cluster-incus](../infra/dev-cluster-incus/README.md) README
    shows, then give the three VMs DHCP reservations.
 
