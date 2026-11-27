@@ -74,10 +74,6 @@ Site off, point it at another VM's.
 Give the VMs fixed addresses in the router (DHCP reservations, after the
 first run): the DNS records and the kubeconfig name them.
 
-After switching branches, run `npm ci && npm run build` at the repository
-root before `install-multi-node.sh`: `platform.sh` runs the operators'
-scripts from the checkout, and a stale build of the SDK stops it.
-
 ## Snapshots
 
 ```bash
