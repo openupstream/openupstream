@@ -9,6 +9,7 @@ import {
     type DatabaseDetails,
     type DatabaseProxy,
     type Domain,
+    type Grant,
     type JobDetails,
     type JobRun,
     type LogEntry,
@@ -464,7 +465,7 @@ describe('Members and their roles', () => {
         projectId = ((await (await call('POST', '/v1/projects', 'olga', { accountId, name: 'shop' })).json()) as Project).id;
     });
 
-    test('owners and developers see the Members with their roles; others get 404', async () => {
+    test('owners and developers see the Members with their roles; a Member without one themselves; others get 404', async () => {
         const listed = (await (await members('dev')).json()) as Member[];
         assert.deepEqual(
             listed.map((member) => [member.email, member.role]),
@@ -476,7 +477,7 @@ describe('Members and their roles', () => {
             ],
         );
         assert.equal((await members('olga')).status, 200);
-        assert.equal((await members('nobody')).status, 404);
+        assert.deepEqual(((await (await members('nobody')).json()) as Member[]).map((member) => member.email), ['nobody@example.test'], 'without a role, themselves');
         assert.equal((await members('bob')).status, 404);
         assert.equal((await call('GET', '/v1/accounts/not-a-uuid/members', 'olga')).status, 404);
         const accounts = (await (await call('GET', '/v1/accounts', 'dev')).json()) as Account[];
@@ -490,7 +491,7 @@ describe('Members and their roles', () => {
         assert.equal((await call('DELETE', `/v1/accounts/${accountId}/members/${await memberId('olga')}`, 'dev')).status, 403);
     });
 
-    test('a Member without a role reaches no Project (grants are not built yet)', async () => {
+    test('a Member without a role or grants reaches no Project', async () => {
         assert.equal((await call('GET', `/v1/projects/${projectId}`, 'nobody')).status, 404);
         assert.deepEqual(await (await call('GET', '/v1/projects', 'nobody')).json(), []);
         assert.equal((await call('POST', '/v1/projects', 'nobody', { accountId, name: 'sneaky' })).status, 403);
@@ -580,6 +581,173 @@ describe('Members and their roles', () => {
         assert.equal((await call('DELETE', `/v1/accounts/${accountId}/members/${dev}`, 'olga')).status, 204);
         assert.equal((await call('DELETE', `/v1/accounts/${accountId}/members/${dev}`, 'olga')).status, 404);
         assert.deepEqual(await (await call('GET', '/v1/accounts', 'dev')).json(), []);
+    });
+});
+
+describe('Grants on Databases', () => {
+    let accountId: string;
+    let shop: string;
+    let other: string;
+    let orders: DatabaseDetails;
+    let events: DatabaseDetails;
+    const memberId = async (subject: string) =>
+        (await db.pool.query<{ id: string }>('select id from members where account_id = $1 and auth_subject = $2', [accountId, subject])).rows[0]
+            ?.id ?? 'none';
+    const grant = async (by: string, subject: string, databaseId: string, access?: string) =>
+        call(
+            access === undefined ? 'DELETE' : 'PUT',
+            `/v1/accounts/${accountId}/members/${await memberId(subject)}/grants/${databaseId}`,
+            by,
+            access === undefined ? undefined : { access },
+        );
+    const proxy = (subject: string, database: DatabaseDetails, access: string) =>
+        call('POST', `/v1/projects/${shop}/databases/${database.id}/proxy`, subject, { access });
+    const tunnel = async (subject: string, database: DatabaseDetails, target: string) =>
+        api.request('/v1/database-tunnel', {
+            headers: {
+                authorization: `Bearer ${await token(subject)}`,
+                'x-forwarded-host': `pg-${shop}.openupstream.test`,
+                'x-forwarded-uri': `/databases/${database.id}/${target}`,
+                'x-forwarded-method': 'GET',
+            },
+        });
+    const liveRoles = async (database: DatabaseDetails, subject: string) =>
+        (
+            await db.pool.query<{ access: string }>(
+                'select access from database_roles where database_id = $1 and auth_subject = $2 and dropped_at is null order by access',
+                [database.id, subject],
+            )
+        ).rows.map((row) => row.access);
+    const newDatabase = async (projectId: string, name: string) =>
+        (await (await call('POST', `/v1/projects/${projectId}/databases`, 'gina', { name, memoryMb: 256, storageGb: 1 })).json()) as DatabaseDetails;
+
+    before(async () => {
+        accountId = ((await (await call('POST', '/v1/accounts', 'gina', { name: 'Gina KG' })).json()) as Account).id;
+        await db.pool.query(
+            `insert into members (account_id, auth_subject, email, role) values
+             ($1, 'gus', 'gus@gina.test', null), ($1, 'dex', 'dex@gina.test', 'developer')`,
+            [accountId],
+        );
+        shop = ((await (await call('POST', '/v1/projects', 'gina', { accountId, name: 'shop' })).json()) as Project).id;
+        other = ((await (await call('POST', '/v1/projects', 'gina', { accountId, name: 'other' })).json()) as Project).id;
+        orders = await newDatabase(shop, 'orders');
+        events = await newDatabase(shop, 'events');
+    });
+
+    test('an owner gives and changes a grant; developers, API keys and bad input are refused', async () => {
+        const created = await grant('gina', 'gus', orders.id, 'write');
+        assert.equal(created.status, 201);
+        const body = (await created.json()) as Grant;
+        assert.deepEqual([body.databaseId, body.databaseName, body.projectId, body.projectName, body.access], [orders.id, 'orders', shop, 'shop', 'write']);
+        assert.equal((await grant('gina', 'gus', orders.id, 'write')).status, 200, 'again: the same grant');
+        assert.equal((await grant('dex', 'gus', events.id, 'read')).status, 403);
+        assert.equal((await grant('gus', 'gus', events.id, 'owner')).status, 404, 'a Member without a role is not told the route exists');
+        const keyed = await api.request(`/v1/accounts/${accountId}/members/${await memberId('gus')}/grants/${events.id}`, {
+            method: 'PUT',
+            headers: { authorization: 'Bearer madauth_gina_write', 'content-type': 'application/json' },
+            body: JSON.stringify({ access: 'read' }),
+        });
+        assert.equal(keyed.status, 403);
+        assert.equal((await grant('gina', 'gus', events.id, 'admin')).status, 400);
+        assert.equal((await grant('gina', 'gus', '00000000-0000-4000-8000-000000000000', 'read')).status, 404);
+        const hanks = ((await (await call('POST', '/v1/accounts', 'hank', { name: 'Hank OHG' })).json()) as Account).id;
+        const elsewhere = ((await (await call('POST', '/v1/projects', 'hank', { accountId: hanks, name: 'not-gina' })).json()) as Project).id;
+        const foreign = (await (await call('POST', `/v1/projects/${elsewhere}/databases`, 'hank', { name: 'foreign', memoryMb: 256, storageGb: 1 })).json()) as DatabaseDetails;
+        assert.equal((await grant('gina', 'gus', foreign.id, 'read')).status, 404, "another Account's Database");
+    });
+
+    test('a grant shows its Database and the Project name, and nothing else of the Account', async () => {
+        assert.deepEqual(((await (await call('GET', '/v1/projects', 'gus')).json()) as Project[]).map((project) => project.name), ['shop']);
+        assert.equal((await call('GET', `/v1/projects/${shop}`, 'gus')).status, 200);
+        assert.equal((await call('GET', `/v1/projects/${other}`, 'gus')).status, 404);
+        const listed = (await (await call('GET', `/v1/projects/${shop}/databases`, 'gus')).json()) as DatabaseDetails[];
+        assert.deepEqual(listed.map((database) => database.name), ['orders']);
+        assert.equal((await call('GET', `/v1/projects/${shop}/databases/${orders.id}`, 'gus')).status, 200);
+        assert.equal((await call('GET', `/v1/projects/${shop}/databases/${events.id}`, 'gus')).status, 404);
+        // Using is not managing: no resize, delete, Secrets, other Resources or new ones.
+        assert.equal((await call('PATCH', `/v1/projects/${shop}/databases/${orders.id}`, 'gus', { memoryMb: 512 })).status, 404);
+        assert.equal((await call('DELETE', `/v1/projects/${shop}/databases/${orders.id}`, 'gus')).status, 404);
+        assert.equal((await call('GET', `/v1/projects/${shop}/secrets`, 'gus')).status, 404);
+        assert.equal((await call('GET', `/v1/projects/${shop}/services`, 'gus')).status, 404);
+        assert.equal((await call('POST', `/v1/projects/${shop}/databases`, 'gus', { name: 'mine', memoryMb: 256, storageGb: 1 })).status, 404);
+        assert.equal((await call('DELETE', `/v1/projects/${shop}`, 'gus')).status, 404);
+        const members = (await (await call('GET', `/v1/accounts/${accountId}/members`, 'gus')).json()) as Member[];
+        assert.deepEqual(
+            members.map((member) => [member.email, member.role, member.grants.map((g) => `${g.projectName}/${g.databaseName}:${g.access}`)]),
+            [['gus@example.test', null, ['shop/orders:write']]],
+            'themselves only',
+        );
+        const all = (await (await call('GET', `/v1/accounts/${accountId}/members`, 'dex')).json()) as Member[];
+        assert.equal(all.length, 3);
+    });
+
+    test('the proxy and the tunnel allow the granted level and those below; the primary needs owner', async () => {
+        assert.equal((await proxy('gus', orders, 'read')).status, 201);
+        assert.equal((await proxy('gus', orders, 'write')).status, 201);
+        const above = await proxy('gus', orders, 'owner');
+        assert.equal(above.status, 403);
+        assert.match(((await above.json()) as { error: string }).error, /allows write at most/);
+        assert.equal((await proxy('gus', events, 'read')).status, 404);
+        assert.equal((await tunnel('gus', orders, 'pooler')).status, 204);
+        assert.equal((await tunnel('gus', orders, 'primary')).status, 403);
+        assert.equal((await tunnel('gus', events, 'pooler')).status, 403);
+        assert.equal((await tunnel('dex', orders, 'primary')).status, 204, 'a role reaches the primary');
+        assert.equal((await grant('gina', 'gus', events.id, 'owner')).status, 201);
+        assert.equal((await tunnel('gus', events, 'primary')).status, 204, 'so does an owner grant');
+        // A role creation that passed the check before the grant was lowered creates nothing afterwards.
+        assert.equal((await grant('gina', 'gus', events.id, 'read')).status, 200);
+        const late = await roleFor(db.pool, domainDeps.kek, { id: events.id, projectId: shop }, { subject: 'gus' }, 'owner');
+        assert.equal(late.ok ? 'created' : late.error.kind, 'project-not-found');
+        assert.equal((await grant('gina', 'gus', events.id)).status, 204);
+    });
+
+    test('a lower grant drops the roles above it; no grant drops them all, and the Project goes from view', async () => {
+        assert.deepEqual(await liveRoles(orders, 'gus'), ['read', 'write']);
+        removedObjects.length = 0;
+        assert.equal((await grant('gina', 'gus', orders.id, 'read')).status, 200);
+        assert.deepEqual(await liveRoles(orders, 'gus'), ['read']);
+        assert.equal(removedObjects.filter((object) => object.kind === 'Secret').length, 1, "the write role's Secret goes");
+        assert.equal((await grant('gina', 'gus', orders.id)).status, 204);
+        assert.equal((await grant('gina', 'gus', orders.id)).status, 404, 'only once');
+        assert.deepEqual(await liveRoles(orders, 'gus'), []);
+        assert.deepEqual(await (await call('GET', '/v1/projects', 'gus')).json(), []);
+        assert.equal((await proxy('gus', orders, 'read')).status, 404);
+    });
+
+    test("losing the role keeps what the grants allow and drops the rest; a role makes grants irrelevant", async () => {
+        assert.equal((await proxy('dex', orders, 'read')).status, 201);
+        assert.equal((await proxy('dex', orders, 'owner')).status, 201);
+        assert.equal((await proxy('dex', events, 'write')).status, 201);
+        assert.equal((await grant('gina', 'dex', orders.id, 'read')).status, 201);
+        assert.deepEqual(await liveRoles(orders, 'dex'), ['owner', 'read'], 'a grant takes nothing from a Member with a role');
+
+        const tunnelPods = `project-${shop} openupstream.io/component=database-tunnel`;
+        pods.set(tunnelPods, [{ name: 'database-tunnel-dex', nodeName: 'n1', containers: [] }]);
+        removedObjects.length = 0;
+        const demoted = await call('PATCH', `/v1/accounts/${accountId}/members/${await memberId('dex')}`, 'gina', { role: null });
+        assert.equal(demoted.status, 200);
+        assert.equal(((await demoted.json()) as Member).role, null);
+        assert.deepEqual(await liveRoles(orders, 'dex'), ['read']);
+        assert.deepEqual(await liveRoles(events, 'dex'), []);
+        assert.deepEqual(
+            removedObjects.filter((object) => object.kind === 'Pod'),
+            [{ kind: 'Pod', name: 'database-tunnel-dex', namespace: `project-${shop}` }],
+            'the open owner session ends with its role',
+        );
+        pods.delete(tunnelPods);
+        assert.deepEqual(((await (await call('GET', '/v1/projects', 'dex')).json()) as Project[]).map((project) => project.name), ['shop']);
+        assert.equal((await call('POST', '/v1/projects', 'dex', { accountId, name: 'not-anymore' })).status, 403);
+
+        assert.equal((await call('PATCH', `/v1/accounts/${accountId}/members/${await memberId('dex')}`, 'gina', { role: 'developer' })).status, 200);
+        assert.equal((await proxy('dex', events, 'owner')).status, 201, 'with the role back, every level again');
+    });
+
+    test('a deleted Database takes its grants with it', async () => {
+        const doomed = await newDatabase(other, 'doomed');
+        assert.equal((await grant('gina', 'gus', doomed.id, 'read')).status, 201);
+        assert.equal((await call('DELETE', `/v1/projects/${other}/databases/${doomed.id}`, 'gina')).status, 202);
+        assert.deepEqual(await (await call('GET', '/v1/projects', 'gus')).json(), []);
+        assert.deepEqual(((await (await call('GET', `/v1/accounts/${accountId}/members`, 'gus')).json()) as Member[])[0]?.grants, []);
     });
 });
 

@@ -55,12 +55,13 @@ sign-up by default and can close it the same way. The hosted service
 itself, with its dashboard, is at `console.openupstream.com`.
 
 An Account's Members are owners or developers (every Project, but not
-the Account itself); owners change roles and remove Members, and a removed
-Member's Postgres roles are dropped within the next operator pass, as
-are those of a deleted user and of a revoked API key.
+the Account itself), or have no role and only grants: access to single
+Databases at a level, such as read-only for an analyst. Owners change
+roles and grants and remove Members, and Postgres roles a Member may no
+longer use are dropped within the next operator pass, as are those of a
+deleted user and of a revoked API key.
 Designed, not built yet:
-owners invite people by e-mail with a role or with access to single
-Databases only, such as read-only for an analyst, and invited people may
+owners invite people by e-mail with a role or with grants, and invited people may
 sign up while sign-up is closed; Account tokens give CI and tools outside
 the platform the developer role or such access without belonging to a
 person.

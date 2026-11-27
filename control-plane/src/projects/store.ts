@@ -26,10 +26,15 @@ const toProject = (row: ProjectRow): Project => ({
 
 const COLUMNS = 'id, account_id, name, created_at';
 
-export async function listProjects(pool: pg.Pool, accountIds: readonly string[]): Promise<Project[]> {
+/**
+ * The live Projects of the Accounts in `accountIds`, and those in
+ * `grantedIds`, which a caller reaches through a grant on one of their
+ * Databases (decision 139).
+ */
+export async function listProjects(pool: pg.Pool, accountIds: readonly string[], grantedIds: readonly string[] = []): Promise<Project[]> {
     const { rows } = await pool.query<ProjectRow>(
-        `select ${COLUMNS} from projects where account_id = any($1) and deleted_at is null order by created_at, id`,
-        [accountIds],
+        `select ${COLUMNS} from projects where (account_id = any($1) or id = any($2)) and deleted_at is null order by created_at, id`,
+        [accountIds, grantedIds],
     );
     return rows.map(toProject);
 }

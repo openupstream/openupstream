@@ -11,7 +11,10 @@ What it does now:
 - the approval dialog of `oup login`, when opened with
   `?madauth_device=<code>` (decision 87)
 - an Account on the first visit (decision 62)
-- Projects: list, create, delete
+- Projects: list, create, delete; a Member without a role in the Account
+  (decision 139) sees its Projects without create and delete, and a
+  Project's page with only the Databases their grants name, each with its
+  level and the `oup pg proxy` command to reach it
 - a Project's page (`/project?id=<id>`), asked again every 10 seconds
   while it is in front:
   - Databases: list with state, create (name, memory, storage, Site),

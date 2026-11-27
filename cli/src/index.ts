@@ -6,7 +6,8 @@
  *   oup logout
  *   oup project list | create <name> [--account <name|id>] [--link]
  *   oup link <project>                       this directory's Project (.openupstream.json)
- *   oup member list | role <email> owner|developer | remove <email> | leave [--account <name|id>]
+ *   oup member list | role <email> owner|developer|none | remove <email> | leave [--account <name|id>]
+ *   oup member grant <email> read|write|owner --database <name> | revoke <email> --database <name> [--project <name|id>]
  *   oup pg list | show <name> | delete <name>
  *   oup pg create <name> [--memory <MB>] [--storage <GB>] [--site …]   waits until ready
  *   oup pg restore <source> <name> [--time <RFC 3339>] …   a new Database as a copy of <source>
@@ -65,7 +66,7 @@ import { credentialsPath, readCredentials, removeCredentials, writeCredentials }
 import { deploy } from './deploy.js';
 import { discover, emailOf, startDeviceSignIn, waitForApproval } from './oidc.js';
 import { accountFor, findLink, formatProjects, projectFor, resolveProject, writeLink } from './project.js';
-import { LAST_OWNER_HINT, formatMembers, memberByEmail, parseRole } from './members.js';
+import { LAST_OWNER_HINT, formatMembers, memberByEmail, parseGrantAccess, parseRole } from './members.js';
 import {
     type DesiredJob,
     JOB_FLAGS,
@@ -96,7 +97,9 @@ const USAGE = `usage:
   oup project create <name> [--account <name|id>] [--link]
   oup link <project>
   oup member list [--account <name|id>]
-  oup member role <email> owner|developer [--account <name|id>]
+  oup member role <email> owner|developer|none [--account <name|id>]
+  oup member grant <email> read|write|owner --database <name> [--project <name|id>]
+  oup member revoke <email> --database <name> [--project <name|id>]
   oup member remove <email> [--account <name|id>]
   oup member leave [--account <name|id>]
   oup pg list
@@ -165,10 +168,13 @@ primary, so migration tools' locks work, at most 5 at once.
 
 member acts on your only Account, or on --account. An owner may do
 everything, the Account's Members included; a developer every Project and
-everything in it. Only owners change roles and remove Members; anyone may
-leave. An Account always keeps an owner. A removed Member's Postgres roles
-are dropped. These commands need oup login: an API key cannot change who is
-in an Account.
+everything in it; a Member with role none only what their grants give. A
+grant lets a Member use one Database of the linked Project (or --project)
+at a level or below: see it and open pg proxy, nothing else of the Project.
+Only owners change roles and grants and remove Members; anyone may leave.
+An Account always keeps an owner. Postgres roles a Member may no longer use
+are dropped. These commands need oup login: an API key cannot change who
+is in an Account.
 
 logs prints the last lines (100 by default) of every replica or of a run,
 with -f also new ones as they are written, for up to an hour. Nothing is
@@ -1137,14 +1143,28 @@ async function route(args: string[]): Promise<void> {
 }
 
 /** `oup usage`: what the linked Project's Resources use now of what they were given (decision 124); not what is billed. */
-/** `oup member`: the Account's Members, their roles, removing one, leaving. */
+/** `oup member`: the Account's Members, their roles and grants, removing one, leaving. */
 async function member(args: string[]): Promise<void> {
     const [verb, ...rest] = args;
-    const { values, positionals } = parseArgs({ args: rest, allowPositionals: true, options: { account: { type: 'string' } } });
-    const [email, role, ...extra] = positionals;
-    const arity = { list: 0, leave: 0, remove: 1, role: 2 }[verb ?? ''];
+    const { values, positionals } = parseArgs({
+        args: rest,
+        allowPositionals: true,
+        options: { account: { type: 'string' }, database: { type: 'string' }, project: { type: 'string' } },
+    });
+    const [email, word, ...extra] = positionals;
+    const arity = { list: 0, leave: 0, remove: 1, role: 2, grant: 2, revoke: 1 }[verb ?? ''];
     if (arity === undefined || positionals.length !== arity || extra.length > 0) {
         return fail(USAGE);
+    }
+    const onDatabase = verb === 'grant' || verb === 'revoke';
+    if (onDatabase && values.database === undefined) {
+        return fail(`oup member ${verb} needs --database <name>`);
+    }
+    if (onDatabase ? values.account !== undefined : values.database !== undefined || values.project !== undefined) {
+        return fail(onDatabase ? `oup member ${verb} acts in the Database's Account; it takes no --account` : `oup member ${verb} takes no --database or --project`);
+    }
+    if (onDatabase) {
+        return memberGrant(verb, email ?? '', word, values.database ?? '', values.project);
     }
     const client = await apiClient();
     const account = accountFor(await listAccounts(client), values.account);
@@ -1174,12 +1194,53 @@ async function member(args: string[]): Promise<void> {
             ? console.log(`Removed ${target.value.email} from ${account.value.name}; their Postgres roles in its Databases are dropped.`)
             : refusal(removed.error);
     }
-    const parsed = parseRole(role);
+    const parsed = parseRole(word);
     if (!parsed.ok) {
         return fail(parsed.error);
     }
     const changed = await client.updateMember(account.value.id, target.value.id, { role: parsed.value });
-    return changed.ok ? console.log(`${changed.value.email} is now ${changed.value.role} of ${account.value.name}.`) : refusal(changed.error);
+    if (!changed.ok) {
+        return refusal(changed.error);
+    }
+    return console.log(
+        changed.value.role === null
+            ? `${changed.value.email} now has no role in ${account.value.name}, only their grants; their Postgres roles beyond those are dropped.`
+            : `${changed.value.email} is now ${changed.value.role} of ${account.value.name}.`,
+    );
+}
+
+/** `oup member grant` and `revoke`: a Member's access to one Database of the linked Project (decision 139). */
+async function memberGrant(verb: 'grant' | 'revoke', email: string, level: string | undefined, name: string, projectFlag: string | undefined): Promise<void> {
+    const access = verb === 'grant' ? parseGrantAccess(level) : undefined;
+    if (access !== undefined && !access.ok) {
+        return fail(access.error);
+    }
+    const { client, project } = await inProject(projectFlag);
+    const databases = await client.listDatabases(project.id);
+    if (!databases.ok) {
+        return fail(databases.error.message);
+    }
+    const database = databases.value.find((candidate) => candidate.name === name) ?? fail(`no Database ${name} in ${project.name}`);
+    const members = await client.listMembers(project.accountId);
+    if (!members.ok) {
+        return fail(members.error.message);
+    }
+    const target = memberByEmail(members.value, email);
+    if (!target.ok) {
+        return fail(target.error);
+    }
+    const where = `${project.name}/${database.name}`;
+    const note = target.value.role === null ? '' : ` It counts only once they have no role (they are ${target.value.role}).`;
+    if (access === undefined) {
+        const removed = await client.removeGrant(project.accountId, target.value.id, database.id);
+        return removed.ok
+            ? console.log(`${target.value.email} has no grant on ${where} any more.${target.value.role === null ? ' Their Postgres roles there are dropped.' : ''}`)
+            : fail(removed.error.status === 404 ? `${target.value.email} has no grant on ${where}` : removed.error.message);
+    }
+    const granted = await client.setGrant(project.accountId, target.value.id, database.id, { access: access.value });
+    return granted.ok
+        ? console.log(`${target.value.email} may use ${where} at ${granted.value.access}: oup pg proxy ${database.name} --access ${granted.value.access} or lower.${note}`)
+        : fail(granted.error.message);
 }
 
 async function usage(args: string[]): Promise<void> {

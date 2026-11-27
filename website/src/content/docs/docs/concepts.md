@@ -7,14 +7,20 @@ description: How Accounts, Members, Projects and Resources belong together, wher
 
 An **Account** is the customer: the party that pays and gets one invoice.
 Its **Members** are the people who sign in and act on its Projects. Each
-has a role:
+has a role, or none:
 
 - an **owner** may do everything, including who else is a Member and
   with which role. An Account always keeps at least one owner.
 - a **developer** may do everything in every Project, but not change the
   Account's Members.
+- a Member **without a role** uses only what their **grants** give: a
+  grant lets them use one Database at `read`, `write` or `owner` level.
+  They see that Database and its Project's name and connect with
+  `oup pg proxy` at that level or below, and nothing else of the Project.
+  Good for an analyst or a BI tool that reads one Database.
 
-`oup member` lists the Members, changes their roles and removes them;
+`oup member` lists the Members, changes their roles and grants and
+removes them;
 anyone may leave an Account. A removed Member loses their Postgres roles
 in the Account's Databases within about a minute. If they had a
 connection open at `owner` level, every `oup pg proxy` connection to that

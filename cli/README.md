@@ -41,12 +41,21 @@ oup site deploy dist --bucket my-site
   `--project <name|id>`, or `OUP_PROJECT` in CI, names another Project for
   one command.
 - `oup member list [--account <name|id>]`: the Members of your Account
-  with their roles (decision 138): an `owner` may do everything, the
+  with their roles (decision 138) and grants: an `owner` may do everything, the
   Account's Members included; a `developer` every Project and everything
   in it. With several Accounts, `--account` says which, as for every
   `oup member` command.
-- `oup member role <email> owner|developer`: gives a Member another role.
-  Owners only; an Account always keeps an owner.
+- `oup member role <email> owner|developer|none`: gives a Member another
+  role, or none, which leaves them only their grants; their Postgres roles
+  beyond those are dropped. Owners only; an Account always keeps an owner.
+- `oup member grant <email> read|write|owner --database <name> [--project <name|id>]`:
+  lets a Member use one Database of the linked Project at that level or
+  below (decision 139): they see it and its Project's name and open
+  `oup pg proxy`, nothing else of the Project. Run again with another
+  level to change it; a lower one drops their Postgres roles above it.
+  Owners only. A grant counts only while the Member has no role.
+- `oup member revoke <email> --database <name> [--project <name|id>]`:
+  takes the grant away, and with it their Postgres roles there.
 - `oup member remove <email>`: removes a Member, owners only. Their
   Postgres roles from `oup pg proxy`, and those of their API keys, are
   dropped from the Account's Databases (decision 143). Where they had

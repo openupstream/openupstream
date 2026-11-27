@@ -34,6 +34,8 @@ import type {
     JobRunInput,
     LogEntry,
     LogQuery,
+    Grant,
+    GrantInput,
     Member,
     MemberPatch,
     Project,
@@ -110,7 +112,7 @@ export class OpenUpstreamClient {
         return this.#call('POST', '/v1/accounts', input);
     }
 
-    /** The Account's Members with their roles; for owners and developers. */
+    /** The Account's Members with their roles and grants; owners and developers see all, a Member without a role themselves. */
     listMembers(accountId: Id): Promise<ApiResult<Member[]>> {
         return this.#call('GET', `/v1/accounts/${encodeURIComponent(accountId)}/members`);
     }
@@ -118,6 +120,20 @@ export class OpenUpstreamClient {
     /** Gives a Member another role; owners only, never with an API key. An Account always keeps an owner (409). */
     updateMember(accountId: Id, memberId: Id, patch: MemberPatch): Promise<ApiResult<Member>> {
         return this.#call('PATCH', `/v1/accounts/${encodeURIComponent(accountId)}/members/${encodeURIComponent(memberId)}`, patch);
+    }
+
+    /**
+     * Gives a Member access to one Database at a level, or another level
+     * (decision 139); owners only, never with an API key. A lower level drops
+     * the Member's Postgres roles above it while they have no role.
+     */
+    setGrant(accountId: Id, memberId: Id, databaseId: Id, input: GrantInput): Promise<ApiResult<Grant>> {
+        return this.#call('PUT', grantPath(accountId, memberId, databaseId), input);
+    }
+
+    /** Takes a Member's grant on a Database away, and with it their Postgres roles there while they have no role. */
+    removeGrant(accountId: Id, memberId: Id, databaseId: Id): Promise<ApiResult<void>> {
+        return this.#call('DELETE', grantPath(accountId, memberId, databaseId));
     }
 
     /**
@@ -418,6 +434,9 @@ export function errorMessage(body: unknown, statusText: string): string {
     );
     return details.length === 0 ? body.error : `${body.error} (${details.join('; ')})`;
 }
+
+const grantPath = (accountId: Id, memberId: Id, databaseId: Id): string =>
+    `/v1/accounts/${encodeURIComponent(accountId)}/members/${encodeURIComponent(memberId)}/grants/${encodeURIComponent(databaseId)}`;
 
 const logSearch = (query: LogQuery): string => {
     const params = new URLSearchParams({
