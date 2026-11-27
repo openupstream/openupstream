@@ -30,8 +30,11 @@ context) and put them into the cluster as Kubernetes Secrets.
 
 On macOS: `brew install hcloud kubectl helm awscli jq`.
 
-Then install and build the repository once; the dev-cluster scripts run
-code from it (`operators/scripts`, and libraries from `node_modules`):
+Then install and build the repository; the dev-cluster scripts run code
+from it (`operators/scripts`, and libraries from `node_modules`). Do it
+again after switching branches or pulling: a stale build stops
+`platform.sh` (e.g. an SDK export the operators' scripts import is
+missing).
 
 ```bash
 npm ci && npm run build
