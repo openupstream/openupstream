@@ -41,8 +41,11 @@ cluster_layout() {
 # bucket (decision 149), so clusters sharing the bucket, and a cluster
 # installed again, never find each other's archives. Generated once per
 # install as <date>-<random>; CLUSTER_ID chooses it (e.g. production).
+# Fails when the cluster cannot be read: an empty answer must mean "none
+# recorded", never "could not ask", or a new id would replace the real one.
 recorded_cluster_id() {
-  kubectl -n "$LAYOUT_NAMESPACE" get configmap "$LAYOUT_CONFIGMAP" --ignore-not-found -o jsonpath='{.data.clusterId}'
+  kubectl -n "$LAYOUT_NAMESPACE" get configmap "$LAYOUT_CONFIGMAP" --ignore-not-found -o jsonpath='{.data.clusterId}' ||
+    { echo "cannot read the cluster id from $LAYOUT_NAMESPACE/$LAYOUT_CONFIGMAP" >&2; return 1; }
 }
 new_cluster_id() {
   local id=${CLUSTER_ID:-$(date -u +%Y%m%d)-$(openssl rand -hex 3)}
@@ -65,7 +68,7 @@ record_layout() { # single-node | multi-node
     echo "this cluster was installed as $recorded; it cannot become $1" >&2
     return 1
   fi
-  id=$(recorded_cluster_id)
+  id=$(recorded_cluster_id) || return 1
   if [[ -n $id && -n ${CLUSTER_ID:-} && $id != "$CLUSTER_ID" ]]; then
     echo "this cluster's id is $id; it cannot become $CLUSTER_ID" >&2
     return 1
@@ -82,7 +85,7 @@ load_layout() {
   LAYOUT=$(cluster_layout)
   # A cluster installed before decision 149 gets its id on the first step
   # run again; its Databases then archive into a new, empty folder.
-  CLUSTER_ID=$(recorded_cluster_id)
+  CLUSTER_ID=$(recorded_cluster_id) || return 1
   if [[ -z $CLUSTER_ID ]]; then
     CLUSTER_ID=$(new_cluster_id)
     write_layout "$LAYOUT" "$CLUSTER_ID"

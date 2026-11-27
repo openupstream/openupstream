@@ -8,6 +8,7 @@ import {
     BARMAN_CLOUD_PLUGIN,
     type DatabaseConfig,
     type DatabaseManifests,
+    databaseConfigProblem,
     databaseManifests,
     restoredDatabaseManifests,
 } from './manifests.js';
@@ -393,5 +394,13 @@ test('target times must exist on the calendar', () => {
     }
     for (const targetTime of ['2028-02-29T10:00:00Z', '2026-10-17T10:30:00.123+02:00', '2026-12-31T23:59:59-05:30']) {
         assert.ok(restoredDatabaseManifests(project, restoredDatabase, config, { ...source, targetTime }).ok, targetTime);
+    }
+});
+
+test('a DatabaseConfig without a valid backup prefix is refused, so clusters never share backup folders', () => {
+    assert.equal(databaseConfigProblem(config), undefined);
+    for (const prefix of [undefined, '', 'a/b', 'Upper']) {
+        const backup = { ...config.backup, prefix } as unknown as DatabaseConfig['backup'];
+        assert.match(databaseConfigProblem({ ...config, backup }) ?? '', /backup.prefix must be the cluster id/, String(prefix));
     }
 });

@@ -22,7 +22,9 @@ before the target time, in about a minute.
   is not deleted: nothing can be created in a deleted Project. Its archive
   is `s3://<bucket>/<cluster id>/project-<project id>/db-<source id>/`; the
   cluster id is `clusterId` in the ConfigMap
-  `openupstream-system/cluster-layout` (decision 149).
+  `openupstream-system/cluster-layout` (decision 149). Backups from before
+  the cluster had an id lie at the same path without it; restoring to such a
+  time needs an ObjectStore with that older `destinationPath`.
 - A base backup older than the target time: check
   `kubectl -n project-<project id> get backups`.
 - A new Database id (lowercase UUID) and name for the restored Database. Its

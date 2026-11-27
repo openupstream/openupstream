@@ -23,7 +23,7 @@ writeFileSync(
 [[ \${KUBECTL_FAIL:-} == 1 ]] && { echo "connection refused" >&2; exit 1; }
 args="$*"
 case $args in
-  *"get configmap cluster-layout"*clusterId*) printf '%s' "\${CLUSTER_ID_STUB:-}" ;;
+  *"get configmap cluster-layout"*clusterId*) [[ \${CLUSTER_ID_FAIL:-} == 1 ]] && exit 1; printf '%s' "\${CLUSTER_ID_STUB:-}" ;;
   *"get configmap cluster-layout"*) printf '%s' "\${LAYOUT_STUB:-}" ;;
   *"create configmap"*) echo "configmap $args" >>"$STUB_LOG"; echo '{}' ;;
   *"create namespace"*) echo '{}' ;;
@@ -178,6 +178,15 @@ test('the cluster id is generated once, kept, and never changed', () => {
     const invalid = run('set -euo pipefail; source ./lib.sh; record_layout multi-node', { CLUSTER_ID: 'Prod/1' });
     assert.notEqual(invalid.status, 0);
     assert.equal(invalid.log, '');
+});
+
+test('a cluster id that cannot be read is never replaced by a new one', () => {
+    for (const command of ['load_layout', 'record_layout multi-node']) {
+        const { status, stderr, log } = run(`set -euo pipefail; source ./lib.sh; ${command}`, { LAYOUT_STUB: 'multi-node', CLUSTER_ID_FAIL: '1' });
+        assert.notEqual(status, 0, command);
+        assert.match(stderr, /cannot read the cluster id/);
+        assert.equal(log, '', `${command} writes nothing`);
+    }
 });
 
 test('a cluster installed without an id gets one on the next step, its layout kept', () => {

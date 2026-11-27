@@ -17,6 +17,18 @@ export const BACKUP_ENDPOINT = 'https://nbg1.your-objectstorage.com';
  */
 export const CLUSTER_PREFIX = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
+/**
+ * The folders to delete for `prefix` (e.g. `project-<id>/db-<id>/`): the
+ * one in the cluster's folder, and the same path without it, where a
+ * Database deleted before decision 149 still keeps its archive. Database
+ * ids are UUIDs, so that path is never another cluster's. The second can go
+ * once no cluster installed before decision 149 holds deleted Databases.
+ */
+export function foldersToDelete(clusterPrefix: string, prefix: string): Result<readonly string[], string> {
+    const key = clusterKey(clusterPrefix, prefix);
+    return key.ok ? ok([key.value, prefix]) : key;
+}
+
 /** The object key prefix of `prefix` (e.g. `project-<id>/db-<id>/`) in the cluster's folder. */
 export function clusterKey(clusterPrefix: string, prefix: string): Result<string, string> {
     // A prefix without the trailing slash would also match db-<id>-something.
@@ -56,8 +68,19 @@ export function s3BackupStore(config: S3Config): BackupStore {
     });
     return {
         deletePrefix: async (prefix) => {
-            const key = clusterKey(config.prefix, prefix);
-            return key.ok ? deleteAllObjects(client, config.bucket, key.value) : key;
+            const folders = foldersToDelete(config.prefix, prefix);
+            if (!folders.ok) {
+                return folders;
+            }
+            let deleted = 0;
+            for (const folder of folders.value) {
+                const result = await deleteAllObjects(client, config.bucket, folder);
+                if (!result.ok) {
+                    return result;
+                }
+                deleted += result.value;
+            }
+            return ok(deleted);
         },
     };
 }

@@ -22,7 +22,7 @@ import { readFile } from 'node:fs/promises';
 import { KubeConfig } from '@kubernetes/client-node';
 import { controlPlaneJobs, controlPlaneRoutings, controlPlaneRows, controlPlaneServices } from './control-plane.js';
 import { type PassLog, databasesPass, runPasses, wakeup } from './databases/loop.js';
-import { CLUSTER_PREFIX, type DatabaseConfig } from './databases/manifests.js';
+import { databaseConfigProblem, type DatabaseConfig } from './databases/manifests.js';
 import { jobsPass } from './jobs/loop.js';
 import { kubeFrom } from './kube.js';
 import { nodesFor } from './nodes.js';
@@ -70,9 +70,9 @@ const databases = async (): Promise<() => Promise<PassLog>> => {
         process.exit(1);
     }
     const config: DatabaseConfig = JSON.parse(await readFile(required('DATABASE_CONFIG_PATH'), 'utf8'));
-    // Without it every cluster would archive into the same folders (decision 149).
-    if (!CLUSTER_PREFIX.test(config.backup?.prefix ?? '')) {
-        log({ msg: 'database-config.json: backup.prefix must be the cluster id (lowercase letters, digits, dashes)' });
+    const problem = databaseConfigProblem(config);
+    if (problem !== undefined) {
+        log({ msg: `database-config.json: ${problem}` });
         process.exit(1);
     }
     const fetchRows = controlPlaneRows(controlPlaneUrl, token);

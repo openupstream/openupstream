@@ -138,6 +138,16 @@ const presentRole = (role: DatabaseRoleRow) => ({
 /** A cluster's backup folder: what `backup.prefix` must look like (decision 149). */
 export const CLUSTER_PREFIX = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
+/**
+ * What is wrong with a DatabaseConfig read from JSON, or undefined. Without a
+ * prefix every cluster would archive into the same folders again.
+ */
+export function databaseConfigProblem(config: Partial<DatabaseConfig>): string | undefined {
+    return CLUSTER_PREFIX.test(config.backup?.prefix ?? '')
+        ? undefined
+        : 'backup.prefix must be the cluster id (lowercase letters, digits, dashes)';
+}
+
 /** Platform settings that are the same for every Database. */
 export interface DatabaseConfig {
     /** Our Postgres image (`images/postgres`), pinned by digest. */
