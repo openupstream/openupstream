@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Site } from '@openupstream/sdk';
 import { bytesOf } from '../kube.js';
-import { GiB, roomForGrowth, roomForNew } from './capacity.js';
+import { GiB, MiB, databaseMemoryRoom, roomForGrowth, roomForNew } from './capacity.js';
 
 const siteOf = new Map<string, Site>([
     ['fsn-a', 'hetzner-fsn1'],
@@ -37,4 +37,11 @@ test('quantities as TopoLVM and the kubelet write them', () => {
     assert.equal(bytesOf('30Gi'), 30 * GiB);
     assert.equal(bytesOf('1000'), 1000);
     assert.equal(bytesOf('1.5Gi'), undefined);
+});
+
+test("the CPU left on a node caps the memory a Database can take there: 250m per GiB", () => {
+    assert.equal(databaseMemoryRoom({ memoryBytes: 2 * GiB, cpuMillicores: 4000 }), 2 * GiB, 'memory binds');
+    assert.equal(databaseMemoryRoom({ memoryBytes: 8 * GiB, cpuMillicores: 500 }), 2 * GiB, 'CPU binds');
+    assert.equal(databaseMemoryRoom({ memoryBytes: 8 * GiB, cpuMillicores: 125 }), 512 * MiB, 'an eighth of a core');
+    assert.equal(databaseMemoryRoom({ memoryBytes: 8 * GiB, cpuMillicores: -100 }), 0, 'an overcommitted node');
 });

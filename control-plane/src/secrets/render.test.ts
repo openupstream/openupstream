@@ -44,7 +44,7 @@ const fakeKube = (failing: readonly string[] = [], missing: readonly string[] = 
         readRecoveryWindow: async () => ok(undefined),
         storageCapacity: async () => ok(undefined),
         volumeNodes: async () => ok([]),
-        memoryFree: async () => ok(undefined),
+        nodeFree: async () => ok(undefined),
         growVolumes: async () => ok([]),
         readDeployment: async () => ok(undefined),
         readCronJob: async () => ok(undefined),

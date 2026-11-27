@@ -15,7 +15,7 @@ oup pg create main --memory 512 --storage 10
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
-| `--memory <MB>` | 256 | Memory of each instance. 256 MB is the smallest. |
+| `--memory <MB>` | 256 | Memory of each instance. It also sets the CPU each instance is guaranteed: a quarter core per GB. 256 MB is the smallest. |
 | `--storage <GB>` | 1 | Size of each instance's volume. |
 | `--site hetzner-fsn1\|ovh-lim` | `hetzner-fsn1` | The Home site. The standby runs in the other one. |
 | `--max-storage <GB>` | none | How far storage may grow by itself. |
@@ -95,7 +95,8 @@ oup pg resize main --storage 20
 
 - **Storage** only grows. It grows online, without a restart.
 - **Memory** restarts the standby, then the primary. Writes pause for
-  seconds; plan for about two minutes in all.
+  seconds; plan for about two minutes in all. The guaranteed CPU changes
+  with it, a quarter core per GB.
 - The Database reads `resizing` until both instances have the new size.
 
 ## Storage that grows by itself
