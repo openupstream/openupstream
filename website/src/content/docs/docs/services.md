@@ -38,7 +38,16 @@ deploys Services too, from public images.
   To run what the tag points at now, deploy again.
 - An image the registry does not have, or will not serve with your
   credentials, is refused at once and nothing changes.
-- A rollout starts the new container before it stops the old one.
+- A rollout starts the new container before it stops the old one. A new
+  container gets requests once its port accepts connections, so open the
+  port only when your app is ready to serve.
+- An old container gets requests for 5 more seconds, then `SIGTERM`. Stop
+  accepting new requests and finish the open ones: it is stopped for good
+  120 seconds after the rollout began replacing it. A worker gets the same
+  120 seconds to finish its work. A request whose body takes more than 60
+  seconds to arrive is cut, rollout or not.
+- During a rollout the old and the new version both serve, so a change to
+  your Database must work with both.
 - A Service is `deploying` until its containers run what you last asked
   for, then `running`, or `degraded` when some of them do not.
 
