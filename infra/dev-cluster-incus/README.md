@@ -86,14 +86,17 @@ INCUS_REMOTE=um790 ./snapshot.sh restore before-upgrade
 
 Both stop all three VMs at once and start them afterwards, so the etcd
 members and each Database's two instances are saved at the same moment.
-`create` first hibernates every Database (CloudNativePG's
-`cnpg.io/hibernation=on`: Postgres stops cleanly, volumes and primary
-stay), and both wake them once the API and CloudNativePG's webhook answer
-again. Without that, a primary on a VM that stops first or boots last
+First they hibernate every Database that isn't hibernated already
+(CloudNativePG's `cnpg.io/hibernation=on`: Postgres stops cleanly, volumes
+and primary stay; marked with the label
+`openupstream.io/snapshot-hibernated`), and afterwards they wake the marked
+ones once the API and CloudNativePG's webhook answer again; a Database
+hibernated on purpose stays so. If anything fails or a wait gives up, the
+script still starts the VMs and wakes the Databases. Without that, a primary on a VM that stops first or boots last
 fails over, and a platform Database's old primary cannot rejoin (its
 archive check fails, see `../dev-cluster/README.md`); seen on the first
 snapshots. They need `kubectl` and `.state/kubeconfig`. Measured on the
-UM790 Pro: `create` 2.5 minutes, `restore` just under 3, then about a
+UM790 Pro: `create` and `restore` about 3 minutes each, then about a
 minute until both instances of each Database are ready; a pod that lost
 its Database meanwhile (madAuth) can sit in CrashLoopBackOff for a few
 minutes more until its next try. The compute VMs' volumes are saved with
