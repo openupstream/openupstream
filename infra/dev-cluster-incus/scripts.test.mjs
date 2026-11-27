@@ -30,6 +30,22 @@ exit 0
 `,
 );
 chmodSync(join(stubs, 'incus'), 0o755);
+// kubectl: every call goes to $STUB_LOG; there is one Database, no Postgres
+// pod is left, and the API is ready.
+writeFileSync(
+    join(stubs, 'kubectl'),
+    `#!/usr/bin/env bash
+echo "kubectl $*" >>"$STUB_LOG"
+case "$*" in
+  "get clusters.postgresql.cnpg.io -A -o name") echo cluster.postgresql.cnpg.io/db-1 ;;
+esac
+exit 0
+`,
+);
+chmodSync(join(stubs, 'kubectl'), 0o755);
+const kubeconfig = join(stubs, 'kubeconfig');
+writeFileSync(kubeconfig, '');
+const noKubeconfig = join(stubs, 'missing-kubeconfig');
 
 const run = (command, env = {}) => {
     const log = join(mkdtempSync(join(tmpdir(), 'dev-cluster-incus-log-')), 'log');
@@ -37,7 +53,7 @@ const run = (command, env = {}) => {
     const result = spawnSync('bash', ['-c', command], {
         cwd: here,
         encoding: 'utf8',
-        env: { PATH: `${stubs}:${process.env.PATH}`, HOME: process.env.HOME, STUB_LOG: log, ...env },
+        env: { PATH: `${stubs}:${process.env.PATH}`, HOME: process.env.HOME, STUB_LOG: log, KUBECONFIG: noKubeconfig, ...env },
     });
     return { status: result.status, stdout: result.stdout, stderr: result.stderr, log: readFileSync(log, 'utf8') };
 };
@@ -67,15 +83,23 @@ test('vm_ipv4 picks the global IPv4 address of the home network interface, not k
     assert.equal(pick({ network: null }), '', 'nothing before the agent reports');
 });
 
-const calls = (log) => log.trim().split('\n').map((line) => line.replace(/^incus /, ''));
+const calls = (log) =>
+    log
+        .trim()
+        .split('\n')
+        .filter((line) => line.startsWith('incus '))
+        .map((line) => line.replace(/^incus /, ''));
 
 test('snapshot.sh create stops all three VMs, snapshots them and the volumes, then starts them', () => {
     const { status, stderr, log } = run('./snapshot.sh create before-upgrade');
     assert.equal(status, 0, stderr);
-    assert.deepEqual(calls(log), [
+    // The stops run in parallel, so in any order, but all before the snapshots.
+    assert.deepEqual(calls(log).slice(0, 3).sort(), [
         'stop oup-home-hetzner-fsn1',
-        'stop oup-home-ovh-lim',
         'stop oup-home-netcup-nbg',
+        'stop oup-home-ovh-lim',
+    ]);
+    assert.deepEqual(calls(log).slice(3), [
         'snapshot create oup-home-hetzner-fsn1 before-upgrade',
         'snapshot create oup-home-ovh-lim before-upgrade',
         'snapshot create oup-home-netcup-nbg before-upgrade',
@@ -85,6 +109,31 @@ test('snapshot.sh create stops all three VMs, snapshots them and the volumes, th
         'start oup-home-ovh-lim',
         'start oup-home-netcup-nbg',
     ]);
+});
+
+test('snapshot.sh create hibernates the Databases before stopping and wakes them after starting', () => {
+    const { status, stderr, log } = run('./snapshot.sh create x', { KUBECONFIG: kubeconfig });
+    assert.equal(status, 0, stderr);
+    const lines = log.trim().split('\n');
+    const at = (text) => lines.findIndex((line) => line.includes(text));
+    assert.ok(at('cnpg.io/hibernation=on') >= 0, log);
+    assert.ok(at('cnpg.io/hibernation=on') < at('incus stop'), 'hibernated before the first stop');
+    assert.ok(at('podRole=instance') < at('incus stop'), 'waited for Postgres to stop');
+    assert.ok(at('incus start oup-home-netcup-nbg') < at('get --raw /readyz'), 'waits for the API after starting');
+    assert.ok(at('get --raw /readyz') < at('cnpg.io/hibernation=off'), 'wakes after the API is back');
+});
+
+test('snapshot.sh restore wakes the Databases the snapshot holds hibernated', () => {
+    const { status, stderr, log } = run('./snapshot.sh restore x', { KUBECONFIG: kubeconfig });
+    assert.equal(status, 0, stderr);
+    assert.doesNotMatch(log, /hibernation=on/);
+    assert.match(log.trim().split('\n').at(-1), /cnpg.io\/hibernation=off/);
+});
+
+test('snapshot.sh wakes the Databases again when a snapshot fails', () => {
+    const { status, log } = run('./snapshot.sh create x', { KUBECONFIG: kubeconfig, FAIL_STUB: 'volume snapshot create' });
+    assert.notEqual(status, 0);
+    assert.match(log.trim().split('\n').at(-1), /cnpg.io\/hibernation=off/);
 });
 
 test('snapshot.sh restore stops nothing when a VM or volume lacks the snapshot', () => {
