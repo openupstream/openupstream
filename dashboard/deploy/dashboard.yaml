@@ -1,7 +1,7 @@
 # The dashboard, as a Service of the platform Project (PLATFORM in
 # sdk/src/internal.ts): nginx with the static files of dashboard/Dockerfile
-# (ARCHITECTURE.md, decision 123). Two replicas, one per compute Site. It
-# talks to nothing: the browser calls madAuth and the API itself, on the
+# (ARCHITECTURE.md, decision 123). Two replicas in two different compute
+# Sites (min(2, compute Sites), ADR-0007). It talks to nothing: the browser calls madAuth and the API itself, on the
 # same host (infra/ingress/platform-routes.yaml routes all three).
 #
 # The image is pinned by digest when applied (infra/dev-cluster/platform.sh).
@@ -32,7 +32,7 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
-                  - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+                  - {key: openupstream.io/compute-site, operator: In, values: ["true"]}
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone

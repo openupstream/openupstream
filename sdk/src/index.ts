@@ -8,7 +8,7 @@
  * The API surface is defined here first and implemented in control-plane/.
  */
 
-export const SDK_VERSION = '0.5.0';
+export const SDK_VERSION = '0.6.0';
 
 export * from './model.js';
 export * from './internal.js';
@@ -53,6 +53,7 @@ import type {
     ServiceDetails,
     ServiceInput,
     ServicePatch,
+    SiteInfo,
 } from './model.js';
 
 /** The API is under `/api` of the platform's host (ARCHITECTURE.md, decision 120). */
@@ -183,6 +184,11 @@ export class OpenUpstreamClient {
     /** Takes an Account token's grant on a Database away, and with it its Postgres roles there while it has no role. */
     removeAccountTokenGrant(accountId: Id, tokenId: Id, databaseId: Id): Promise<ApiResult<void>> {
         return this.#call('DELETE', `${accountTokenPath(accountId, tokenId)}/grants/${encodeURIComponent(databaseId)}`);
+    }
+
+    /** The compute Sites, where Databases, Services and Jobs can run; one is the default. */
+    listSites(): Promise<ApiResult<SiteInfo[]>> {
+        return this.#call('GET', '/v1/sites');
     }
 
     listProjects(): Promise<ApiResult<Project[]>> {

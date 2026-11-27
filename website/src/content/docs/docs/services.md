@@ -25,7 +25,7 @@ leave out keep what the Service has.
 | `--replicas <n>` | 1 | How many containers run. |
 | `--memory <MB>` | 256 | Memory of each replica. |
 | `--cpu <millicores>` | 250 | CPU of each replica. |
-| `--site hetzner-fsn1\|ovh-lim` | | Where a single replica runs. |
+| `--site <site>` | | Where a single replica runs, one of `oup sites`. |
 | `--no-wait` | | Return before the Service is running. |
 
 A new Service needs `--port` or `--no-port`. The dashboard's Project page

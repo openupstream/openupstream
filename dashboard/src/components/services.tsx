@@ -1,9 +1,10 @@
 'use client';
 
-import { COMPUTE_SITES, type ResourceUsage, type ServiceDetails, type ServiceInput, type ServicePatch } from '@openupstream/sdk';
+import { type ResourceUsage, type ServiceDetails, type ServiceInput, type ServicePatch } from '@openupstream/sdk';
 import { type FormEvent, type ReactNode, useState } from 'react';
 import { NEW_SERVICE, type ServiceFields, type ServiceWanted, fieldsOf, serviceInput, serviceNameProblem, servicePatch, serviceWanted, shortDigest } from '../lib/services';
 import { Logs } from './logs';
+import { SiteName, SiteOptions } from './sites';
 import { Usage } from './usage';
 
 /** A Service: what runs, its state and usage, and the ways to change it. */
@@ -55,7 +56,11 @@ export function ServiceCard(props: {
                 <br />
                 {service.replicas} {service.replicas === 1 ? 'replica' : 'replicas'}, {service.memoryMb} MB memory and {service.cpuMillicores} millicores each,{' '}
                 {service.port === null ? 'a worker without a port' : `port ${service.port}`}
-                {service.homeSite !== null && `, in ${service.homeSite}`}
+                {service.homeSite !== null && (
+                    <>
+                        , in <SiteName id={service.homeSite} />
+                    </>
+                )}
                 {service.registryAuth && ', pulled with registry credentials'}
             </small>
             {problem !== undefined && <p role="alert">{problem}</p>}
@@ -178,9 +183,7 @@ function FieldsForm(props: {
                 Site of a single replica
                 <select value={fields.homeSite} onChange={set('homeSite')}>
                     <option value="">Where the Project&apos;s data is</option>
-                    {COMPUTE_SITES.map((site) => (
-                        <option key={site}>{site}</option>
-                    ))}
+                    <SiteOptions current={fields.homeSite} />
                 </select>
             </label>
             <button type="submit" disabled={busy}>

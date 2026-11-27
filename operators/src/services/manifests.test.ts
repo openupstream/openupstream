@@ -133,7 +133,7 @@ test('a single replica prefers its Site; more are spread over both compute Sites
     ]);
     for (const pod of [single, spread]) {
         assert.deepEqual(pod.spec.affinity.nodeAffinity['requiredDuringSchedulingIgnoredDuringExecution'], {
-            nodeSelectorTerms: [{ matchExpressions: [{ key: 'topology.kubernetes.io/zone', operator: 'In', values: ['hetzner-fsn1', 'ovh-lim'] }] }],
+            nodeSelectorTerms: [{ matchExpressions: [{ key: 'openupstream.io/compute-site', operator: 'In', values: ['true'] }] }],
         });
     }
 });

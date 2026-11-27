@@ -24,6 +24,7 @@ import {
     UUID,
 } from '@openupstream/sdk';
 import type { Authenticate } from './auth.js';
+import type { Result } from '../result.js';
 
 export interface InternalApi {
     readonly authenticate: Authenticate;
@@ -41,8 +42,9 @@ export interface InternalApi {
     readonly madauthCallers: ReadonlySet<string>;
     readonly listDatabaseRows: () => Promise<readonly DatabaseRow[]>;
     readonly listDomainRoutings: () => Promise<readonly DomainRouting[]>;
-    readonly listServiceRows: () => Promise<readonly ServiceRow[]>;
-    readonly listJobRows: () => Promise<readonly JobRow[]>;
+    /** An error when the default Site, where a Service or Job without a Home site goes, cannot be read. */
+    readonly listServiceRows: () => Promise<Result<readonly ServiceRow[], string>>;
+    readonly listJobRows: () => Promise<Result<readonly JobRow[], string>>;
     readonly getAccount: (id: string) => Promise<AccountRecord | undefined>;
     /** The Account's usage of a month (`YYYY-MM`); undefined for a malformed month. */
     readonly accountUsage: (accountId: string, month: string) => Promise<AccountUsage | undefined>;
@@ -56,6 +58,15 @@ export interface InternalApi {
     readonly revokeApiKey: (subject: string, apiKeyId: string) => Promise<void>;
     readonly log?: (entry: Record<string, unknown>) => void;
 }
+
+/** 503 when the rows cannot be made now; the operator tries again on its next pass. */
+const rowsReply = (rows: Result<readonly unknown[], string>, log: InternalApi['log']): Reply => {
+    if (!rows.ok) {
+        log?.({ msg: 'cannot list the rows', error: rows.error });
+        return { status: 503, body: { error: rows.error } };
+    }
+    return { status: 200, body: rows.value };
+};
 
 interface Reply {
     readonly status: number;
@@ -109,14 +120,14 @@ function routeFor(api: InternalApi, path: string, query: URLSearchParams): Route
         return {
             methods: ['GET'],
             callers: api.servicesCallers,
-            handle: async () => ({ status: 200, body: await api.listServiceRows() }),
+            handle: async () => rowsReply(await api.listServiceRows(), api.log),
         };
     }
     if (path === INTERNAL_JOBS_PATH) {
         return {
             methods: ['GET'],
             callers: api.jobsCallers,
-            handle: async () => ({ status: 200, body: await api.listJobRows() }),
+            handle: async () => rowsReply(await api.listJobRows(), api.log),
         };
     }
     const account = accountPath.exec(path);

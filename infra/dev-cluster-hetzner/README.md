@@ -2,11 +2,13 @@
 
 A throwaway k3s cluster with the three Sites' layout, for one working
 session (ARCHITECTURE.md, decisions 33 and 52). Three Hetzner Cloud VMs
-stand in for the Sites; the nodes carry the real Site names:
+stand in for the Sites; by default the nodes carry production's Site ids
+(`SITES` and `LOCATIONS`, space-separated, choose others; the first two are
+the compute Sites):
 
 | Node | Location | Stands in for |
 | --- | --- | --- |
-| `oup-dev-hetzner-fsn1` | fsn1 | `hetzner-fsn1`, compute Site |
+| `oup-dev-hetzner-fsn1` | fsn1 | `hetzner-fsn1`, compute Site, the default Site |
 | `oup-dev-ovh-lim` | hel1 | `ovh-lim`, compute Site (Hetzner Cloud has no Limburg) |
 | `oup-dev-netcup-nbg` | nbg1 | `netcup-nbg`, third Site, tainted `openupstream.io/third-site` |
 
@@ -16,8 +18,8 @@ group `openupstream`, where TopoLVM puts the Databases' volumes, as on the
 servers' NVMe (decision 109); both cost about €0.005 an hour. `down.sh`
 deletes them with the VMs. These scripts create and delete the VMs only; the platform is installed
 onto them by [`infra/dev-cluster`](../dev-cluster/README.md) in its
-`multi-node` layout, which also runs on any other cluster with one node per
-Site. For one machine instead, see its single-node layout.
+`multi-node` layout, which also runs on any other cluster with nodes in
+three or more Sites. For one machine instead, see its single-node layout.
 
 ## Use
 
@@ -43,8 +45,14 @@ gVisor on the two compute nodes (`infra/gvisor`), their volumes with the
 volume group (`infra/topolvm/vgcreate.sh`), and k3s with embedded
 etcd and flannel `wireguard-native`, each node's public address as its
 ExternalIP (which `dns.sh` puts into DNS), then the RuntimeClass `gvisor`.
+The compute nodes join with the label `openupstream.io/compute-site=true`,
+the first also `openupstream.io/default-site=true`, the third with the
+taint `openupstream.io/third-site`, and each node without a description
+gets `Hetzner Cloud <location>`
+([ADR-0007](../../docs/adr/0007-sites-from-node-labels.md)), so the install
+needs no `COMPUTE_SITES`.
 
-The kubeconfig points at the `hetzner-fsn1` node. Before switching that Site
+The kubeconfig points at the first node (`hetzner-fsn1`). Before switching that Site
 off, point it at another node's IP (all three serve the API).
 
 When done:

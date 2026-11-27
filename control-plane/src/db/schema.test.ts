@@ -2,7 +2,7 @@ import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
-import { COMPUTE_SITES, DATABASE_MIN_MEMORY_MB, RESOURCE_KINDS, USAGE_UNITS } from '@openupstream/sdk';
+import { DATABASE_MIN_MEMORY_MB, RESOURCE_KINDS, USAGE_UNITS } from '@openupstream/sdk';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
 import { readdir } from 'node:fs/promises';
 import { MIGRATIONS_DIR, migrate } from './migrate.js';
@@ -11,6 +11,7 @@ import { putSecret } from '../secrets/store.js';
 const UNIQUE_VIOLATION = '23505';
 const FOREIGN_KEY_VIOLATION = '23503';
 const CHECK_VIOLATION = '23514';
+const NOT_NULL_VIOLATION = '23502';
 const RESTRICT_VIOLATION = '23001';
 
 let db: TestDatabase;
@@ -232,18 +233,24 @@ describe('Resources', () => {
         await rejectsWith(db.pool.query("insert into buckets (project_id, name, garage_bucket_id, access_key_id) values ($1, $2, 'b', 'GK')", [b, name]), UNIQUE_VIOLATION);
     });
 
-    test('a Database has at least the memory floor and runs in a compute Site', async () => {
+    test('a Database has at least the memory floor and a Home site that is a label value, given explicitly', async () => {
         const { projectId } = await newProject();
         const create = (homeSite: string, memoryMb: number) =>
             db.pool.query(
                 'insert into databases (project_id, name, home_site, memory_mb, storage_gb) values ($1, $2, $3, $4, 10)',
                 [projectId, unique('db'), homeSite, memoryMb],
             );
-        for (const site of COMPUTE_SITES) {
+        // Which Sites exist is the nodes' (ADR-0007); the API checks that, the schema only the form.
+        for (const site of ['hetzner-fsn1', 'home-a', 'eu-central-1a', 'Home_VM.2']) {
             await create(site, DATABASE_MIN_MEMORY_MB);
         }
         await rejectsWith(create('hetzner-fsn1', DATABASE_MIN_MEMORY_MB - 1), CHECK_VIOLATION);
-        await rejectsWith(create('netcup-nbg', DATABASE_MIN_MEMORY_MB), CHECK_VIOLATION);
+        await rejectsWith(create('-bad', DATABASE_MIN_MEMORY_MB), CHECK_VIOLATION);
+        await rejectsWith(create('a b', DATABASE_MIN_MEMORY_MB), CHECK_VIOLATION);
+        await rejectsWith(
+            db.pool.query('insert into databases (project_id, name, memory_mb, storage_gb) values ($1, $2, $3, 10)', [projectId, unique('db'), DATABASE_MIN_MEMORY_MB]),
+            NOT_NULL_VIOLATION,
+        );
     });
 });
 
@@ -255,7 +262,7 @@ describe('Projects', () => {
         const bucketId = await createBucket(projectId);
         const serviceId = await createService(projectId);
         await db.pool.query(
-            `insert into databases (project_id, name, memory_mb, storage_gb) values ($1, 'main', 256, 10)`,
+            `insert into databases (project_id, name, home_site, memory_mb, storage_gb) values ($1, 'main', 'hetzner-fsn1', 256, 10)`,
             [projectId],
         );
         await db.pool.query(

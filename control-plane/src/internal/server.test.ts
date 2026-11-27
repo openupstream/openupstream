@@ -35,7 +35,7 @@ const routings: DomainRouting[] = [
         routes: [{ id: '0b7c3f1e-2d4a-4c8b-9e6f-222222222222', pathPrefix: '/', kind: 'bucket', bucketId: '77777777-7777-4777-8777-777777777777', bucketName: 'shop-site', spaFallback: true }],
     },
 ];
-const rows: DatabaseRow[] = [{ project: PLATFORM.project, database: PLATFORM.database }];
+const rows: DatabaseRow[] = [{ project: PLATFORM.project, database: { ...PLATFORM.database, homeSite: 'hetzner-fsn1' } }];
 const servicesOperator = 'system:serviceaccount:openupstream-system:services-operator';
 const serviceRows: ServiceRow[] = [
     {
@@ -93,6 +93,7 @@ const authenticate: Authenticate = async (token) =>
           : err({ kind: 'unauthenticated', reason: 'invalid' });
 
 let listFails = false;
+let rowsFail = false;
 /** The one Account's Holds, as the fake store keeps them. */
 const holds = new Set<string>();
 let server: Server;
@@ -118,8 +119,8 @@ before(async () => {
         removeUser: async (subject) => void madauthCalls.push(`user ${subject}`),
         revokeApiKey: async (subject, keyId) => void madauthCalls.push(`key ${subject} ${keyId}`),
         listDomainRoutings: async () => routings,
-        listServiceRows: async () => serviceRows,
-        listJobRows: async () => jobRows,
+        listServiceRows: async () => (rowsFail ? err('cannot read the default Site') : ok(serviceRows)),
+        listJobRows: async () => (rowsFail ? err('cannot read the default Site') : ok(jobRows)),
         listDatabaseRows: async () => {
             if (listFails) {
                 throw new Error('database down');
@@ -254,6 +255,16 @@ test('the Jobs operator gets every Job; nobody else does', async () => {
     assert.deepEqual(await response.json(), jobRows);
     assert.equal((await get(servicesOperator, INTERNAL_JOBS_PATH)).status, 403);
     assert.equal((await get(jobsOperator, INTERNAL_SERVICES_PATH)).status, 403);
+});
+
+test('without the default Site the Services and Jobs operators get 503, and try again on their next pass', async () => {
+    rowsFail = true;
+    try {
+        assert.equal((await get(servicesOperator, INTERNAL_SERVICES_PATH)).status, 503);
+        assert.equal((await get(jobsOperator, INTERNAL_JOBS_PATH)).status, 503);
+    } finally {
+        rowsFail = false;
+    }
 });
 
 test("madAuth's sidecar removes deleted users and revokes API keys; nobody else does", async () => {

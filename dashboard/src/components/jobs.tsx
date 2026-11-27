@@ -1,11 +1,12 @@
 'use client';
 
-import { COMPUTE_SITES, type JobDetails, type JobInput, type JobPatch, type JobRun, type ResourceUsage } from '@openupstream/sdk';
+import { type JobDetails, type JobInput, type JobPatch, type JobRun, type ResourceUsage } from '@openupstream/sdk';
 import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react';
 import { NEW_JOB, type JobFields, type JobWanted, jobFieldsOf, jobInput, jobNameProblem, jobPatch, jobWanted, formatSeconds, runDuration, scheduleLabel } from '../lib/jobs';
 import { shortDigest } from '../lib/services';
 import { api, refused } from '../lib/session';
 import { LogView } from './logs';
+import { SiteName, SiteOptions } from './sites';
 import { Usage } from './usage';
 
 /** What a change answers: undefined when it was done, what the API refused otherwise. */
@@ -73,7 +74,11 @@ export function JobCard(props: {
                 <code>{job.image}</code> at <code>{shortDigest(job.imageDigest)}</code>, deployed {new Date(job.deployedAt).toLocaleString()}
                 <br />
                 {scheduleLabel(job)}, {job.memoryMb} MB memory and {job.cpuMillicores} millicores, stopped after {formatSeconds(job.timeoutSeconds)}
-                {job.homeSite !== null && `, in ${job.homeSite}`}
+                {job.homeSite !== null && (
+                    <>
+                        , in <SiteName id={job.homeSite} />
+                    </>
+                )}
                 {job.registryAuth && ', pulled with registry credentials'}
                 {(job.command !== null || job.args !== null) && (
                     <>
@@ -326,9 +331,7 @@ function FieldsForm(props: {
                 Site
                 <select value={fields.homeSite} onChange={set('homeSite')}>
                     <option value="">Where the Project&apos;s data is</option>
-                    {COMPUTE_SITES.map((site) => (
-                        <option key={site}>{site}</option>
-                    ))}
+                    <SiteOptions current={fields.homeSite} />
                 </select>
             </label>
             <button type="submit" disabled={busy}>

@@ -3,7 +3,8 @@
  * in Kubernetes, and the shape of a manifest.
  */
 import {
-    COMPUTE_SITES,
+    COMPUTE_SITE_LABEL,
+    ZONE_LABEL,
     type Id,
     type Project,
     type RowDatabase,
@@ -13,15 +14,13 @@ import {
 } from '@openupstream/sdk';
 import type { NodeBlocks } from './nodes.js';
 
-/** Each Site is one zone; every node carries its Site's name in this label. */
-export const ZONE_LABEL = 'topology.kubernetes.io/zone';
-
-/** The Site that only keeps etcd quorum and a Garage copy. */
-export const THIRD_SITE = 'netcup-nbg';
+/** Each Site is one zone; every node carries its Site's id in this label (ADR-0007). */
+export { COMPUTE_SITE_LABEL, ZONE_LABEL };
 
 /**
- * Carried by the third Site's node, so that only what tolerates it (etcd and
- * Garage) runs there. Customer facing workloads never tolerate it.
+ * Carried by the nodes of every Site that is not a compute Site, so that
+ * only what tolerates it (etcd, Garage, Loki) runs there. Customer facing
+ * workloads never tolerate it.
  */
 export const THIRD_SITE_TAINT = { key: 'openupstream.io/third-site', value: 'true', effect: 'NoSchedule' } as const;
 
@@ -169,9 +168,9 @@ export { DNS_LABEL, UUID } from '@openupstream/sdk';
 // Named by id; the control plane needs the same names, so they live in the sdk.
 export { projectNamespace } from '@openupstream/sdk';
 
-/** Restricts pods to the compute Sites, whatever they tolerate. */
+/** Restricts pods to the compute Sites' nodes (their label, ADR-0007), whatever they tolerate. */
 export const requireComputeSite = () => ({
-    nodeSelectorTerms: [{ matchExpressions: [{ key: ZONE_LABEL, operator: 'In', values: [...COMPUTE_SITES] }] }],
+    nodeSelectorTerms: [{ matchExpressions: [{ key: COMPUTE_SITE_LABEL, operator: 'In', values: ['true'] }] }],
 });
 
 /**

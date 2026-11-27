@@ -208,14 +208,15 @@ export async function deleteService(pool: pg.Pool, projectId: string, id: string
 /**
  * Where a single replica of a Service, or a Job's runs, go, in SQL over the
  * table aliased `t`: its home_site, else the Home site of its Project's
- * oldest live Database, else hetzner-fsn1 (ARCHITECTURE.md, "Containers").
+ * oldest live Database, else the default Site, the query parameter
+ * `defaultSite` (ARCHITECTURE.md, "Containers"; ADR-0007).
  */
-export const siteOf = (t: string): string =>
+export const siteOf = (t: string, defaultSite: string): string =>
     `coalesce(
         ${t}.home_site,
         (select d.home_site from databases d where d.project_id = ${t}.project_id and d.deleted_at is null
          order by d.created_at, d.id limit 1),
-        'hetzner-fsn1'
+        ${defaultSite}::text
     )`;
 
 /**
@@ -245,17 +246,17 @@ interface OperatorRow extends Row {
  * pinned image, where a single replica runs, and the version of the
  * Project's Secrets that is in the cluster (secrets/render.ts).
  */
-export async function listServiceRows(pool: pg.Pool, projectId?: string): Promise<ServiceRow[]> {
+export async function listServiceRows(pool: pg.Pool, defaultSite: Site, projectId?: string): Promise<ServiceRow[]> {
     const { rows } = await pool.query<OperatorRow>(
         `select ${columns('s.')},
                 p.name as project_name, p.account_id, p.created_at as project_created_at,
-                ${siteOf('s')} as site,
+                ${siteOf('s', '$2')} as site,
                 coalesce(p.secrets_version, '') as secrets_version,
                 ${databasesOf('s')} as databases
          from services s join projects p on p.id = s.project_id
          where p.deleted_at is null and ($1::uuid is null or s.project_id = $1)
          order by s.project_id, s.created_at, s.id`,
-        [projectId ?? null],
+        [projectId ?? null, defaultSite],
     );
     return rows.flatMap((row) => {
         // Only an image that parsed was ever written; a row that does not is left out, not deployed wrongly.

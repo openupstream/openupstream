@@ -9,14 +9,16 @@ openupstream, with `snapshot.sh` to go back.
 
 | VM | Stands in for | Default size |
 | --- | --- | --- |
-| `oup-home-hetzner-fsn1` | `hetzner-fsn1`, compute Site | 6 CPUs, 10 GiB, 60 GiB disk + 40 GiB volume |
+| `oup-home-hetzner-fsn1` | `hetzner-fsn1`, compute Site, the default Site | 6 CPUs, 10 GiB, 60 GiB disk + 40 GiB volume |
 | `oup-home-ovh-lim` | `ovh-lim`, compute Site | 6 CPUs, 10 GiB, 60 GiB disk + 40 GiB volume |
 | `oup-home-netcup-nbg` | `netcup-nbg`, third Site, tainted `openupstream.io/third-site` | 2 CPUs, 4 GiB, 60 GiB disk |
 
 The defaults fit a host where Linux sees 28 GB of RAM, a 32 GB mini PC
 whose integrated GPU keeps 4 GB (`COMPUTE_CPUS`,
 `COMPUTE_MEMORY`, `THIRD_CPUS`, `THIRD_MEMORY`, `ROOT_SIZE`, `VOLUME_SIZE`
-change them; `PREFIX` the names). The compute VMs' volumes become the LVM
+change them; `PREFIX` the names). `SITES` chooses other Site ids, two
+compute Sites and then the third (e.g. `SITES="home-a home-b home-c"`);
+give the same to `down.sh` and `snapshot.sh`. The compute VMs' volumes become the LVM
 volume group `openupstream` that TopoLVM allocates the Databases from, as
 the servers' NVMe does (decision 109).
 
@@ -64,11 +66,17 @@ is reachable from the internet: their HTTP-01 challenge must reach port 80.
 (default `default`) with a NIC on `BRIDGE` (default `br0`), the volume
 group on the compute VMs (`infra/topolvm/vgcreate.sh`), our AppArmor
 profile, gVisor on the compute VMs (`infra/gvisor`), and k3s with the
-Hetzner dev cluster's settings, then the RuntimeClass `gvisor`. Run
+Hetzner dev cluster's settings, then the RuntimeClass `gvisor`. The
+compute nodes join with the label `openupstream.io/compute-site=true`,
+the first also `openupstream.io/default-site=true`, the third with the
+taint `openupstream.io/third-site`, and each node without a description
+gets `Incus VM <name>` ([ADR-0007](../../docs/adr/0007-sites-from-node-labels.md);
+`SITE_DESCRIPTIONS` of the install replaces it). A cluster made before
+then needs `COMPUTE_SITES="hetzner-fsn1 ovh-lim"` once for the install. Run
 again, it completes a VM an interrupted run left without its devices,
 starts stopped VMs and installs nothing that is already there. Each wait
 (VM agent, address, disk) gives up after `WAIT_SECONDS` (300).
-The kubeconfig points at `hetzner-fsn1`'s address; before switching that
+The kubeconfig points at the first VM's address; before switching that
 Site off, point it at another VM's.
 
 Give the VMs fixed addresses in the router (DHCP reservations, after the

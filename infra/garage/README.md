@@ -7,9 +7,10 @@ storage" and "Static sites"; decisions 81 to 84).
   applied and established before any node starts.
 - `garage.yaml`: the namespace, the rights to Garage's own GarageNode
   objects, its
-  configuration and a StatefulSet with one node per Site, the third Site
-  included. Replication factor 3, `consistent` mode: every object is stored
-  once in each Site. Its website endpoint (port 3902) serves static sites;
+  configuration and a StatefulSet with three nodes in three different
+  Sites, a non-compute Site included (one per Site up to three, ADR-0007).
+  Replication factor 3, `consistent` mode: every object is stored once in
+  each of those Sites. Its website endpoint (port 3902) serves static sites;
   only the Routes operator's IngressRoutes reach it. Each pod has a second
   container, nginx on port 3905, between Traefik and Garage's S3 API: it
   restores the `Content-Length: 0` that Traefik leaves out of requests

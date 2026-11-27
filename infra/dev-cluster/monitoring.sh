@@ -4,8 +4,8 @@
 # shows, metering and storage growth (ARCHITECTURE.md, "Observability and
 # customer logs"; decisions 106, 107 and 124). Part of every install:
 #
-# 1. kube-prometheus-stack: Prometheus and Alertmanager once per compute
-#    Site, Grafana, node-exporter, kube-state-metrics, with alerts by e-mail
+# 1. kube-prometheus-stack: Prometheus and Alertmanager twice, in two
+#    compute Sites (SITE_REPLICAS), Grafana, node-exporter, kube-state-metrics, with alerts by e-mail
 #    through SES and the Watchdog pinged to healthchecks.io;
 # 2. the platform's scrape targets and alert rules (infra/monitoring);
 # 3. Loki with its chunks in a Garage bucket of its own, and Alloy shipping
@@ -27,7 +27,8 @@ cd "$(dirname "$0")"
 ROOT=$(git rev-parse --show-toplevel)
 source ./lib.sh
 load_layout
-# One Loki and one copy per Site.
+# One Loki and one copy per Site up to three: min(3, Sites), which is 3 in
+# multi-node (label_sites refuses fewer Sites, ADR-0007).
 LOKI_REPLICAS=3
 [[ $LAYOUT == single-node ]] && LOKI_REPLICAS=1
 NS=monitoring
@@ -74,7 +75,7 @@ helm upgrade --install kube-prometheus-stack oci://ghcr.io/prometheus-community/
   --set prometheus.prometheusSpec.replicas="$SITE_REPLICAS" \
   --wait --timeout 10m >/dev/null
 kubectl apply -f "$ROOT/infra/monitoring/scrape.yaml" >/dev/null
-# A Database has as many instances as there are compute Sites.
+# A Database has a primary and a standby: as many instances as SITE_REPLICAS.
 sed "s#DATABASE_INSTANCES#$SITE_REPLICAS#" "$ROOT/infra/monitoring/rules.yaml" | kubectl apply -f - >/dev/null
 
 # Loki's bucket and its own key, created once through the garage CLI. The

@@ -4,7 +4,9 @@ Terms are defined in [GLOSSARY.md](../GLOSSARY.md). Customer data stays in
 the EU; today everything runs in Germany, in three Sites at three providers
 (Falkenstein, Frankfurt region, Nuremberg). Losing any one of them does not
 stop your Databases or Buckets, nor Services with two or more replicas;
-single-replica Services restart in the other Site.
+single-replica Services restart in the other Site. A self-hosted
+installation runs in Sites of its own choosing, two compute Sites or more
+(decision 150); `oup sites` and the dashboard list them.
 
 ## Offered
 

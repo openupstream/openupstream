@@ -10,15 +10,28 @@ const siteOf = new Map<string, Site>([
     ['lim-a', 'ovh-lim'],
 ]);
 
-test('a new Database needs room in each compute Site, on the roomiest node there', () => {
+test('a new Database needs room in its Home site and in one other compute Site, on the roomiest node there', () => {
     const room = new Map([
         ['fsn-a', 5 * GiB],
         ['fsn-b', 20 * GiB],
         ['lim-a', 15.5 * GiB],
     ]);
-    assert.equal(roomForNew(room, siteOf, 15 * GiB).ok, true);
-    assert.deepEqual(roomForNew(room, siteOf, 16 * GiB), { ok: false, error: { largest: 15.5 * GiB } }, 'ovh-lim is the limit');
-    assert.deepEqual(roomForNew(new Map([['fsn-b', 20 * GiB]]), siteOf, 1), { ok: false, error: { largest: 0 } }, 'no node in ovh-lim');
+    assert.equal(roomForNew(room, siteOf, 'hetzner-fsn1', 15 * GiB).ok, true);
+    assert.deepEqual(roomForNew(room, siteOf, 'hetzner-fsn1', 16 * GiB), { ok: false, error: { largest: 15.5 * GiB } }, 'ovh-lim is the limit');
+    assert.deepEqual(roomForNew(room, siteOf, 'ovh-lim', 16 * GiB), { ok: false, error: { largest: 15.5 * GiB } }, 'the Home site is the limit');
+    assert.deepEqual(roomForNew(new Map([['fsn-b', 20 * GiB]]), siteOf, 'hetzner-fsn1', 1), { ok: false, error: { largest: 0 } }, 'no room in ovh-lim');
+});
+
+test('with three compute Sites, the standby takes the roomiest other one', () => {
+    const three = new Map<string, Site>([...siteOf, ['nbg-a', 'home-c']]);
+    const room = new Map([
+        ['fsn-a', 30 * GiB],
+        ['lim-a', 2 * GiB],
+        ['nbg-a', 25 * GiB],
+    ]);
+    assert.equal(roomForNew(room, three, 'hetzner-fsn1', 25 * GiB).ok, true);
+    assert.deepEqual(roomForNew(room, three, 'ovh-lim', 3 * GiB), { ok: false, error: { largest: 2 * GiB } });
+    assert.deepEqual(roomForNew(room, new Map([['fsn-a', 'hetzner-fsn1']]), 'hetzner-fsn1', 1), { ok: false, error: { largest: 0 } }, 'no other compute Site');
 });
 
 test('a grow needs the extra room on every node holding an instance', () => {

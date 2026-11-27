@@ -1,4 +1,4 @@
-import { COMPUTE_SITES, DNS_LABEL, SERVICE_LIMITS, type Service, type ServiceInput, type ServicePatch, type Site } from '@openupstream/sdk';
+import { DNS_LABEL, SITE_ID, SERVICE_LIMITS, type Service, type ServiceInput, type ServicePatch, type Site } from '@openupstream/sdk';
 import { whole, within } from './usage';
 
 /** What a Service form holds, as typed. `port` empty: a worker; `homeSite` empty: wherever the Project's data is. */
@@ -39,7 +39,7 @@ export const serviceWanted = (fields: ServiceFields): ServiceWanted | string => 
     const replicas = whole(fields.replicas);
     const memoryMb = whole(fields.memoryMb);
     const cpuMillicores = whole(fields.cpuMillicores);
-    const homeSite = fields.homeSite === '' ? null : COMPUTE_SITES.find((site) => site === fields.homeSite);
+    const homeSite = fields.homeSite === '' ? null : SITE_ID.test(fields.homeSite) ? fields.homeSite : undefined;
     return image === '' || /\s/.test(image)
         ? 'Enter the image, e.g. ghcr.io/acme/api:v3.'
         : port !== null && !within(port, 1, 65535)

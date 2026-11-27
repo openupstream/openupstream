@@ -2,11 +2,12 @@
 # our own release instead of the one bundled with k3s (ARCHITECTURE.md,
 # decisions 6, 72 and 73).
 #
-# One pod per compute Site: a DaemonSet on the compute nodes, taking the
-# node's ports 80 and 443 as hostPorts. The pod itself listens on 8000 and
-# 8443, so it runs as the chart's non-root user without extra capabilities.
-# Clients reach a Site through the A records of both compute nodes; bunny.net
-# drops the record of a Site whose port 80 stops answering (decision 34).
+# A DaemonSet on every compute node (label openupstream.io/compute-site,
+# ADR-0007), taking the node's ports 80 and 443 as hostPorts. The pod itself
+# listens on 8000 and 8443, so it runs as the chart's non-root user without
+# extra capabilities. Clients reach a Site through the A records of all
+# compute nodes; bunny.net drops the record of a Site whose port 80 stops
+# answering (decision 34).
 image:
   digest: sha256:575fa15b135078fe5e50aa847987d96dbddd7b093c172429618404df73f3fa7c
 # The image above, by digest; the chart reads its version from here.
@@ -27,7 +28,7 @@ affinity:
     requiredDuringSchedulingIgnoredDuringExecution:
       nodeSelectorTerms:
         - matchExpressions:
-            - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+            - {key: openupstream.io/compute-site, operator: In, values: ["true"]}
 
 # No LoadBalancer: the nodes' own addresses are in DNS.
 service:

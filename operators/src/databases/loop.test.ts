@@ -25,7 +25,7 @@ const kube = (applied: string[] = []): Kube => ({
     remove: async () => ok(undefined),
 });
 
-const platformRows: FetchRows = async () => ok([{ project: PLATFORM.project, database: PLATFORM.database }]);
+const platformRows: FetchRows = async () => ok([{ project: PLATFORM.project, database: { ...PLATFORM.database, homeSite: 'hetzner-fsn1' } }]);
 
 test('a pass applies what the control plane lists and logs a summary', async () => {
     const applied: string[] = [];
@@ -49,7 +49,7 @@ test('without rows nothing is applied: an unreachable control plane never means 
 
 test('invalid rows are logged', async () => {
     const broken: FetchRows = async () =>
-        ok([{ project: PLATFORM.project, database: { ...PLATFORM.database, memoryMb: 64 } }]);
+        ok([{ project: PLATFORM.project, database: { ...PLATFORM.database, homeSite: 'hetzner-fsn1', memoryMb: 64 } }]);
     const log = await databasesPass(broken, kube(), config, options);
     assert.equal(log.msg, 'reconcile pass done');
     assert.deepEqual(

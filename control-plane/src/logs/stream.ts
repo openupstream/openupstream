@@ -10,7 +10,7 @@
  * again from the last line sent. It ends at `maxMs`, when the client goes,
  * or once no pod is left that can write anything more.
  */
-import { COMPUTE_SITES, type LogEntry, type Site } from '@openupstream/sdk';
+import type { LogEntry, Site } from '@openupstream/sdk';
 import type { ControlPlaneKube, PodContainer, PodInfo } from '../kube.js';
 import { type Result, ok } from '../result.js';
 
@@ -59,7 +59,7 @@ export const timeKey = (time: string): string => {
 export const firstRead = (tail: number, now: string): { readonly tailLines: number } | { readonly sinceTime: string; readonly after: string } =>
     tail > 0 ? { tailLines: tail } : { sinceTime: now.replace(/\.\d+/, ''), after: now };
 
-export const siteOf = (zone: string | undefined): Site | null => COMPUTE_SITES.find((site) => site === zone) ?? null;
+export const siteOf = (zone: string | undefined): Site | null => (zone === undefined || zone === '' ? null : zone);
 
 /**
  * Which logs of a container hold output, as the kubelet serves them:

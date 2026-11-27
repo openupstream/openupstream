@@ -6,11 +6,14 @@
  * then on reconciles them like any customer's. The billing Database has no
  * bootstrap: the operator creates it from the seeded row.
  */
-import { PLATFORM } from '@openupstream/sdk';
+import { PLATFORM, type Site } from '@openupstream/sdk';
 import type pg from 'pg';
 
-/** Inserts the rows that are missing, in one statement; never changes or removes existing ones. */
-export async function seedPlatform(pool: pg.Pool, options: { readonly billing: boolean }): Promise<void> {
+/**
+ * Inserts the rows that are missing, in one statement, the Databases with
+ * `homeSite` (the default Site); never changes or removes existing ones.
+ */
+export async function seedPlatform(pool: pg.Pool, options: { readonly billing: boolean; readonly homeSite: Site }): Promise<void> {
     const { account, project, database, authDatabase, billingDatabase } = PLATFORM;
     const databases = options.billing ? [database, authDatabase, billingDatabase] : [database, authDatabase];
     await pool.query(
@@ -35,7 +38,7 @@ export async function seedPlatform(pool: pg.Pool, options: { readonly billing: b
                     id: d.id,
                     project_id: project.id,
                     name: d.name,
-                    home_site: d.homeSite,
+                    home_site: options.homeSite,
                     memory_mb: d.memoryMb,
                     storage_gb: d.storageGb,
                     created_at: d.createdAt,

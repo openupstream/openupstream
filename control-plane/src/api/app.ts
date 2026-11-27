@@ -12,7 +12,7 @@ import {
     ACCOUNT_TOKEN_ROLES,
     API_KEY_SCOPES,
     BUCKET_NAME,
-    COMPUTE_SITES,
+    SITE_ID,
     type Site,
     DATABASE_ACCESS_LEVELS,
     MEMBER_ROLES,
@@ -93,6 +93,7 @@ import { byNewest, isRunOf, runManifest, runOf } from '../jobs/runs.js';
 import { isTimeZone, scheduleError } from '../jobs/schedule.js';
 import { type ControlPlaneKube, jobStateOf, serviceStateOf, stateOf } from '../kube.js';
 import { openLogStream, siteOf } from '../logs/stream.js';
+import { type ReadSites, type Sites, chooseSite, siteReader } from '../sites.js';
 import type { PrometheusQuery } from '../prometheus.js';
 import { measure, projectPods, projectUsage, usageOf } from '../usage/live.js';
 import { type RegistryDeps, type ResolveError, parseImageReference, resolveDigest } from '../registry.js';
@@ -149,6 +150,8 @@ export interface ApiDeps {
     readonly newAccountHolds?: readonly string[];
     /** How often a followed log stream lists the pods again, and how long it lasts at most (default LOG_LIMITS). */
     readonly logStream?: { readonly pollMs: number; readonly maxMs: number };
+    /** The compute Sites (ADR-0007); read from `kube`'s nodes, cached, when not given. */
+    readonly sites?: ReadSites;
     readonly log?: (entry: Record<string, unknown>) => void;
 }
 
@@ -167,6 +170,9 @@ const RUN_POD_LABEL = 'batch.kubernetes.io/job-name';
 /** How often a followed log stream lists the pods again: new replicas show within this long. */
 const LOG_POLL_MS = 5_000;
 
+
+/** Checked against the compute Sites once parsed (siteFor). */
+const siteId = z.string().regex(SITE_ID, 'a Site id, as GET /v1/sites lists them');
 
 const accountInput = z.strictObject({
     name: z.string().trim().min(1).max(200),
@@ -222,7 +228,7 @@ const projectInput = z.strictObject({
 
 const databaseInput = z.strictObject({
     name: z.string().regex(DNS_LABEL, 'a DNS label: lowercase letters, digits and hyphens'),
-    homeSite: z.enum(COMPUTE_SITES).optional(),
+    homeSite: siteId.optional(),
     memoryMb: z.int().min(DATABASE_MIN_MEMORY_MB),
     storageGb: z.int().min(1),
     autoGrow: z.boolean().optional(),
@@ -283,7 +289,7 @@ const serviceInput = z.strictObject({
     ...serviceFields,
     port: serviceFields.port.optional(),
     replicas: serviceFields.replicas.optional(),
-    homeSite: z.enum(COMPUTE_SITES).optional(),
+    homeSite: siteId.optional(),
     registryAuth: registryAuthInput.optional(),
 });
 
@@ -293,7 +299,7 @@ const servicePatch = z.strictObject({
     replicas: serviceFields.replicas.optional(),
     memoryMb: serviceFields.memoryMb.optional(),
     cpuMillicores: serviceFields.cpuMillicores.optional(),
-    homeSite: z.enum(COMPUTE_SITES).nullable().optional(),
+    homeSite: siteId.nullable().optional(),
     registryAuth: registryAuthInput.nullable().optional(),
 });
 
@@ -330,7 +336,7 @@ const jobInput = z.strictObject({
     timeoutSeconds: jobFields.timeoutSeconds.optional(),
     schedule: jobFields.schedule.optional(),
     timeZone: jobFields.timeZone.optional(),
-    homeSite: z.enum(COMPUTE_SITES).optional(),
+    homeSite: siteId.optional(),
     registryAuth: registryAuthInput.optional(),
 });
 
@@ -343,7 +349,7 @@ const jobPatch = z.strictObject({
     timeoutSeconds: jobFields.timeoutSeconds.optional(),
     schedule: jobFields.schedule.nullable().optional(),
     timeZone: jobFields.timeZone.nullable().optional(),
-    homeSite: z.enum(COMPUTE_SITES).nullable().optional(),
+    homeSite: siteId.nullable().optional(),
     registryAuth: registryAuthInput.nullable().optional(),
 });
 
@@ -373,12 +379,53 @@ const routeInput = z.union([
 ]);
 
 /** In-cluster connection through the Database's PgBouncer; CloudNativePG's application user and database. */
+/** What a size is checked for: a new Database in its Home site, or a grow of one that exists. */
+type RoomTarget = {
+    readonly home: Site;
+    /** The compute Sites; undefined when they cannot be read, and then a new Database's size is accepted unchecked. */
+    readonly sites: Sites | undefined;
+    readonly existing?: Database;
+};
+
 /** Who calls: the Accounts where their Member (or the Account token) has a role, and the grants that count for them. */
 type Env = { Variables: { identity: Caller; accountIds: string[]; grants: () => Promise<CallerGrant[]> } };
 
 export function createApi(deps: ApiDeps): Hono<Env> {
     const { pool, authenticate, kube, storage } = deps;
     const app = new Hono<Env>();
+    const readSites = deps.sites ?? siteReader(() => kube.listNodes());
+    const sitesDown = (c: Context<Env>) => c.json({ error: 'cannot read the Sites now' }, 503);
+    /**
+     * The Home site for something new or changed: `wanted` when it is a
+     * compute Site, the default Site when it is not given; or the response
+     * refusing it.
+     */
+    const siteFor = async (c: Context<Env>, wanted: string | undefined) => {
+        const sites = await readSites();
+        if (!sites.ok) {
+            deps.log?.({ msg: 'cannot read the Sites', error: sites.error });
+            return err(sitesDown(c));
+        }
+        const chosen = chooseSite(sites.value, wanted);
+        if (!chosen.ok) {
+            return err(
+                chosen.error.kind === 'none'
+                    ? c.json({ error: 'no compute Site has a node now' }, 503)
+                    : c.json({ error: 'invalid request', issues: [{ path: 'homeSite', message: `one of ${chosen.error.sites.join(', ')}` }] }, 400),
+            );
+        }
+        return ok({ site: chosen.value, sites: sites.value });
+    };
+    /** A Home site given in a request, checked; none given is fine (a Service or Job without one follows its Project). */
+    const givenSite = async (c: Context<Env>, wanted: string | null | undefined) => (typeof wanted === 'string' ? siteFor(c, wanted) : ok(undefined));
+    /** The default Site, for the rows of Services and Jobs without a Home site; undefined when the Sites cannot be read. */
+    const defaultSite = async (): Promise<Site | undefined> => {
+        const sites = await readSites();
+        if (!sites.ok) {
+            deps.log?.({ msg: 'cannot read the Sites', error: sites.error });
+        }
+        return sites.ok ? sites.value.default : undefined;
+    };
 
     /** The state from the Cluster; `unknown` when Kubernetes cannot be asked, rather than failing the request. */
     const stateFor = async (database: Database): Promise<DatabaseState> => {
@@ -389,21 +436,20 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         return stateOf(cluster.value, database);
     };
-    const isComputeSite = (site: string): site is Site => (COMPUTE_SITES as readonly string[]).includes(site);
     /**
      * Whether the compute Sites have room for the Database at `wanted`
      * (decisions 109 and 110): a new one needs its storage and memory on a
-     * node in each Site; a grow needs the extra on the nodes holding its
-     * instances. A message for the 507 when not; undefined when there is
+     * node in its Home site and in one other compute Site; a grow needs the
+     * extra on the nodes holding its instances. A message for the 507 when not; undefined when there is
      * room, the storage is not TopoLVM (then the compute nodes are not
      * known), or Kubernetes cannot be asked: then the size is accepted, as
      * without the check, so a slow API server does not stop Databases from
      * being created.
      */
-    const noRoom = async (wanted: { readonly storageGb: number; readonly memoryMb: number }, existing?: Database): Promise<{ readonly value: string | undefined }> => {
-        const checked = await roomCheck(wanted, existing);
+    const noRoom = async (wanted: { readonly storageGb: number; readonly memoryMb: number }, target: RoomTarget): Promise<{ readonly value: string | undefined }> => {
+        const checked = await roomCheck(wanted, target);
         if (!checked.ok) {
-            deps.log?.({ msg: 'cannot read the free room; size accepted unchecked', database: existing?.id, error: checked.error });
+            deps.log?.({ msg: 'cannot read the free room; size accepted unchecked', database: target.existing?.id, error: checked.error });
         }
         return { value: checked.ok ? checked.value : undefined };
     };
@@ -415,10 +461,8 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         return ok(new Map(free.flatMap(([node, bytes]): [string, number][] => (bytes.ok && bytes.value !== undefined ? [[node, bytes.value]] : []))));
     };
-    const roomCheck = async (
-        wanted: { readonly storageGb: number; readonly memoryMb: number },
-        existing?: Database,
-    ): Promise<Result<string | undefined, string>> => {
+    const roomCheck = async (wanted: { readonly storageGb: number; readonly memoryMb: number }, target: RoomTarget): Promise<Result<string | undefined, string>> => {
+        const { existing, home, sites } = target;
         const storage = await kube.storageCapacity();
         if (!storage.ok || storage.value === undefined) {
             return storage.ok ? ok(undefined) : storage;
@@ -444,25 +488,20 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             const fits = roomForGrowth(memory.value, instanceNodes.value, extraMb * MiB);
             return ok(fits.ok ? undefined : `no room for ${extraMb} MB more memory for ${existing.name} now; at most ${Math.floor(fits.error.largest / MiB)} MB more`);
         }
-        const nodes = [...storage.value.keys()];
-        const sites = await Promise.all(nodes.map(async (node) => [node, await kube.nodeSite(node)] as const));
-        const failed = sites.find(([, site]) => !site.ok);
-        if (failed !== undefined && !failed[1].ok) {
-            return err(failed[1].error);
+        if (sites === undefined) {
+            return ok(undefined);
         }
-        const siteOf = new Map<string, Site>(
-            sites.flatMap(([node, site]): [string, Site][] => (site.ok && site.value !== undefined && isComputeSite(site.value) ? [[node, site.value]] : [])),
-        );
-        const disk = roomForNew(storage.value, siteOf, wanted.storageGb * GiB);
+        const where = `in ${home} and another compute Site`;
+        const disk = roomForNew(storage.value, sites.nodes, home, wanted.storageGb * GiB);
         if (!disk.ok) {
-            return ok(`no room for ${wanted.storageGb} GB in both compute Sites now; at most ${Math.floor(disk.error.largest / GiB)} GB`);
+            return ok(`no room for ${wanted.storageGb} GB ${where} now; at most ${Math.floor(disk.error.largest / GiB)} GB`);
         }
-        const memory = await memoryRoom(nodes);
+        const memory = await memoryRoom([...storage.value.keys()].filter((node) => sites.nodes.has(node)));
         if (!memory.ok) {
             return memory;
         }
-        const fits = roomForNew(memory.value, siteOf, wanted.memoryMb * MiB);
-        return ok(fits.ok ? undefined : `no room for ${wanted.memoryMb} MB of memory in both compute Sites now; at most ${Math.floor(fits.error.largest / MiB)} MB`);
+        const fits = roomForNew(memory.value, sites.nodes, home, wanted.memoryMb * MiB);
+        return ok(fits.ok ? undefined : `no room for ${wanted.memoryMb} MB of memory ${where} now; at most ${Math.floor(fits.error.largest / MiB)} MB`);
     };
     const insufficientStorage = (c: Context<Env>, message: string) => c.json({ error: message }, 507);
 
@@ -544,6 +583,16 @@ export function createApi(deps: ApiDeps): Hono<Env> {
 
     /** A 403 for an Account token on a route that needs a person: it never manages the Account or sees its Members. */
     const tokenRefused = (c: Context<Env>, what: string) => c.json({ error: `an Account token cannot ${what}` }, 403);
+
+    /** The compute Sites, read from the nodes (ADR-0007); any signed-in caller may ask. */
+    app.get('/v1/sites', async (c) => {
+        const sites = await readSites();
+        if (!sites.ok) {
+            deps.log?.({ msg: 'cannot read the Sites', error: sites.error });
+            return sitesDown(c);
+        }
+        return c.json(sites.value.list);
+    });
 
     app.get('/v1/accounts', async (c) => {
         const caller = c.get('identity');
@@ -915,7 +964,11 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         if (holds.length > 0) {
             return held(c, holds);
         }
-        const room = await noRoom(rest);
+        const site = await siteFor(c, homeSite);
+        if (!site.ok) {
+            return site.error;
+        }
+        const room = await noRoom(rest, { home: site.value.site, sites: site.value.sites });
         if (room.value !== undefined) {
             return insufficientStorage(c, room.value);
         }
@@ -937,7 +990,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         const created = await createDatabase(pool, project.id, {
             ...rest,
-            ...(homeSite === undefined ? {} : { homeSite }),
+            homeSite: site.value.site,
             ...(autoGrow === undefined ? {} : { autoGrow }),
             ...(maxStorageGb === undefined ? {} : { maxStorageGb }),
             ...(restoreFrom === undefined
@@ -997,7 +1050,11 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             }
         }
         if (grows) {
-            const room = await noRoom({ storageGb: storageGb ?? database.storageGb, memoryMb: memoryMb ?? database.memoryMb }, database);
+            const room = await noRoom({ storageGb: storageGb ?? database.storageGb, memoryMb: memoryMb ?? database.memoryMb }, {
+                home: database.homeSite,
+                sites: await readSites().then((sites) => (sites.ok ? sites.value : undefined)),
+                existing: database,
+            });
             if (room.value !== undefined) {
                 return insufficientStorage(c, room.value);
             }
@@ -1432,7 +1489,11 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     /** The Services with their state; the rows they are compared with are read once for all of them. */
     const servicesDetails = async (services: readonly Service[]): Promise<ServiceDetails[]> => {
         const projectIds = [...new Set(services.map((service) => service.projectId))];
-        const rows = (await Promise.all(projectIds.map((projectId) => listServiceRows(pool, projectId)))).flat();
+        const site = await defaultSite();
+        if (site === undefined) {
+            return services.map((service) => ({ ...service, state: 'unknown' }));
+        }
+        const rows = (await Promise.all(projectIds.map((projectId) => listServiceRows(pool, site, projectId)))).flat();
         return Promise.all(
             services.map(async (service) => ({
                 ...service,
@@ -1555,6 +1616,10 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             return held(c, holds);
         }
         const { registryAuth, homeSite, replicas, ...rest } = input.data;
+        const site = await givenSite(c, homeSite);
+        if (!site.ok) {
+            return site.error;
+        }
         const digest = await resolve(rest.image, registryAuth);
         if (!digest.ok) {
             return unresolved(c, rest.image, digest.error);
@@ -1609,6 +1674,10 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         const input = servicePatch.safeParse(await body(c));
         if (!input.success) {
             return c.json(invalid(input.error.issues), 400);
+        }
+        const site = await givenSite(c, input.data.homeSite);
+        if (!site.ok) {
+            return site.error;
         }
         const { image, registryAuth, ...rest } = input.data;
         const change = await imageChange(service, image, registryAuth, registryAuthName(service.id), () => storedAuth(service));
@@ -1754,7 +1823,11 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     /** The Jobs with their state; the rows they are compared with are read once for all of them. */
     const jobsDetails = async (jobs: readonly Job[]): Promise<JobDetails[]> => {
         const projectIds = [...new Set(jobs.map((job) => job.projectId))];
-        const rows = (await Promise.all(projectIds.map((projectId) => listJobRows(pool, projectId)))).flat();
+        const site = await defaultSite();
+        if (site === undefined) {
+            return jobs.map((job) => ({ ...job, state: 'unknown' }));
+        }
+        const rows = (await Promise.all(projectIds.map((projectId) => listJobRows(pool, site, projectId)))).flat();
         return Promise.all(jobs.map(async (job) => ({ ...job, state: await jobStateFor(job, rows.find((row) => row.job.id === job.id)) })));
     };
     const jobDetails = async (job: Job): Promise<JobDetails> => (await jobsDetails([job]))[0] as JobDetails;
@@ -1812,6 +1885,10 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             return c.json(invalid(input.error.issues), 400);
         }
         const { registryAuth, homeSite, command, args, timeoutSeconds, schedule, timeZone, ...rest } = input.data;
+        const site = await givenSite(c, homeSite);
+        if (!site.ok) {
+            return site.error;
+        }
         const shape = { command: command ?? null, args: args ?? null, schedule: schedule ?? null, timeZone: timeZone ?? null };
         const shapeError = jobShapeError(shape);
         if (shapeError !== undefined) {
@@ -1876,6 +1953,10 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         const input = jobPatch.safeParse(await body(c));
         if (!input.success) {
             return c.json(invalid(input.error.issues), 400);
+        }
+        const site = await givenSite(c, input.data.homeSite);
+        if (!site.ok) {
+            return site.error;
         }
         const { image, registryAuth: givenAuth, ...rest } = input.data;
         // Without a schedule the time zone means nothing: removing the schedule removes it too, unless it is given.
@@ -1967,7 +2048,11 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             deps.log?.({ msg: 'cannot read CronJob', job: job.id, error: cronJob.error });
             return kubernetesDown(c);
         }
-        const wanted = (await listJobRows(pool, job.projectId)).find((row) => row.job.id === job.id);
+        const site = await defaultSite();
+        if (site === undefined) {
+            return sitesDown(c);
+        }
+        const wanted = (await listJobRows(pool, site, job.projectId)).find((row) => row.job.id === job.id);
         // Started from an older template, the run would not be what the Job says now.
         if (cronJob.value === undefined || wanted === undefined || jobStateOf(cronJob.value, jobSpecVersion(wanted)) !== 'ready') {
             return c.json({ error: 'the Job is still deploying; start the run once it is ready' }, 409);

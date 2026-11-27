@@ -153,9 +153,8 @@ test('the forwarder: one pod under gVisor from the operators image, no token, no
     assert.equal(spec.runtimeClassName, 'gvisor');
     assert.equal(spec.automountServiceAccountToken, false);
     assert.equal(spec.securityContext.runAsNonRoot, true);
-    assert.deepEqual(spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].values, [
-        'hetzner-fsn1',
-        'ovh-lim',
+    assert.deepEqual(spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions, [
+        { key: 'openupstream.io/compute-site', operator: 'In', values: ['true'] },
     ]);
     const [container] = spec.containers;
     assert.equal(container.image, tunnel.forwarderImage);

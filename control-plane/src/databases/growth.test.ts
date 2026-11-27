@@ -80,7 +80,7 @@ describe('growthPass', () => {
     const insert = async (name: string, storageGb: number, extra = '', values: unknown[] = []) =>
         (
             await db.pool.query<{ id: string }>(
-                `insert into databases (project_id, name, memory_mb, storage_gb${extra ? `, ${extra}` : ''}) values ($1, $2, 256, $3${values.map((_, i) => `, $${i + 4}`).join('')}) returning id`,
+                `insert into databases (project_id, name, home_site, memory_mb, storage_gb${extra ? `, ${extra}` : ''}) values ($1, $2, 'hetzner-fsn1', 256, $3${values.map((_, i) => `, $${i + 4}`).join('')}) returning id`,
                 [projectId, name, storageGb, ...values],
             )
         ).rows[0]?.id ?? '';

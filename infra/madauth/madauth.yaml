@@ -1,7 +1,7 @@
 # madAuth (ARCHITECTURE.md, "Control plane"; decisions 59 and 63): sign-in
 # and API keys, as its published image, with its users in a Database of the
 # platform Project (PLATFORM.authDatabase in sdk/src/internal.ts). Two
-# replicas, one per compute Site.
+# replicas in two different compute Sites (min(2, compute Sites), ADR-0007).
 #
 # Next to it, in the same pod, the sidecar from the control plane's image:
 # madAuth only calls https or localhost URLs, so the sidecar serves the API
@@ -42,7 +42,7 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
-                  - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+                  - {key: openupstream.io/compute-site, operator: In, values: ["true"]}
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone

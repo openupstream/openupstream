@@ -45,7 +45,7 @@ import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { S3Client } from '@aws-sdk/client-s3';
 import {
-    COMPUTE_SITES,
+    SITE_ID,
     DEFAULT_API_URL,
     type Account,
     type ApiResult,
@@ -92,6 +92,7 @@ import { apiAccess } from './session.js';
 import { readSecretValue } from './stdin.js';
 import { waitUntil } from './wait.js';
 import { formatUsage } from './usage.js';
+import { formatSites } from './sites.js';
 import { CLI_VERSION } from './version.js';
 
 const USAGE = `usage:
@@ -115,7 +116,7 @@ const USAGE = `usage:
   oup token delete <name> [--account <name|id>]
   oup pg list
   oup pg show <name>
-  oup pg create <name> [--memory <MB>] [--storage <GB>] [--site hetzner-fsn1|ovh-lim] [--max-storage <GB> | --no-auto-grow] [--no-wait]
+  oup pg create <name> [--memory <MB>] [--storage <GB>] [--site <site>] [--max-storage <GB> | --no-auto-grow] [--no-wait]
   oup pg restore <source> <name> [--time <RFC 3339>] [--memory <MB>] [--storage <GB>] [--site …] [--max-storage <GB> | --no-auto-grow] [--no-wait]
   oup pg resize <name> [--memory <MB>] [--storage <GB>] [--max-storage <GB> | --no-max-storage] [--auto-grow | --no-auto-grow] [--no-wait]
   oup pg delete <name>
@@ -123,13 +124,13 @@ const USAGE = `usage:
   oup service list
   oup service show <name>
   oup service deploy <name> --image <ref> [--port <n> | --no-port] [--replicas <n>] [--memory <MB>] [--cpu <millicores>]
-                     [--site hetzner-fsn1|ovh-lim] [--registry-user <user> --registry-password-stdin] [--no-wait]
+                     [--site <site>] [--registry-user <user> --registry-password-stdin] [--no-wait]
   oup service logs <name> [--tail <n>] [-f | --follow] [--timestamps]
   oup service delete <name>
   oup job list
   oup job show <name>
   oup job deploy <name> --image <ref> [--schedule <cron> | --no-schedule] [--time-zone <IANA name>]
-                 [--timeout <seconds>] [--memory <MB>] [--cpu <millicores>] [--site hetzner-fsn1|ovh-lim]
+                 [--timeout <seconds>] [--memory <MB>] [--cpu <millicores>] [--site <site>]
                  [--registry-user <user> --registry-password-stdin] [--no-wait] [--no-command | -- <command> <arg>…]
   oup job run <name> [--env NAME=value]… [--no-wait] [-- <arg>…]
   oup job runs <name>
@@ -155,6 +156,7 @@ const USAGE = `usage:
   oup route delete <address>
                <address> is <hostname>/<path>, or /<path> alone for the Project's default Domain
   oup usage [--instances] [--json]
+  oup sites                                   (the compute Sites, for --site)
   oup site deploy <dir> --bucket <name> [--keep] [--force]
   oup version
 
@@ -360,7 +362,8 @@ const count = (flag: string, value: string | undefined): number | undefined => {
     return Number.isInteger(n) && n > 0 ? n : fail(`--${flag} must be a positive whole number, not ${value}`);
 };
 
-const isSite = (value: string): value is Site => (COMPUTE_SITES as readonly string[]).includes(value);
+/** A Site id's form; whether the Site exists, the API says (oup sites lists them). */
+const isSite = (value: string): value is Site => SITE_ID.test(value);
 
 /** A Database's flags of one verb that another verb does not take. */
 const PG_FLAGS = {
@@ -406,7 +409,7 @@ async function pg(args: string[]): Promise<void> {
         return fail(USAGE);
     }
     if (values.site !== undefined && !isSite(values.site)) {
-        return fail(`--site is one of ${COMPUTE_SITES.join(', ')}`);
+        return fail('--site takes a Site id, as oup sites lists them');
     }
     const memoryMb = count('memory', values.memory);
     const storageGb = count('storage', values.storage);
@@ -642,7 +645,7 @@ async function serviceDeploy(
         return fail('oup service deploy needs --image');
     }
     if (flags.site !== undefined && !isSite(flags.site)) {
-        return fail(`--site is one of ${COMPUTE_SITES.join(', ')}`);
+        return fail('--site takes a Site id, as oup sites lists them');
     }
     if (flags.port !== undefined && flags['no-port'] === true) {
         return fail('--port and --no-port exclude each other');
@@ -843,7 +846,7 @@ async function jobDeploy(
         return fail('--schedule and --no-schedule exclude each other');
     }
     if (flags.site !== undefined && !isSite(flags.site)) {
-        return fail(`--site is one of ${COMPUTE_SITES.join(', ')}`);
+        return fail('--site takes a Site id, as oup sites lists them');
     }
     if (flags.command !== undefined && flags.command.length === 0) {
         return fail('nothing after --; leave it out to keep the command');
@@ -1413,6 +1416,17 @@ async function usage(args: string[]): Promise<void> {
     console.log(values.json === true ? JSON.stringify(read.value, null, 2) : formatUsage(read.value, project.name, { instances: values.instances ?? false }).join('\n'));
 }
 
+async function sites(args: string[]): Promise<void> {
+    if (args.length > 0) {
+        return fail(USAGE);
+    }
+    const read = await (await apiClient()).listSites();
+    if (!read.ok) {
+        return fail(read.error.message);
+    }
+    console.log(formatSites(read.value).join('\n'));
+}
+
 async function siteDeploy(args: string[]): Promise<void> {
     const { values, positionals } = parseArgs({
         args,
@@ -1485,6 +1499,8 @@ const run = async (): Promise<void> => {
             return route(rest);
         case 'usage':
             return usage(rest);
+        case 'sites':
+            return sites(rest);
         case 'site':
             return rest[0] === 'deploy' ? siteDeploy(rest.slice(1)) : fail(USAGE);
         case 'version':

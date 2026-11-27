@@ -5,8 +5,9 @@
 # 1. the Secret garage (RPC secret and admin token), generated once and kept
 #    in the cluster only; the admin token also goes to the platform
 #    Project's namespace as garage-admin, for the control plane;
-# 2. Garage, one node per Site (infra/garage/crd.yaml, then garage.yaml),
-#    or one node with one copy on a single-node cluster (decision 112);
+# 2. Garage, three nodes in three different Sites (infra/garage/crd.yaml,
+#    then garage.yaml), or one node with one copy on a single-node cluster
+#    (decision 112);
 # 3. the layout: each node's zone is its Site, with GARAGE_CAPACITY each,
 #    applied once;
 # 4. the public S3 endpoint https://<bucket>.s3.$CUSTOMER_DOMAIN: the
@@ -27,7 +28,8 @@ source ./lib.sh
 load_layout
 load_domains
 PLATFORM_NS=project-00000000-0000-4000-8000-000000000002
-# One Garage node and copy per Site.
+# One Garage node and copy per Site up to three: min(3, Sites), which is 3
+# in multi-node (label_sites refuses fewer Sites, ADR-0007).
 GARAGE_NODES=3
 [[ $LAYOUT == single-node ]] && GARAGE_NODES=1
 PODS=()

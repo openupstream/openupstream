@@ -6,24 +6,66 @@ layouts (ARCHITECTURE.md, "Dev clusters"; decision 112,
 
 | Layout | Nodes | For | The cluster comes from |
 | --- | --- | --- | --- |
-| `multi-node` | one per Site, carrying the Site names | everything, failover included; the layout of production | [`infra/dev-cluster-hetzner`](../dev-cluster-hetzner/README.md): three Hetzner Cloud VMs per working session; [`infra/dev-cluster-incus`](../dev-cluster-incus/README.md): three Incus VMs on one machine at home, long-lived |
+| `multi-node` | in three or more Sites, two or more of them compute Sites | everything, failover included; the layout of production | [`infra/dev-cluster-hetzner`](../dev-cluster-hetzner/README.md): three Hetzner Cloud VMs per working session; [`infra/dev-cluster-incus`](../dev-cluster-incus/README.md): three Incus VMs on one machine at home, long-lived |
 | `single-node` | one, standing in for every Site | development on one machine; one copy of everything, no failover | `k3s-single-node.sh`: any x86_64 Linux machine you can reach over SSH |
 
 `install-multi-node.sh` and `install-single-node.sh` record the layout in
 the ConfigMap `openupstream-system/cluster-layout` and then run the steps
 below in order. Each step reads the layout from there, so one may be run
 again on its own and installs the same way; the two scripts refuse a
-cluster whose nodes do not match (a multi-node cluster needs a node in each
-of `hetzner-fsn1`, `ovh-lim` and `netcup-nbg`, a single-node one exactly
-one node), and a recorded layout never changes. Next to the layout they
+cluster whose nodes do not match (see "Sites"), and a recorded layout never
+changes. Next to the layout they
 record the cluster id, generated once as `<date>-<random>` (`CLUSTER_ID`
 chooses it, e.g. `production`): the folder in the backup bucket that all of
 the cluster's Databases archive into (decision 149). A cluster installed
 before it gets one when a step next runs; its Databases then archive into
 that new, empty folder, with a base backup only from the next scheduled
 one (03:00). The Databases' volumes come
-from TopoLVM with one node per Site (decision 109) and from k3s's
+from TopoLVM on the compute nodes (decision 109) and from k3s's
 local-path provisioner on a single node (decision 112).
+
+## Sites
+
+Nothing here names a Site: the nodes say which there are
+([ADR-0007](../../docs/adr/0007-sites-from-node-labels.md)).
+
+| On the node | Meaning | Set by |
+| --- | --- | --- |
+| label `topology.kubernetes.io/zone=<id>` | its Site's id, a label value | the node setup (`up.sh`, `k3s-single-node.sh`) |
+| label `openupstream.io/compute-site=true` | its Site is a compute Site: Databases, Services, Jobs, Traefik, TopoLVM and the platform's pods run there | the node setup; `COMPUTE_SITES` |
+| label `openupstream.io/default-site=true` | its Site is the default Home site, one compute Site | the node setup; `DEFAULT_SITE` |
+| annotation `openupstream.io/site-description` | free text shown next to the id, e.g. `Home VM A` | the node setup; `SITE_DESCRIPTIONS` |
+| taint `openupstream.io/third-site=true:NoSchedule` | on every node outside the compute Sites: only etcd, Garage, Loki and the node agents run there | the node setup |
+
+Before recording the layout, both install scripts set the two labels and
+the annotation on every node of a Site, take them off every other node and
+check the result (`label_sites` in `lib.sh`); a failed check changes
+nothing:
+
+- `COMPUTE_SITES`, space-separated Site ids. Unset, the Sites already
+  labelled stay; with none labelled the install fails and asks for it.
+- `DEFAULT_SITE`, a compute Site. Unset, the labelled default stays while
+  it is a compute Site, else the first compute Site by name takes it.
+  Another value moves it.
+- `SITE_DESCRIPTIONS`, `id=text;id=text`; `id=` removes one. Unset,
+  descriptions stay.
+
+`multi-node` needs a Site on every node, at least two compute Sites (a
+Database's standby goes to another one), at least three Sites in all
+(etcd's and Garage's quorum) and the taint on exactly the nodes outside the
+compute Sites; any number of Sites beyond that. What survives a Site
+failure by running twice (madAuth, the control plane, the dashboard,
+Prometheus, Alertmanager, CoreDNS, the CloudNativePG operator) runs in two
+different compute Sites; Garage and Loki keep three copies in three Sites.
+`single-node` needs exactly one node; its Site becomes the compute and
+default Site.
+
+A cluster installed before ADR-0007 has no compute label; run the install
+once with its compute Sites, e.g. on the dev clusters:
+
+```bash
+COMPUTE_SITES="hetzner-fsn1 ovh-lim" ./install-multi-node.sh
+```
 
 `scripts.test.mjs` tests the scripts' own logic with stubbed `kubectl` and
 `curl` (`npm run test:infra`, part of `npm test`).
@@ -47,12 +89,12 @@ accepts any size unchecked, growing a Database's storage never completes
 are the node's own disk (`DATABASE_VOLUMES=shared`, decision 124), so a
 Database's disk use shown by the API is Postgres's own figure. Usage is
 shown and metered as on any cluster.
-The node carries
-the label of the compute Site `hetzner-fsn1`; a Database or Service with
-the Home site `ovh-lim` runs there as well.
+The node's
+Site is `SITE` (default `hetzner-fsn1`), the only compute Site and the
+default one.
 
 ```bash
-./k3s-single-node.sh root@192.168.1.50
+SITE=home ./k3s-single-node.sh root@192.168.1.50
 ```
 
 It installs our AppArmor profile for containers (`infra/apparmor`,
@@ -79,7 +121,7 @@ the tailnet. Customer containers cannot reach the tailnet: the egress
 policies leave out `100.64.0.0/10` and `fc00::/7` and allow the node's own
 addresses on 80 and 443 only (decision 105). A machine that already runs k3s can be used as it is
 if gVisor was installed before k3s first started (`infra/gvisor`) and the
-node carries the labels `topology.kubernetes.io/zone=hetzner-fsn1` and
+node carries the labels `topology.kubernetes.io/zone=<Site id>` and
 `openupstream.io/gvisor=true`.
 
 ```bash
@@ -105,7 +147,7 @@ domains as exceptions there, or it drops the answers. Custom domains get no
 certificate on such a cluster: their HTTP-01 challenge must reach port 80
 from the internet.
 
-## One node per Site
+## Three or more Sites
 
 ```bash
 ../dev-cluster-hetzner/up.sh
@@ -119,14 +161,15 @@ export KUBECONFIG=$PWD/../dev-cluster-hetzner/.state/kubeconfig
 ./install-multi-node.sh
 ```
 
-`PLATFORM_DOMAIN` and `CUSTOMER_DOMAIN` default to `dev.openupstream.com`
+Both dev clusters' `up.sh` label the nodes, so no `COMPUTE_SITES` is
+needed. `PLATFORM_DOMAIN` and `CUSTOMER_DOMAIN` default to `dev.openupstream.com`
 and `dev.openupstream.app`, `CLUSTER_ISSUER` to Let's Encrypt staging.
 
 ## The steps
 
 `operators.sh` installs cert-manager, whose
 Certificates own their Secrets (so a custom domain's key goes with its
-Certificate), TopoLVM on the compute nodes with one node per Site
+Certificate), TopoLVM on the compute nodes
 (`infra/topolvm`, StorageClass `topolvm-provisioner`, which
 `database-config.json` names; a single node uses `local-path` instead),
 CloudNativePG
@@ -142,7 +185,7 @@ Let's Encrypt issuers and Traefik on the compute nodes, and points
 public addresses (private ones, as on the Incus dev cluster, cannot be
 checked from outside).
 
-`garage.sh` runs Garage with one node per Site, or one node with one copy
+`garage.sh` runs Garage with three nodes in three Sites, or one node with one copy
 (`infra/garage`), generates its RPC
 secret and admin token once (the token also goes to the platform Project's
 namespace for the control plane), assigns the layout (a node's zone is its
@@ -205,8 +248,8 @@ the install or run it again:
 ALERT_EMAIL=you@example.com ./monitoring.sh
 ```
 
-It installs kube-prometheus-stack (Prometheus and Alertmanager once per
-compute Site, Grafana), the scrape targets and alert rules of
+It installs kube-prometheus-stack (Prometheus and Alertmanager twice, in
+two compute Sites, Grafana), the scrape targets and alert rules of
 `infra/monitoring`, and Loki with Alloy, Loki's data in a Garage bucket of
 its own. On a single node Prometheus, Alertmanager and Loki run once, Loki
 with one copy. `DatabaseWalNotArchived` fires for the

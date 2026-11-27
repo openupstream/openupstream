@@ -84,11 +84,25 @@ Other names that are ours today and need yours:
 ## 3. Development clusters
 
 [infra/dev-cluster](../infra/dev-cluster/README.md) installs the platform
-onto a k3s cluster with one node per Site, or onto a single node (#112,
-[ADR-0004](adr/0004-single-node-dev-cluster.md)). Either needs sections 4
-to 6 (backups, DNS, e-mail, or `MAIL=log` instead of 6).
+onto a k3s cluster with nodes in three or more Sites, or onto a single node
+(#112, [ADR-0004](adr/0004-single-node-dev-cluster.md)). Either needs
+sections 4 to 6 (backups, DNS, e-mail, or `MAIL=log` instead of 6).
 
-### Hetzner Cloud: one node per Site
+The Sites are what the nodes say
+([ADR-0007](adr/0007-sites-from-node-labels.md)); name them after your own
+places. Each node carries its Site's id as `topology.kubernetes.io/zone`;
+the nodes of a compute Site carry `openupstream.io/compute-site=true`, those
+of the default Home site also `openupstream.io/default-site=true`, every
+other node the taint `openupstream.io/third-site=true:NoSchedule`; the
+annotation `openupstream.io/site-description` is shown next to the id. The
+node setup scripts below set them; the install sets the labels from
+`COMPUTE_SITES`, `DEFAULT_SITE` and `SITE_DESCRIPTIONS` and checks them (at
+least two compute Sites and three Sites; the
+[infra/dev-cluster](../infra/dev-cluster/README.md#sites) README has the
+details). A cluster installed before needs its compute Sites once:
+`COMPUTE_SITES="hetzner-fsn1 ovh-lim" ./install-multi-node.sh`.
+
+### Hetzner Cloud: three Sites
 
 The Hetzner dev cluster is three Hetzner Cloud VMs created and deleted per
 working session (#33, #52); see
@@ -109,7 +123,7 @@ of the compute VMs about €0.005; `infra/dev-cluster-hetzner/down.sh` deletes
 everything `up.sh` created. A volume left behind by an interrupted run
 shows in `hcloud volume list --selector openupstream=dev`.
 
-### Incus: one node per Site on one machine at home
+### Incus: three Sites on one machine at home
 
 Three Incus VMs on one x86_64 machine in your home network (#137); see
 [infra/dev-cluster-incus](../infra/dev-cluster-incus/README.md). The
