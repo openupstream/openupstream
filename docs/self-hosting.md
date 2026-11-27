@@ -125,11 +125,11 @@ a Minisforum UM790 Pro with Ubuntu Server 26.04 (2026-11-27).
    scripts and the steps below need it) and turn password logins off:
 
    ```bash
-   ssh-keygen -t ed25519 -f ~/.ssh/um790 -C um790
+   ssh-keygen -t ed25519 -f ~/.ssh/<name> -C <name>
    ```
 
    ```bash
-   ssh-copy-id -i ~/.ssh/um790.pub <user>@<host address>
+   ssh-copy-id -i ~/.ssh/<name>.pub <user>@<host address>
    ```
 
    ```bash
@@ -143,7 +143,8 @@ a Minisforum UM790 Pro with Ubuntu Server 26.04 (2026-11-27).
 3. Put its network port on a bridge, so the VMs get addresses from the
    router. Find the port's name and MAC address with `ip -br link` (e.g.
    `enp1s0`), then replace the netplan file the installer wrote
-   (`/etc/netplan/00-installer-config.yaml` or `50-cloud-init.yaml`) with
+   (`/etc/netplan/00-installer-config.yaml` or `50-cloud-init.yaml`; the
+   commands below use the first, put in yours) with
    `/etc/netplan/60-br0.yaml` (mode 600). The bridge takes the port's MAC
    address, so the router's reservation keeps the machine's address:
 
@@ -153,7 +154,7 @@ a Minisforum UM790 Pro with Ubuntu Server 26.04 (2026-11-27).
      ethernets:
        enp1s0:
          match:
-           macaddress: "58:47:ca:71:4f:7d"
+           macaddress: "<MAC address of the port>"
          set-name: enp1s0
          dhcp4: false
          dhcp6: false
@@ -161,7 +162,7 @@ a Minisforum UM790 Pro with Ubuntu Server 26.04 (2026-11-27).
      bridges:
        br0:
          interfaces: [enp1s0]
-         macaddress: "58:47:ca:71:4f:7d"
+         macaddress: "<MAC address of the port>"
          dhcp4: true
          dhcp6: true
          parameters:
@@ -169,8 +170,14 @@ a Minisforum UM790 Pro with Ubuntu Server 26.04 (2026-11-27).
            forward-delay: 0
    ```
 
-   Over SSH, apply it with a way back: schedule the old file's return
-   first, apply, reconnect, and only then cancel the return:
+   Over SSH, apply it with a way back: keep a copy of the old file, move
+   it away (two files configuring the port would conflict), check the new
+   one, schedule the old file's return, apply, reconnect, and only then
+   cancel the return:
+
+   ```bash
+   sudo cp /etc/netplan/00-installer-config.yaml /root/00-installer-config.yaml.bak && sudo mv /etc/netplan/00-installer-config.yaml /root/ && sudo netplan generate
+   ```
 
    ```bash
    sudo systemd-run --unit=netplan-rollback --on-active=180 sh -c "rm -f /etc/netplan/60-br0.yaml; install -m 600 /root/00-installer-config.yaml.bak /etc/netplan/00-installer-config.yaml; netplan apply"
@@ -186,7 +193,9 @@ a Minisforum UM790 Pro with Ubuntu Server 26.04 (2026-11-27).
 
 4. Install Incus and give it a btrfs storage pool named `default` on a
    logical volume of its own from the free space (instant snapshots, and
-   the VMs cannot fill the root filesystem). No Incus network is needed:
+   the VMs cannot fill the root filesystem). It takes 80% of the volume
+   group's free space (`sudo vgs` shows it), leaving room to grow the root
+   volume later. No Incus network is needed:
    the VMs use `br0`.
 
    ```bash
@@ -194,7 +203,7 @@ a Minisforum UM790 Pro with Ubuntu Server 26.04 (2026-11-27).
    ```
 
    ```bash
-   sudo lvcreate -L 700G -n incus ubuntu-vg && sudo incus storage create default btrfs source=/dev/ubuntu-vg/incus
+   sudo lvcreate -l 80%FREE -n incus ubuntu-vg && sudo incus storage create default btrfs source=/dev/ubuntu-vg/incus
    ```
 
    ```bash
@@ -209,6 +218,9 @@ a Minisforum UM790 Pro with Ubuntu Server 26.04 (2026-11-27).
    brew install incus && incus remote generate-certificate
    ```
 
+   The certificate is in `~/Library/Application Support/incus/` on macOS
+   and `~/.config/incus/` on Linux:
+
    ```bash
    scp ~/Library/Application\ Support/incus/client.crt <user>@<host address>:/tmp/client.crt
    ```
@@ -218,7 +230,7 @@ a Minisforum UM790 Pro with Ubuntu Server 26.04 (2026-11-27).
    ```
 
    ```bash
-   incus remote add um790 https://<host address>:8443 --accept-certificate
+   incus remote add <name> https://<host address>:8443 --accept-certificate
    ```
 
 6. Pick two domains and add them to your router's DNS rebinding

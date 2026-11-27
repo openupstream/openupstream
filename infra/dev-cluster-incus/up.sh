@@ -157,8 +157,13 @@ incus exec "$(instance "${SITES[0]}")" -- cat /etc/rancher/k3s/k3s.yaml |
 chmod 600 "$STATE/kubeconfig"
 
 # `wait --all` only waits for nodes that exist; the last one may not have
-# registered yet.
-three_nodes() { [[ $(KUBECONFIG=$STATE/kubeconfig kubectl get nodes -o name 2>/dev/null | wc -l) -eq 3 ]]; }
+# registered yet. Each VM's hostname is its node's name.
+three_nodes() {
+  local site
+  for site in "${SITES[@]}"; do
+    KUBECONFIG=$STATE/kubeconfig kubectl get node "$PREFIX-$site" -o name >/dev/null 2>&1 || return 1
+  done
+}
 until_ok "all three nodes to register" three_nodes
 KUBECONFIG=$STATE/kubeconfig kubectl wait --for=condition=Ready node --all --timeout=5m
 KUBECONFIG=$STATE/kubeconfig kubectl apply -f ../gvisor/runtimeclass.yaml >/dev/null
