@@ -52,10 +52,12 @@ check_sites() { # single-node | multi-node
       any(.spec.taints[]?; .key == $taint and .effect == "NoSchedule")] | map(tostring) | join(" ")') ||
     { echo "cannot read the nodes; is KUBECONFIG right?" >&2; return 1; }
   [[ -n $nodes ]] || { echo "the cluster has no nodes" >&2; return 1; }
-  problem() { problems+="- $1"$'\n'; }
+  # Bash functions are global: the prefix keeps this one from clashing
+  # in the scripts that source this file.
+  _check_sites_problem() { problems+="- $1"$'\n'; }
 
   for name in $(awk '$2 == "-" {print $1}' <<<"$nodes"); do
-    problem "node $name has no Site: kubectl label node $name $ZONE_LABEL=<Site id>"
+    _check_sites_problem "node $name has no Site: kubectl label node $name $ZONE_LABEL=<Site id>"
   done
   if [[ $1 == single-node ]]; then
     count=$(wc -l <<<"$nodes" | tr -d ' ')
@@ -66,7 +68,7 @@ check_sites() { # single-node | multi-node
     fi
     read -r name site is_compute is_default _ <<<"$nodes"
     [[ $is_compute == true && $is_default == true ]] ||
-      problem "node $name is not labelled as the compute and default Site: kubectl label node $name $COMPUTE_LABEL=true $DEFAULT_LABEL=true"
+      _check_sites_problem "node $name is not labelled as the compute and default Site: kubectl label node $name $COMPUTE_LABEL=true $DEFAULT_LABEL=true"
   fi
 
   # Per Site: its nodes, how many are compute, how many default.
@@ -76,12 +78,12 @@ check_sites() { # single-node | multi-node
     if ((ncompute > 0)); then
       compute+=" $site"
       ((ncompute == total)) ||
-        problem "only some nodes of $site are labelled $COMPUTE_LABEL=true: kubectl label nodes -l $ZONE_LABEL=$site $COMPUTE_LABEL=true (or $COMPUTE_LABEL- on all of them)"
+        _check_sites_problem "only some nodes of $site are labelled $COMPUTE_LABEL=true: kubectl label nodes -l $ZONE_LABEL=$site $COMPUTE_LABEL=true (or $COMPUTE_LABEL- on all of them)"
     fi
     if ((ndefault > 0)); then
       default+=" $site"
       ((ndefault == total)) ||
-        problem "only some nodes of $site are labelled $DEFAULT_LABEL=true: kubectl label nodes -l $ZONE_LABEL=$site $DEFAULT_LABEL=true (or $DEFAULT_LABEL- on all of them)"
+        _check_sites_problem "only some nodes of $site are labelled $DEFAULT_LABEL=true: kubectl label nodes -l $ZONE_LABEL=$site $DEFAULT_LABEL=true (or $DEFAULT_LABEL- on all of them)"
     fi
   done <<<"$(awk '$2 != "-" {n[$2]++; if ($3 == "true") c[$2]++; if ($4 == "true") d[$2]++}
     END {for (s in n) print s, n[s], c[s] + 0, d[s] + 0}' <<<"$nodes" | LC_ALL=C sort)"
@@ -90,29 +92,29 @@ check_sites() { # single-node | multi-node
 
   if [[ $1 == multi-node ]]; then
     [[ $(wc -w <<<"$compute") -ge 2 ]] ||
-      problem "multi-node needs at least two compute Sites, for a Database's standby (compute Sites: ${compute:-none}):\
- kubectl label nodes -l $ZONE_LABEL=<Site> $COMPUTE_LABEL=true, and kubectl taint nodes -l $ZONE_LABEL=<Site> $THIRD_SITE_TAINT-"
+      _check_sites_problem "multi-node needs at least two compute Sites, for a Database's standby (compute Sites: ${compute:-none}):\
+ kubectl label nodes -l $ZONE_LABEL=<Site> $COMPUTE_LABEL=true, and kubectl taint node <name> $THIRD_SITE_TAINT- on each of its nodes that has the taint"
     [[ $(wc -w <<<"$sites") -ge 3 ]] ||
-      problem "multi-node needs nodes in at least three Sites, for etcd's and Garage's quorum (Sites: $sites): join a node of another Site"
+      _check_sites_problem "multi-node needs nodes in at least three Sites, for etcd's and Garage's quorum (Sites: $sites): join a node of another Site"
     while read -r name site _ _ tainted; do
       [[ $site != - ]] || continue
       if has "$compute" "$site"; then
         [[ $tainted == false ]] ||
-          problem "node $name is in the compute Site $site but carries the taint $THIRD_SITE_TAINT: kubectl taint node $name $THIRD_SITE_TAINT-"
+          _check_sites_problem "node $name is in the compute Site $site but carries the taint $THIRD_SITE_TAINT: kubectl taint node $name $THIRD_SITE_TAINT-"
       elif [[ $tainted == false ]]; then
-        problem "node $name is in no compute Site but lacks the taint: kubectl taint node $name $THIRD_SITE_TAINT=true:NoSchedule"
+        _check_sites_problem "node $name is in no compute Site but lacks the taint: kubectl taint node $name $THIRD_SITE_TAINT=true:NoSchedule"
       fi
     done <<<"$nodes"
   fi
 
   case $(wc -w <<<"$default" | tr -d ' ') in
-    0) problem "no default Site: kubectl label nodes -l $ZONE_LABEL=${first:-<compute Site>} $DEFAULT_LABEL=true" ;;
+    0) _check_sites_problem "no default Site: kubectl label nodes -l $ZONE_LABEL=${first:-<compute Site>} $DEFAULT_LABEL=true" ;;
     1) ;;
-    *) problem "more than one default Site ($default): keep one, e.g. kubectl label nodes -l $ZONE_LABEL=${default##* } $DEFAULT_LABEL-" ;;
+    *) _check_sites_problem "more than one default Site ($default): keep one, e.g. kubectl label nodes -l $ZONE_LABEL=${default##* } $DEFAULT_LABEL-" ;;
   esac
   for site in $default; do
     has "$compute" "$site" ||
-      problem "the default Site $site is no compute Site: kubectl label nodes -l $ZONE_LABEL=$site $DEFAULT_LABEL-, then label a compute Site's nodes $DEFAULT_LABEL=true"
+      _check_sites_problem "the default Site $site is no compute Site: kubectl label nodes -l $ZONE_LABEL=$site $DEFAULT_LABEL-, then label a compute Site's nodes $DEFAULT_LABEL=true"
   done
 
   if [[ -n $problems ]]; then
