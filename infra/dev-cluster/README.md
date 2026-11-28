@@ -44,12 +44,10 @@ Nothing here names a Site: the nodes say which there are
 | label `topology.kubernetes.io/zone=<id>` | its Site's id, a label value |
 | label `openupstream.io/compute-site=true` | its Site is a compute Site: Databases, Services, Jobs, Traefik, TopoLVM and the platform's pods run there |
 | label `openupstream.io/default-site=true` | its Site is the default Home site, exactly one compute Site |
-| annotation `openupstream.io/site-description` | free text shown next to the id, e.g. `Home VM A` |
 | taint `openupstream.io/quorum-only=true:NoSchedule` | on every node outside the compute Sites: only etcd, Garage, Loki and the node agents run there |
 
-The node setup sets them, and nothing else does: the labels and the taint
-as k3s flags when the node joins (k3s applies them only at its first
-registration), the description with `kubectl annotate` right after.
+The node setup sets them, and nothing else does: as k3s flags when the
+node joins (k3s applies them only at its first registration).
 `../dev-cluster-hetzner/up.sh` and `../dev-cluster-incus/up.sh` do it for
 their three VMs, `k3s-single-node.sh` for its node:
 
@@ -58,9 +56,12 @@ k3s server ... --node-label topology.kubernetes.io/zone=home-a \
   --node-label openupstream.io/compute-site=true --node-label openupstream.io/default-site=true
 ```
 
-```bash
-kubectl annotate node <node> openupstream.io/site-description='Home VM A'
-```
+A Site id is permanent: node labels, every Database, Service and Job row
+and Garage's layout store it, so choose it once, claiming no more than
+you mean to keep (e.g. `site-1`, not a city). Its human name, e.g.
+`Minisforum at home`, is the Site's description: an admin sets and
+changes it anytime on the dashboard's "Sites & nodes" page (`/nodes`),
+and the control plane stores it.
 
 The install scripts never change a label: before recording the layout they
 check them (`check_sites` in `lib.sh`) and refuse, recording nothing, with
@@ -112,11 +113,12 @@ are the node's own disk (`DATABASE_VOLUMES=shared`, decision 124), so a
 Database's disk use shown by the API is Postgres's own figure. Usage is
 shown and metered as on any cluster.
 The node's
-Site is `SITE` (default `hetzner-fsn1`), labelled at join as the only
-compute Site and the default one; `SITE_DESCRIPTION` is optional.
+Site is `SITE` (default `site-1`), labelled at join as the only
+compute Site and the default one; name it on the "Sites & nodes" page
+afterwards.
 
 ```bash
-SITE=home SITE_DESCRIPTION='Home mini PC' ./k3s-single-node.sh root@192.168.1.50
+SITE=home ./k3s-single-node.sh root@192.168.1.50
 ```
 
 It installs our AppArmor profile for containers (`infra/apparmor`,

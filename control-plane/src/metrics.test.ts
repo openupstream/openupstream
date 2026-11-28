@@ -5,7 +5,7 @@ import { err, ok } from './result.js';
 import { sitesOf } from './sites.js';
 
 test('/metrics serves the Site checks as Prometheus text, without series when the nodes cannot be read', async () => {
-    const node = { name: 'x', site: undefined, compute: false, default: false, description: undefined, createdAt: '', quorumOnly: false, ready: true };
+    const node = { name: 'x', site: undefined, compute: false, default: false, createdAt: '', quorumOnly: false, ready: true };
     const seen = await createMetricsApp(async () => ok(sitesOf([node]))).request('/metrics');
     assert.equal(seen.status, 200);
     assert.equal(seen.headers.get('content-type'), 'text/plain; version=0.0.4');

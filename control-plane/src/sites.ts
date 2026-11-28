@@ -24,7 +24,6 @@ export interface NodeLabels {
     readonly site: string | undefined;
     readonly compute: boolean;
     readonly default: boolean;
-    readonly description: string | undefined;
     readonly createdAt: string;
     /** It carries the quorum-only taint with the effect NoSchedule. */
     readonly quorumOnly: boolean;
@@ -50,24 +49,26 @@ const byId = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 /**
  * The compute Sites the nodes describe. The default is the labelled Site;
  * when none or several are labelled (the install allows exactly one), the
- * first by id among them, or among all, so there always is one. A Site's
- * description is its oldest node's.
+ * first by id among them, or among all, so there always is one. The
+ * descriptions are not the nodes' (`described` adds them, ADR-0009).
  */
 export function sitesOf(nodes: readonly NodeLabels[], readAt = 0): Sites {
     const compute = nodes.filter((node): node is NodeLabels & { site: string } => node.compute && node.site !== undefined && node.site !== '');
     const ids = [...new Set(compute.map((node) => node.site))].sort(byId);
     const labelled = ids.filter((id) => compute.some((node) => node.site === id && node.default));
     const defaultSite = (labelled.length > 0 ? labelled : ids)[0];
-    const oldestFirst = [...compute].sort((a, b) => byId(a.createdAt, b.createdAt) || byId(a.name, b.name));
-    const description = (id: string) => oldestFirst.find((node) => node.site === id && node.description !== undefined && node.description.trim() !== '')?.description?.trim() ?? null;
     return {
-        list: ids.map((id) => ({ id, description: description(id), default: id === defaultSite })),
+        list: ids.map((id) => ({ id, description: null, default: id === defaultSite })),
         default: defaultSite,
         nodes: new Map(compute.map((node) => [node.name, node.site])),
         all: nodes,
         readAt,
     };
 }
+
+/** The Sites with what the installation's admins call them (ADR-0009). */
+export const described = <T extends SiteInfo>(sites: readonly T[], descriptions: ReadonlyMap<Site, string>): T[] =>
+    sites.map((site) => ({ ...site, description: descriptions.get(site.id) ?? null }));
 
 /** How long the node list is used before it is read again. */
 export const SITES_TTL_MS = 30_000;
@@ -276,19 +277,28 @@ export function siteProblems(nodes: readonly NodeLabels[]): SiteProblem[] {
     return [...byNode, ...bySite, ...cluster];
 }
 
-/** Every node, by Site (those without one first) and name, and what is wrong with the Site labels. */
-export function nodesReport(nodes: readonly NodeLabels[]): NodesReport {
+/**
+ * Every Site that has a node, compute or not, with its description; every
+ * node, by Site (those without one first) and name; and what is wrong with
+ * the Site labels.
+ */
+export function nodesReport(nodes: readonly NodeLabels[], descriptions: ReadonlyMap<Site, string>): NodesReport {
     const info = (node: NodeLabels): NodeInfo => ({
         name: node.name,
         site: node.site === undefined || node.site === '' ? null : node.site,
         compute: node.compute,
         default: node.default,
         quorumOnly: node.quorumOnly,
-        description: node.description === undefined || node.description.trim() === '' ? null : node.description.trim(),
         ready: node.ready,
         createdAt: node.createdAt,
     });
+    const defaultSite = sitesOf(nodes).default;
+    const ids = [...new Set(nodes.flatMap((node) => (node.site === undefined || node.site === '' ? [] : [node.site])))].sort(byId);
     return {
+        sites: described(
+            ids.map((id) => ({ id, description: null, default: id === defaultSite, compute: nodes.some((node) => node.site === id && node.compute) })),
+            descriptions,
+        ),
         nodes: nodes.map(info).sort((a, b) => byId(a.site ?? '', b.site ?? '') || byId(a.name, b.name)),
         problems: siteProblems(nodes),
     };

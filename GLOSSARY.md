@@ -129,6 +129,11 @@ _Avoid_: region, zone, datacenter
 **Home site**:
 The Site where a Database's primary runs when nothing has failed.
 
+**Site id**:
+A Site's permanent name in the system, e.g. `site-1` or `hetzner-fsn1`. Its
+description, e.g. "Falkenstein (Hetzner)", is what people call it and can
+change.
+
 **Default Site**:
 The compute Site that is the Home site of what is created without one.
 

@@ -1,11 +1,14 @@
 # Shared by up.sh, down.sh and snapshot.sh; sourced, not run.
 
-PREFIX=${PREFIX:-oup-home}
+PREFIX=${PREFIX:-oup}
 # The three VMs' Site ids, space-separated: two compute Sites, then the
-# third, quorum-only one. By default production's, so the platform's data
-# looks like production's; give the same SITES to every script of this
-# folder.
-read -r -a SITES <<<"${SITES:-hetzner-fsn1 ovh-lim netcup-nbg}"
+# third, quorum-only one. The defaults claim no location because a Site id
+# is permanent (it is stored in node labels, every Database, Service and
+# Job row and Garage's layout): set SITES to choose your own once, and give
+# the same SITES to every script of this folder. The human name (e.g.
+# "Minisforum at home") is the Site's description, changed anytime on the
+# dashboard's "Sites & nodes" page.
+read -r -a SITES <<<"${SITES:-site-1 site-2 site-3}"
 QUORUM_SITE=${SITES[2]:-}
 POOL=${POOL:-default}
 # `remote:` in front of every instance, pool and API path when the host is

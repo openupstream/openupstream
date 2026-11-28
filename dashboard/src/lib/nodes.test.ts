@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { NodeInfo, SiteProblem } from '@openupstream/sdk';
-import { isAdmin, nodeRole, problemsByNode } from './nodes';
+import { descriptionProblem, isAdmin, nodeRole, problemsByNode } from './nodes';
 
 test("an admin is a user whose madAuth claims' roles include admin", () => {
     assert.equal(isAdmin({ roles: ['support', 'admin'] }), true);
@@ -16,7 +16,6 @@ const node = (compute: boolean, quorumOnly: boolean): NodeInfo => ({
     compute,
     default: false,
     quorumOnly,
-    description: null,
     ready: true,
     createdAt: '2026-11-28T00:00:00Z',
 });
@@ -38,4 +37,10 @@ test('problems go to their node; those about a Site or the cluster stay general'
     assert.deepEqual(byNode.get('x')?.map((each) => each.kind), ['node-without-site', 'node-neither-compute-nor-quorum']);
     assert.equal(byNode.get('y'), undefined);
     assert.deepEqual(general.map((each) => each.kind), ['default-site-missing']);
+});
+
+test('a description may be empty (removes it) and at most 100 characters once trimmed', () => {
+    assert.equal(descriptionProblem(''), undefined);
+    assert.equal(descriptionProblem(`  ${'x'.repeat(100)}  `), undefined);
+    assert.equal(descriptionProblem('x'.repeat(101)), 'At most 100 characters.');
 });

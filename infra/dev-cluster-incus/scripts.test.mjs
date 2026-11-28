@@ -64,18 +64,18 @@ const run = (command, env = {}) => {
 };
 
 test('instance names carry the remote only when INCUS_REMOTE is set', () => {
-    const names = 'source ./lib.sh; instance hetzner-fsn1; volume_name ovh-lim';
-    assert.equal(run(names).stdout, 'oup-home-hetzner-fsn1\noup-home-ovh-lim-lvm\n');
-    assert.equal(run(names, { INCUS_REMOTE: 'mini' }).stdout, 'mini:oup-home-hetzner-fsn1\noup-home-ovh-lim-lvm\n');
+    const names = 'source ./lib.sh; instance site-1; volume_name site-2';
+    assert.equal(run(names).stdout, 'oup-site-1\noup-site-2-lvm\n');
+    assert.equal(run(names, { INCUS_REMOTE: 'mini' }).stdout, 'mini:oup-site-1\noup-site-2-lvm\n');
 });
 
 test('SITES chooses the VMs\' Site ids, the third one without a volume', () => {
     const sites = 'source ./lib.sh; echo "${SITES[*]} / $QUORUM_SITE"';
-    assert.equal(run(sites).stdout, 'hetzner-fsn1 ovh-lim netcup-nbg / netcup-nbg\n');
+    assert.equal(run(sites).stdout, 'site-1 site-2 site-3 / site-3\n');
     assert.equal(run(sites, { SITES: 'home-a home-b home-c' }).stdout, 'home-a home-b home-c / home-c\n');
     const { log } = run('YES=1 SKIP_DNS=1 ./down.sh', { SITES: 'home-a home-b home-c', STATE: mkdtempSync(join(tmpdir(), 'incus-state-')) });
-    assert.match(log, /incus delete --force oup-home-home-c/);
-    assert.match(log, /storage volume delete default oup-home-home-b-lvm/);
+    assert.match(log, /incus delete --force oup-home-c/);
+    assert.match(log, /storage volume delete default oup-home-b-lvm/);
     assert.doesNotMatch(log, /home-c-lvm/);
 });
 
@@ -110,19 +110,19 @@ test('snapshot.sh create stops all three VMs, snapshots them and the volumes, th
     assert.equal(status, 0, stderr);
     // The stops run in parallel, so in any order, but all before the snapshots.
     assert.deepEqual(calls(log).slice(0, 3).sort(), [
-        'stop oup-home-hetzner-fsn1',
-        'stop oup-home-netcup-nbg',
-        'stop oup-home-ovh-lim',
+        'stop oup-site-1',
+        'stop oup-site-2',
+        'stop oup-site-3',
     ]);
     assert.deepEqual(calls(log).slice(3), [
-        'snapshot create oup-home-hetzner-fsn1 before-upgrade',
-        'snapshot create oup-home-ovh-lim before-upgrade',
-        'snapshot create oup-home-netcup-nbg before-upgrade',
-        'storage volume snapshot create default oup-home-hetzner-fsn1-lvm before-upgrade',
-        'storage volume snapshot create default oup-home-ovh-lim-lvm before-upgrade',
-        'start oup-home-hetzner-fsn1',
-        'start oup-home-ovh-lim',
-        'start oup-home-netcup-nbg',
+        'snapshot create oup-site-1 before-upgrade',
+        'snapshot create oup-site-2 before-upgrade',
+        'snapshot create oup-site-3 before-upgrade',
+        'storage volume snapshot create default oup-site-1-lvm before-upgrade',
+        'storage volume snapshot create default oup-site-2-lvm before-upgrade',
+        'start oup-site-1',
+        'start oup-site-2',
+        'start oup-site-3',
     ]);
 });
 
@@ -134,7 +134,7 @@ test('snapshot.sh create hibernates the Databases before stopping and wakes them
     assert.ok(at('cnpg.io/hibernation=on') >= 0, log);
     assert.ok(at('cnpg.io/hibernation=on') < at('incus stop'), 'hibernated before the first stop');
     assert.ok(at('podRole=instance') < at('incus stop'), 'waited for Postgres to stop');
-    assert.ok(at('incus start oup-home-netcup-nbg') < at('get --raw /readyz'), 'waits for the API after starting');
+    assert.ok(at('incus start oup-site-3') < at('get --raw /readyz'), 'waits for the API after starting');
     assert.ok(at('get --raw /readyz') < at('cnpg.io/hibernation=off'), 'wakes after the API is back');
 });
 
@@ -169,29 +169,29 @@ test('snapshot.sh starts the VMs and wakes the Databases when a wait gives up', 
     const { status, stderr, log } = run('./snapshot.sh create x', { KUBECONFIG: kubeconfig, STATUS_STUB: 'Running' });
     assert.notEqual(status, 0);
     assert.match(stderr, /did not stop/);
-    assert.match(log, /incus start oup-home-netcup-nbg/);
+    assert.match(log, /incus start oup-site-3/);
     assert.match(log, /hibernation=off/);
 });
 
 test('snapshot.sh says nothing about recovering when restore stops before touching anything', () => {
-    const { stderr } = run('./snapshot.sh restore x', { MISSING_STUB: 'oup-home-hetzner-fsn1' });
+    const { stderr } = run('./snapshot.sh restore x', { MISSING_STUB: 'oup-site-1' });
     assert.doesNotMatch(stderr, /starting the VMs/);
 });
 
 test('snapshot.sh restore stops nothing when a VM or volume lacks the snapshot', () => {
     const { status, stderr, log } = run('./snapshot.sh restore before-upgrade', {
-        MISSING_STUB: 'oup-home-ovh-lim-lvm',
+        MISSING_STUB: 'oup-site-2-lvm',
     });
     assert.notEqual(status, 0);
-    assert.match(stderr, /volume oup-home-ovh-lim-lvm has no snapshot before-upgrade/);
+    assert.match(stderr, /volume oup-site-2-lvm has no snapshot before-upgrade/);
     assert.ok(!calls(log).some((call) => call.startsWith('stop') || call.includes('restore')), log);
 });
 
 test('snapshot.sh restore uses the remote for VMs and pool', () => {
     const { status, stderr, log } = run('./snapshot.sh restore x', { INCUS_REMOTE: 'mini' });
     assert.equal(status, 0, stderr);
-    assert.ok(calls(log).includes('snapshot restore mini:oup-home-netcup-nbg x'), log);
-    assert.ok(calls(log).includes('storage volume snapshot restore mini:default oup-home-hetzner-fsn1-lvm x'), log);
+    assert.ok(calls(log).includes('snapshot restore mini:oup-site-3 x'), log);
+    assert.ok(calls(log).includes('storage volume snapshot restore mini:default oup-site-1-lvm x'), log);
 });
 
 test('snapshot.sh refuses a name incus would not take, before stopping anything', () => {
@@ -205,9 +205,9 @@ test('snapshot.sh starts the VMs again when a snapshot fails', () => {
     assert.notEqual(status, 0);
     assert.match(stderr, /create failed; starting the VMs and waking the Databases again/);
     assert.deepEqual(calls(log).slice(-3), [
-        'start oup-home-hetzner-fsn1',
-        'start oup-home-ovh-lim',
-        'start oup-home-netcup-nbg',
+        'start oup-site-1',
+        'start oup-site-2',
+        'start oup-site-3',
     ]);
 });
 
@@ -221,7 +221,7 @@ test('down.sh refuses to run without the install\'s domains, before deleting any
 test('down.sh with SKIP_DNS deletes the VMs and the compute volumes', () => {
     const { status, stderr, log } = run('YES=1 SKIP_DNS=1 ./down.sh', { STATE: mkdtempSync(join(tmpdir(), 'dev-cluster-incus-state-')) });
     assert.equal(status, 0, stderr);
-    assert.ok(calls(log).includes('delete --force oup-home-netcup-nbg'), log);
-    assert.ok(calls(log).includes('storage volume delete default oup-home-ovh-lim-lvm'), log);
-    assert.ok(!calls(log).some((call) => call.includes('netcup-nbg-lvm')), log);
+    assert.ok(calls(log).includes('delete --force oup-site-3'), log);
+    assert.ok(calls(log).includes('storage volume delete default oup-site-2-lvm'), log);
+    assert.ok(!calls(log).some((call) => call.includes('site-3-lvm')), log);
 });

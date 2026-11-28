@@ -225,7 +225,7 @@ oup site deploy dist --bucket my-site
   now, not what is billed.
 - `oup sites`: the compute Sites, where Databases, Services and Jobs run:
   each Site's id (what `--site` takes), `default` for the one used when
-  `--site` is left out, and where it is as the installation describes it.
+  `--site` is left out, and its name, as the installation's admins set it.
   Which Sites exist is the installation's (ADR-0007).
 - `oup site deploy <dir> --bucket <name> [--keep] [--force]`: makes the
   Bucket mirror the directory (decision 88): changed files only, `index.html`

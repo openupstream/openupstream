@@ -9,6 +9,7 @@
     --on-accent: light-dark(#ffffff, #0d1220);
     --danger: light-dark(#b3261e, #ff8a80);
     --notice: light-dark(#fff4d6, #3a3113);
+    --success: light-dark(#e3f5ea, #13301f);
 }
 
 * {
@@ -131,6 +132,17 @@ small {
     padding: 0.625rem 0.75rem;
     border-radius: 6px;
     background: var(--notice);
+}
+
+/* All is well, e.g. no node needs attention. */
+.notice.success {
+    background: var(--success);
+}
+
+/* A form inside a table cell: one line, no top margin. */
+td form {
+    margin-top: 0;
+    flex-wrap: nowrap;
 }
 
 .projects {
