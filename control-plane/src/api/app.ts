@@ -93,7 +93,7 @@ import { byNewest, isRunOf, runManifest, runOf } from '../jobs/runs.js';
 import { isTimeZone, scheduleError } from '../jobs/schedule.js';
 import { type ControlPlaneKube, jobStateOf, serviceStateOf, stateOf } from '../kube.js';
 import { openLogStream, siteOf } from '../logs/stream.js';
-import { type ReadSites, type Sites, chooseSite, siteReader } from '../sites.js';
+import { type ReadSites, type Sites, chooseSite, nodesReport, siteReader } from '../sites.js';
 import type { PrometheusQuery } from '../prometheus.js';
 import { measure, projectPods, projectUsage, usageOf } from '../usage/live.js';
 import { type RegistryDeps, type ResolveError, parseImageReference, resolveDigest } from '../registry.js';
@@ -114,7 +114,7 @@ import {
     sealedRegistryAuth,
     updateService,
 } from '../services/store.js';
-import { type AccountTokenIdentity, type AuthError, type Authenticate, type Caller, type Identity, accountsOf } from './auth.js';
+import { ADMIN_ROLE, type AccountTokenIdentity, type AuthError, type Authenticate, type Caller, type Identity, accountsOf } from './auth.js';
 
 export interface ApiDeps {
     readonly pool: pg.Pool;
@@ -592,6 +592,24 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             return sitesDown(c);
         }
         return c.json(sites.value.list);
+    });
+
+    /**
+     * Every node and what is wrong with the Site labels (ADR-0008), for the
+     * installation's admins: madAuth's role `admin`, signed in (no API key,
+     * no Account token).
+     */
+    app.get('/v1/admin/nodes', async (c) => {
+        const caller = c.get('identity');
+        if (caller.kind === 'account-token' || caller.scopes !== undefined || !(caller.roles ?? []).includes(ADMIN_ROLE)) {
+            return c.json({ error: "only madAuth's admins may see the nodes, signed in" }, 403);
+        }
+        const sites = await readSites();
+        if (!sites.ok) {
+            deps.log?.({ msg: 'cannot read the Sites', error: sites.error });
+            return sitesDown(c);
+        }
+        return c.json(nodesReport(sites.value.all));
     });
 
     app.get('/v1/accounts', async (c) => {

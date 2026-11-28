@@ -64,7 +64,7 @@ singleBinary:
   # keeps one per node). Its etcd must not suffer, so Loki there is held to
   # the limit below.
   tolerations:
-    - {key: openupstream.io/third-site, operator: Exists, effect: NoSchedule}
+    - {key: openupstream.io/quorum-only, operator: Exists, effect: NoSchedule}
   topologySpreadConstraints:
     - maxSkew: 1
       topologyKey: topology.kubernetes.io/zone

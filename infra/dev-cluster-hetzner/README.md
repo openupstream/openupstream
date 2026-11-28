@@ -10,7 +10,7 @@ the compute Sites):
 | --- | --- | --- |
 | `oup-dev-hetzner-fsn1` | fsn1 | `hetzner-fsn1`, compute Site, the default Site |
 | `oup-dev-ovh-lim` | hel1 | `ovh-lim`, compute Site (Hetzner Cloud has no Limburg) |
-| `oup-dev-netcup-nbg` | nbg1 | `netcup-nbg`, third Site, tainted `openupstream.io/third-site` |
+| `oup-dev-netcup-nbg` | nbg1 | `netcup-nbg`, no compute Site, tainted `openupstream.io/quorum-only` |
 
 Three `cpx32` cost about €0.20 an hour together (gross, October 2026). The
 two compute VMs each get a 40 GB Hetzner Cloud Volume as the LVM volume
@@ -47,7 +47,7 @@ etcd and flannel `wireguard-native`, each node's public address as its
 ExternalIP (which `dns.sh` puts into DNS), then the RuntimeClass `gvisor`.
 The compute nodes join with the label `openupstream.io/compute-site=true`,
 the first also `openupstream.io/default-site=true`, the third with the
-taint `openupstream.io/third-site`, and each node without a description
+taint `openupstream.io/quorum-only`, and each node without a description
 gets `Hetzner Cloud <location>`. This is the only place the nodes are
 labelled; the install only checks them
 ([ADR-0007](../../docs/adr/0007-sites-from-node-labels.md),

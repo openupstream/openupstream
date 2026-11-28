@@ -1,4 +1,4 @@
-/** Nodes for the operators' tests: two compute nodes and the third Site's, one with an IPv6 address. */
+/** Nodes for the operators' tests: two compute nodes and a quorum-only one, one with an IPv6 address. */
 import type { ListNodes, NodeAddresses, NodeBlocks } from '../nodes.js';
 import { ok } from '../result.js';
 

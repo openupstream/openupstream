@@ -16,6 +16,7 @@ import {
     type JobRun,
     type LogEntry,
     type Member,
+    type NodesReport,
     type Project,
     type ProjectUsage,
     type Route,
@@ -137,9 +138,9 @@ const nodeSites = new Map([
 ]);
 /** The nodes' Site labels (ADR-0007): both compute nodes, the first the default Site; `nodesDown` makes listing them fail. */
 const nodeLabels: NodeLabels[] = [
-    { name: 'node-fsn', site: 'hetzner-fsn1', compute: true, default: true, description: 'Falkenstein (Hetzner)', createdAt: '2026-10-01T00:00:00Z' },
-    { name: 'node-lim', site: 'ovh-lim', compute: true, default: false, description: undefined, createdAt: '2026-10-01T00:00:00Z' },
-    { name: 'node-nbg', site: 'netcup-nbg', compute: false, default: false, description: undefined, createdAt: '2026-10-01T00:00:00Z' },
+    { name: 'node-fsn', site: 'hetzner-fsn1', compute: true, default: true, description: 'Falkenstein (Hetzner)', createdAt: '2026-10-01T00:00:00Z', quorumOnly: false, ready: true },
+    { name: 'node-lim', site: 'ovh-lim', compute: true, default: false, description: undefined, createdAt: '2026-10-01T00:00:00Z', quorumOnly: false, ready: true },
+    { name: 'node-nbg', site: 'netcup-nbg', compute: false, default: false, description: undefined, createdAt: '2026-10-01T00:00:00Z', quorumOnly: true, ready: true },
 ];
 let nodesDown = false;
 const volumeNodes = new Map<string, string[]>();
@@ -223,9 +224,9 @@ const kube: ControlPlaneKube = {
 /** A session token as madAuth issues it. */
 const token = (
     subject: string,
-    overrides: { key?: CryptoKey; issuer?: string; typ?: string; expires?: string; email?: string } = {},
+    overrides: { key?: CryptoKey; issuer?: string; typ?: string; expires?: string; email?: string; roles?: string[] } = {},
 ) =>
-    new SignJWT({ email: overrides.email ?? `${subject}@example.test` })
+    new SignJWT({ email: overrides.email ?? `${subject}@example.test`, ...(overrides.roles === undefined ? {} : { claims: { roles: overrides.roles } }) })
         .setProtectedHeader({ alg: 'ES256', typ: overrides.typ ?? SESSION_TOKEN_TYPE })
         .setSubject(subject)
         .setIssuer(overrides.issuer ?? ISSUER)
@@ -1138,6 +1139,45 @@ describe('Databases', () => {
             assert.equal((await call('DELETE', `/v1/projects/${projectId}/databases/${created.id}`, 'alice')).status, 202);
         } finally {
             nodeLabels.splice(0, 2, fsn, lim);
+        }
+    });
+
+    test("the nodes and the Site problems are for madAuth's admins only, signed in", async () => {
+        const asAdmin = async (roles: string[]) =>
+            api.request('/v1/admin/nodes', { headers: { authorization: `Bearer ${await token('alice', { roles })}` } });
+        assert.equal((await call('GET', '/v1/admin/nodes', 'alice')).status, 403);
+        assert.equal((await asAdmin(['support'])).status, 403);
+        const [fsn] = nodeLabels;
+        assert.ok(fsn !== undefined);
+        nodeLabels.push({ ...fsn, name: 'node-new', site: undefined, compute: false, default: false, description: undefined, ready: false });
+        try {
+            const response = await asAdmin(['admin']);
+            assert.equal(response.status, 200);
+            const report = (await response.json()) as NodesReport;
+            assert.deepEqual(
+                report.nodes.map((node) => [node.name, node.site, node.compute, node.quorumOnly, node.ready]),
+                [
+                    ['node-new', null, false, false, false],
+                    ['node-fsn', 'hetzner-fsn1', true, false, true],
+                    ['node-nbg', 'netcup-nbg', false, true, true],
+                    ['node-lim', 'ovh-lim', true, false, true],
+                ],
+            );
+            assert.deepEqual(
+                report.problems.map((problem) => [problem.kind, problem.node]),
+                [
+                    ['node-without-site', 'node-new'],
+                    ['node-neither-compute-nor-quorum', 'node-new'],
+                ],
+            );
+        } finally {
+            nodeLabels.pop();
+        }
+        nodesDown = true;
+        try {
+            assert.equal((await asAdmin(['admin'])).status, 503);
+        } finally {
+            nodesDown = false;
         }
     });
 

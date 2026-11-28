@@ -43,7 +43,7 @@ MARK=openupstream.io/snapshot-hibernated
 
 volumes() { # the compute Sites' block volumes
   for site in "${SITES[@]}"; do
-    [[ $site == "$THIRD_SITE" ]] || volume_name "$site"
+    [[ $site == "$QUORUM_SITE" ]] || volume_name "$site"
   done
 }
 no_postgres() {

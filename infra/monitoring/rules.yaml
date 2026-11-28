@@ -129,33 +129,89 @@ spec:
             summary: Traefik pod {{ $labels.pod }} does not answer
             description: Its Site serves no traffic until the DNS health check drops it.
     - name: sites
-      # The Sites are what the nodes' labels say, set when a node joins
-      # (ADR-0007); the install checks them once, these while the cluster
-      # runs, so a node added or relabelled later is caught too.
+      # The nodes' Site labels (ADR-0007, ADR-0008), checked by the control
+      # plane while the cluster runs, with the rules the install's
+      # check_sites applies once: one alert per rule. The control plane
+      # serves openupstream_site_problem{problem, node, site} from both
+      # replicas, so each takes the max. The dashboard's "Sites & nodes"
+      # page shows the same problems with the command that fixes each.
       rules:
-        - alert: SiteNodeWithoutRole
-          # A node in a Site but neither a compute node nor tainted as a
-          # node of another Site: customers' pods never go there, and the
-          # platform's pods that do not tolerate the taint may.
-          expr: |
-            kube_node_labels{label_topology_kubernetes_io_zone!=""}
-              unless on (node) kube_node_labels{label_openupstream_io_compute_site="true"}
-              unless on (node) kube_node_spec_taint{key="openupstream.io/third-site", effect="NoSchedule"}
+        - alert: NodeWithoutSite
+          expr: max by (node, site) (openupstream_site_problem{problem="node-without-site"}) > 0
           for: 10m
           labels: {severity: warning}
           annotations:
-            summary: Node {{ $labels.node }} in Site {{ $labels.label_topology_kubernetes_io_zone }} has neither the compute label nor the third-site taint
-            description: "Label it (kubectl label node {{ $labels.node }} openupstream.io/compute-site=true) or taint it (kubectl taint node {{ $labels.node }} openupstream.io/third-site=true:NoSchedule)."
-        - alert: DefaultSiteNotOne
-          # Exactly one compute Site is the default Home site. Without one,
-          # the control plane takes the first compute Site by id; with
-          # several, the first of those.
-          expr: |
-            (count(count by (label_topology_kubernetes_io_zone) (
-              kube_node_labels{label_openupstream_io_compute_site="true", label_openupstream_io_default_site="true"}
-            )) or vector(0)) != 1
+            summary: "Node {{ $labels.node }} has no Site"
+            description: "It gets no Databases, Services or Jobs. kubectl label node {{ $labels.node }} topology.kubernetes.io/zone=<Site id>, and the compute label or the quorum-only taint (docs/self-hosting.md)."
+        - alert: NodeNeitherComputeNorQuorum
+          expr: max by (node, site) (openupstream_site_problem{problem="node-neither-compute-nor-quorum"}) > 0
           for: 10m
           labels: {severity: warning}
           annotations:
-            summary: "{{ $value }} compute Sites are labelled the default Site, not one"
-            description: New Databases, Services and Jobs without a Home site go to the first by id. Label the nodes of exactly one compute Site openupstream.io/default-site=true.
+            summary: "Node {{ $labels.node }} is neither labelled compute nor tainted quorum-only"
+            description: "Databases, Services and Jobs never run there, other pods may. kubectl label node {{ $labels.node }} openupstream.io/compute-site=true, or kubectl taint node {{ $labels.node }} openupstream.io/quorum-only=true:NoSchedule."
+        - alert: NodeComputeAndQuorum
+          expr: max by (node, site) (openupstream_site_problem{problem="node-compute-and-quorum"}) > 0
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "Node {{ $labels.node }} is labelled compute but tainted quorum-only"
+            description: "Nothing of a compute Site runs there. kubectl taint node {{ $labels.node }} openupstream.io/quorum-only-, or kubectl label node {{ $labels.node }} openupstream.io/compute-site-."
+        - alert: SiteMixedCompute
+          expr: max by (site) (openupstream_site_problem{problem="site-mixed-compute"}) > 0
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "Only some nodes of Site {{ $labels.site }} are labelled compute"
+            description: "kubectl label nodes -l topology.kubernetes.io/zone={{ $labels.site }} openupstream.io/compute-site=true, or openupstream.io/compute-site- on all of them."
+        - alert: SiteMixedDefault
+          expr: max by (site) (openupstream_site_problem{problem="site-mixed-default"}) > 0
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "Only some nodes of Site {{ $labels.site }} are labelled the default Site"
+            description: "kubectl label nodes -l topology.kubernetes.io/zone={{ $labels.site }} openupstream.io/default-site=true, or openupstream.io/default-site- on all of them."
+        - alert: DefaultSiteMissing
+          expr: max(openupstream_site_problem{problem="default-site-missing"}) > 0
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "No Site is labelled the default Site"
+            description: "New Databases, Services and Jobs without a Home site go to the first compute Site by id. kubectl label nodes -l topology.kubernetes.io/zone=<compute Site> openupstream.io/default-site=true."
+        - alert: DefaultSiteNotUnique
+          expr: max(openupstream_site_problem{problem="default-site-not-unique"}) > 0
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "More than one Site is labelled the default Site"
+            description: "The first by id is used. Keep one: kubectl label nodes -l topology.kubernetes.io/zone=<Site> openupstream.io/default-site- on the others."
+        - alert: DefaultSiteNotCompute
+          expr: max by (site) (openupstream_site_problem{problem="default-site-not-compute"}) > 0
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "The default Site {{ $labels.site }} is no compute Site"
+            description: "kubectl label nodes -l topology.kubernetes.io/zone={{ $labels.site }} openupstream.io/default-site-, then label a compute Site's nodes openupstream.io/default-site=true."
+        - alert: ComputeSitesBelowTwo
+          expr: max(openupstream_site_problem{problem="compute-sites-below-two"}) > 0
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "Fewer than two compute Sites"
+            description: "New Databases get no standby in another Site. Label the nodes of another Site openupstream.io/compute-site=true and remove the quorum-only taint from them."
+        - alert: SitesBelowThree
+          expr: max(openupstream_site_problem{problem="sites-below-three"}) > 0
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "The nodes are in fewer than three Sites"
+            description: "etcd and Garage cannot keep their quorum through the loss of a Site. Join a node of another Site."
+        - alert: SiteChecksAbsent
+          # No replica of the control plane reports the Site checks: it is
+          # down or cannot list the nodes, so the alerts above cannot fire.
+          expr: absent(max(openupstream_site_nodes))
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: The control plane reports no Site checks
+            description: "Check that the control plane runs and may list the nodes (kubectl auth can-i list nodes --as=system:serviceaccount:project-00000000-0000-4000-8000-000000000002:control-plane)."

@@ -218,7 +218,7 @@ spec:
               labelSelector:
                 matchLabels: {app.kubernetes.io/name: garage}
       tolerations:
-        - {key: openupstream.io/third-site, operator: Exists, effect: NoSchedule}
+        - {key: openupstream.io/quorum-only, operator: Exists, effect: NoSchedule}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

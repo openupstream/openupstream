@@ -233,6 +233,11 @@ export const ZONE_LABEL = 'topology.kubernetes.io/zone';
 export const COMPUTE_SITE_LABEL = 'openupstream.io/compute-site';
 /** `true` on the nodes of the one compute Site that is the default Home site. */
 export const DEFAULT_SITE_LABEL = 'openupstream.io/default-site';
+/**
+ * The taint (`true`, `NoSchedule`) on every node outside the compute Sites:
+ * only etcd, Garage, Loki and the node agents tolerate it.
+ */
+export const QUORUM_ONLY_TAINT = 'openupstream.io/quorum-only';
 /** Free text on a Site's nodes saying where it is, e.g. `Falkenstein (Hetzner)`. */
 export const SITE_DESCRIPTION_ANNOTATION = 'openupstream.io/site-description';
 

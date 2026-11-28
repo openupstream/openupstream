@@ -26,6 +26,61 @@ export interface SiteInfo {
     default: boolean;
 }
 
+/**
+ * What can be wrong with the nodes' Site labels (ADR-0008): the rules the
+ * install checks, which the control plane checks again while the cluster
+ * runs. Each has an alert of its own.
+ */
+export const SITE_PROBLEMS = [
+    'node-without-site',
+    'node-neither-compute-nor-quorum',
+    'node-compute-and-quorum',
+    'site-mixed-compute',
+    'site-mixed-default',
+    'default-site-missing',
+    'default-site-not-unique',
+    'default-site-not-compute',
+    'compute-sites-below-two',
+    'sites-below-three',
+] as const;
+export type SiteProblemKind = (typeof SITE_PROBLEMS)[number];
+
+/** One thing wrong with the Site labels, and the command that fixes it. */
+export interface SiteProblem {
+    kind: SiteProblemKind;
+    /** The node it is about; null when it is about a Site or the whole cluster. */
+    node: string | null;
+    /** The Site it is about; null when it is about the whole cluster or a node without one. */
+    site: Site | null;
+    /** What is wrong, in a sentence. */
+    message: string;
+    /** The `kubectl` command that fixes it; `<…>` marks what the operator chooses. */
+    fix: string;
+}
+
+/** A node of the cluster as its labels place it (`GET /v1/admin/nodes`). */
+export interface NodeInfo {
+    name: string;
+    /** Its Site (its zone label); null when it has none. */
+    site: Site | null;
+    /** Labelled a node of a compute Site. */
+    compute: boolean;
+    /** Labelled a node of the default Site. */
+    default: boolean;
+    /** Tainted quorum-only: only etcd, Garage, Loki and the node agents run there. */
+    quorumOnly: boolean;
+    description: string | null;
+    /** Kubernetes reports it Ready. */
+    ready: boolean;
+    createdAt: Timestamp;
+}
+
+/** Every node and what is wrong with the Site labels, for the installation's admins. */
+export interface NodesReport {
+    nodes: NodeInfo[];
+    problems: SiteProblem[];
+}
+
 /** The customer: pays, receives one invoice, owns Projects. */
 export interface Account {
     id: Id;

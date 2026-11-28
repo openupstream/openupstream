@@ -25,7 +25,7 @@ COMPUTE_LABEL=openupstream.io/compute-site
 # The nodes of the default Home site, one compute Site.
 DEFAULT_LABEL=openupstream.io/default-site
 # Every node outside the compute Sites carries it, as NoSchedule.
-THIRD_SITE_TAINT=openupstream.io/third-site
+QUORUM_ONLY_TAINT=openupstream.io/quorum-only
 
 # Whether a word is in a space-separated list (Site ids have no spaces).
 has() { [[ " $1 " == *" $2 "* ]]; } # list, word
@@ -38,7 +38,7 @@ valid_site_id() { [[ $1 =~ ^[A-Za-z0-9]([A-Za-z0-9_.-]{0,61}[A-Za-z0-9])?$ ]]; }
 # the compute and the default label; exactly one default Site, a compute
 # Site. multi-node also needs at least two compute Sites (a Database's
 # standby goes to another one), at least three Sites in all (etcd's and
-# Garage's quorum), the taint THIRD_SITE_TAINT=true:NoSchedule on every
+# Garage's quorum), the taint QUORUM_ONLY_TAINT=true:NoSchedule on every
 # node outside the compute Sites and on none inside. single-node needs
 # exactly one node, labelled compute and default. Each problem is printed
 # with the command that fixes it; prints the Sites when all is well.
@@ -46,7 +46,7 @@ check_sites() { # single-node | multi-node
   local nodes problems= sites= compute= default= unzoned name site is_compute is_default tainted total ncompute ndefault count first
   # One line per node: name, Site (- for none), compute, default, tainted.
   nodes=$(kubectl get nodes -o json | jq -r --arg zone "$ZONE_LABEL" --arg compute "$COMPUTE_LABEL" \
-    --arg default "$DEFAULT_LABEL" --arg taint "$THIRD_SITE_TAINT" \
+    --arg default "$DEFAULT_LABEL" --arg taint "$QUORUM_ONLY_TAINT" \
     '.items[] | [.metadata.name, (.metadata.labels[$zone] // "-"),
       (.metadata.labels[$compute] == "true"), (.metadata.labels[$default] == "true"),
       any(.spec.taints[]?; .key == $taint and .effect == "NoSchedule")] | map(tostring) | join(" ")') ||
@@ -93,16 +93,16 @@ check_sites() { # single-node | multi-node
   if [[ $1 == multi-node ]]; then
     [[ $(wc -w <<<"$compute") -ge 2 ]] ||
       _check_sites_problem "multi-node needs at least two compute Sites, for a Database's standby (compute Sites: ${compute:-none}):\
- kubectl label nodes -l $ZONE_LABEL=<Site> $COMPUTE_LABEL=true, and kubectl taint node <name> $THIRD_SITE_TAINT- on each of its nodes that has the taint"
+ kubectl label nodes -l $ZONE_LABEL=<Site> $COMPUTE_LABEL=true, and kubectl taint node <name> $QUORUM_ONLY_TAINT- on each of its nodes that has the taint"
     [[ $(wc -w <<<"$sites") -ge 3 ]] ||
       _check_sites_problem "multi-node needs nodes in at least three Sites, for etcd's and Garage's quorum (Sites: $sites): join a node of another Site"
     while read -r name site _ _ tainted; do
       [[ $site != - ]] || continue
       if has "$compute" "$site"; then
         [[ $tainted == false ]] ||
-          _check_sites_problem "node $name is in the compute Site $site but carries the taint $THIRD_SITE_TAINT: kubectl taint node $name $THIRD_SITE_TAINT-"
+          _check_sites_problem "node $name is in the compute Site $site but carries the taint $QUORUM_ONLY_TAINT: kubectl taint node $name $QUORUM_ONLY_TAINT-"
       elif [[ $tainted == false ]]; then
-        _check_sites_problem "node $name is in no compute Site but lacks the taint: kubectl taint node $name $THIRD_SITE_TAINT=true:NoSchedule"
+        _check_sites_problem "node $name is in no compute Site but lacks the taint: kubectl taint node $name $QUORUM_ONLY_TAINT=true:NoSchedule"
       fi
     done <<<"$nodes"
   fi

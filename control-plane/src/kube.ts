@@ -11,6 +11,7 @@ import { ApiException, type KubeConfig, KubernetesObjectApi, Log, PatchStrategy 
 import {
     COMPUTE_SITE_LABEL,
     DEFAULT_SITE_LABEL,
+    QUORUM_ONLY_TAINT,
     SITE_DESCRIPTION_ANNOTATION,
     SPEC_VERSION_ANNOTATION,
     ZONE_LABEL,
@@ -225,19 +226,28 @@ export const quantityIn = (quantity: string | undefined, unit: 'Mi' | 'Gi'): num
     return bytes === undefined ? undefined : bytes / (UNITS[unit] as number);
 };
 
-/** A node's Site labels; the client may parse its creation time into a Date. */
-export const nodeLabels = (metadata: {
-    readonly name: string;
-    readonly labels?: Record<string, string>;
-    readonly annotations?: Record<string, string>;
-    readonly creationTimestamp?: Date | string;
-}): NodeLabels => ({
+/** What the control plane reads of a node; the client may parse its creation time into a Date. */
+export interface KubeNode {
+    readonly metadata: {
+        readonly name: string;
+        readonly labels?: Record<string, string>;
+        readonly annotations?: Record<string, string>;
+        readonly creationTimestamp?: Date | string;
+    };
+    readonly spec?: { readonly taints?: readonly { readonly key: string; readonly effect: string }[] };
+    readonly status?: { readonly conditions?: readonly { readonly type: string; readonly status: string }[] };
+}
+
+/** A node's Site labels, its quorum-only taint and whether it is Ready. */
+export const nodeLabels = ({ metadata, spec, status }: KubeNode): NodeLabels => ({
     name: metadata.name,
     site: metadata.labels?.[ZONE_LABEL],
     compute: metadata.labels?.[COMPUTE_SITE_LABEL] === 'true',
     default: metadata.labels?.[DEFAULT_SITE_LABEL] === 'true',
     description: metadata.annotations?.[SITE_DESCRIPTION_ANNOTATION],
     createdAt: metadata.creationTimestamp instanceof Date ? metadata.creationTimestamp.toISOString() : (metadata.creationTimestamp ?? ''),
+    quorumOnly: (spec?.taints ?? []).some((taint) => taint.key === QUORUM_ONLY_TAINT && taint.effect === 'NoSchedule'),
+    ready: (status?.conditions ?? []).some((condition) => condition.type === 'Ready' && condition.status === 'True'),
 });
 
 /** TopoLVM's topology key: one CSIStorageCapacity per node. */
@@ -588,12 +598,14 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
                 apiVersion: string;
                 kind: string;
                 metadata: { name: string; labels?: Record<string, string>; annotations?: Record<string, string>; creationTimestamp?: Date };
+                spec?: NonNullable<KubeNode['spec']>;
+                status?: NonNullable<KubeNode['status']>;
             };
             const result = await within(api.list<Node>('v1', 'Node'), timeoutMs);
             if (!result.ok) {
                 return err(result.error.message);
             }
-            return ok(result.value.items.map((node) => nodeLabels(node.metadata)));
+            return ok(result.value.items.map(nodeLabels));
         },
         podLog: async (namespace, pod, container, options, signal) => {
             const sink = new PassThrough();

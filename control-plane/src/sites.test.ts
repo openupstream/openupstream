@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { type NodeLabels, chooseSite, siteReader, sitesOf } from './sites.js';
+import { type NodeLabels, chooseSite, nodesReport, siteMetrics, siteProblems, siteReader, sitesOf } from './sites.js';
 import { err, ok } from './result.js';
 
 const node = (name: string, site: string | undefined, extra: Partial<NodeLabels> = {}): NodeLabels => ({
@@ -10,6 +10,8 @@ const node = (name: string, site: string | undefined, extra: Partial<NodeLabels>
     default: false,
     description: undefined,
     createdAt: '2026-11-01T00:00:00Z',
+    quorumOnly: false,
+    ready: true,
     ...extra,
 });
 
@@ -80,4 +82,74 @@ test('the node list is read again after the TTL; a failed read is logged and kee
 test('without any list read, a failure is returned', async () => {
     const read = siteReader(async () => err('forbidden'));
     assert.deepEqual(await read(), err('forbidden'));
+});
+
+/** Two compute Sites, the first the default, and a quorum-only one: all well. */
+const healthy = [
+    node('a1', 'home-a', { default: true }),
+    node('a2', 'home-a', { default: true }),
+    node('b1', 'home-b'),
+    node('q1', 'quorum', { compute: false, quorumOnly: true }),
+];
+const kinds = (nodes: NodeLabels[]) => siteProblems(nodes).map((problem) => [problem.kind, problem.node ?? problem.site]);
+
+test('a layout as the install wants it has no problems, nor has a single node labelled compute and default', () => {
+    assert.deepEqual(siteProblems(healthy), []);
+    assert.deepEqual(siteProblems([node('only', 'home', { default: true })]), []);
+});
+
+test('a node is caught without a Site, without a role, or with both roles', () => {
+    assert.deepEqual(kinds([...healthy, node('x', undefined, { compute: false })]), [
+        ['node-without-site', 'x'],
+        ['node-neither-compute-nor-quorum', 'x'],
+    ]);
+    assert.deepEqual(kinds([...healthy, node('q2', 'quorum', { compute: false })]), [['node-neither-compute-nor-quorum', 'q2']]);
+    assert.deepEqual(kinds([...healthy, node('b2', 'home-b', { quorumOnly: true })]), [['node-compute-and-quorum', 'b2']]);
+});
+
+test('the nodes of a Site must agree on the compute and the default label', () => {
+    assert.deepEqual(kinds([...healthy, node('q2', 'quorum')]), [['site-mixed-compute', 'quorum']]);
+    assert.deepEqual(kinds([...healthy, node('a3', 'home-a')]), [['site-mixed-default', 'home-a']]);
+});
+
+test('exactly one default Site, and a compute one', () => {
+    const undefaulted = healthy.map((each) => ({ ...each, default: false }));
+    const missing = siteProblems(undefaulted);
+    assert.deepEqual(missing.map((problem) => problem.kind), ['default-site-missing']);
+    assert.match(missing[0]?.fix ?? '', /zone=home-a openupstream\.io\/default-site=true$/);
+    assert.deepEqual(kinds(healthy.map((each) => (each.site === 'home-b' ? { ...each, default: true } : each))), [['default-site-not-unique', null]]);
+    assert.deepEqual(kinds([...undefaulted.slice(0, 3), node('q1', 'quorum', { compute: false, quorumOnly: true, default: true })]), [
+        ['default-site-not-compute', 'quorum'],
+    ]);
+});
+
+test('more than one node needs two compute Sites and three Sites', () => {
+    assert.deepEqual(kinds(healthy.filter((each) => each.site !== 'home-b')), [
+        ['compute-sites-below-two', null],
+        ['sites-below-three', null],
+    ]);
+    assert.deepEqual(kinds([node('a1', 'home-a', { default: true }), node('b1', 'home-b')]), [['sites-below-three', null]]);
+});
+
+test('the report lists every node by Site, those without one first', () => {
+    const report = nodesReport([node('b1', 'home-b', { description: ' B ' }), node('x', undefined), node('a1', 'home-a', { default: true })]);
+    assert.deepEqual(
+        report.nodes.map((each) => [each.name, each.site, each.description]),
+        [
+            ['x', null, null],
+            ['a1', 'home-a', null],
+            ['b1', 'home-b', 'B'],
+        ],
+    );
+    assert.deepEqual(report.problems.map((problem) => problem.kind), ['node-without-site', 'sites-below-three']);
+});
+
+test('the metrics hold one series per problem and the node count; nothing without a node list', () => {
+    const text = siteMetrics([...healthy, node('x', undefined, { compute: false, quorumOnly: true })]);
+    assert.match(text, /^openupstream_site_problem\{problem="node-without-site",node="x",site=""\} 1$/m);
+    assert.match(text, /^openupstream_site_nodes 5$/m);
+    assert.equal(text.match(/^openupstream_site_problem\{/gm)?.length, 1);
+    const blind = siteMetrics(undefined);
+    assert.doesNotMatch(blind, /^openupstream_site_(problem|nodes) /m);
+    assert.match(blind, /# TYPE openupstream_site_nodes gauge/);
 });

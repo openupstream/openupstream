@@ -7,9 +7,10 @@
  * (src/cleanup.ts) and renders the Projects' Secrets, whose key only it
  * holds (src/secrets/render.ts).
  *
- * Two HTTP servers: the public API on PORT (src/api) and the internal API
- * for the operators on INTERNAL_PORT (src/internal); with WAITLIST_URL a
- * third, the waitlist page on WAITLIST_PORT (src/waitlist). At startup it applies
+ * Three HTTP servers: the public API on PORT (src/api) and the internal API
+ * for the operators on INTERNAL_PORT (src/internal), the Site checks for
+ * Prometheus on METRICS_PORT (src/metrics); with WAITLIST_URL a
+ * fourth, the waitlist page on WAITLIST_PORT (src/waitlist). At startup it applies
  * pending migrations and seeds the platform's own rows. Settings:
  * src/config.ts.
  */
@@ -39,6 +40,7 @@ import { tokenReviewAuthenticator } from './internal/auth.js';
 import { createInternalServer } from './internal/server.js';
 import { controlPlaneKube } from './kube.js';
 import { siteReader } from './sites.js';
+import { createMetricsApp } from './metrics.js';
 import { platformRowsMissing, seedPlatform } from './platform.js';
 import { type Message, sesClient, sesSend } from './mail.js';
 import { registryDeps } from './registry.js';
@@ -209,6 +211,7 @@ async function main(): Promise<void> {
         log,
     });
     const server = serve({ fetch: api.fetch, port: config.value.port });
+    const metrics = serve({ fetch: createMetricsApp(sites).fetch, port: config.value.metricsPort });
 
     const { waitlist } = config.value;
     const waitlistServer =
@@ -235,6 +238,7 @@ async function main(): Promise<void> {
         msg: 'control plane listening',
         port: config.value.port,
         internalPort: config.value.internalPort,
+        metricsPort: config.value.metricsPort,
         allowedCallers: [...config.value.allowedCallers],
         billingCallers: [...config.value.billingCallers],
         newAccountHolds: config.value.newAccountHolds,
@@ -248,6 +252,7 @@ async function main(): Promise<void> {
         stop.abort();
         server.close();
         internal.close();
+        metrics.close();
         waitlistServer?.close();
     });
     const cleanupDeps = { pool, kube, backups: s3BackupStore(backup), storage, retention: backup.retention, log };
