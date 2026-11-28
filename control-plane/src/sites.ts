@@ -41,6 +41,8 @@ export interface Sites {
     readonly nodes: ReadonlyMap<string, Site>;
     /** Every node as it was read, compute or not. */
     readonly all: readonly NodeLabels[];
+    /** When the nodes were read, in ms since the epoch; a failed read keeps the last time. */
+    readonly readAt: number;
 }
 
 const byId = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -51,7 +53,7 @@ const byId = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
  * first by id among them, or among all, so there always is one. A Site's
  * description is its oldest node's.
  */
-export function sitesOf(nodes: readonly NodeLabels[]): Sites {
+export function sitesOf(nodes: readonly NodeLabels[], readAt = 0): Sites {
     const compute = nodes.filter((node): node is NodeLabels & { site: string } => node.compute && node.site !== undefined && node.site !== '');
     const ids = [...new Set(compute.map((node) => node.site))].sort(byId);
     const labelled = ids.filter((id) => compute.some((node) => node.site === id && node.default));
@@ -63,6 +65,7 @@ export function sitesOf(nodes: readonly NodeLabels[]): Sites {
         default: defaultSite,
         nodes: new Map(compute.map((node) => [node.name, node.site])),
         all: nodes,
+        readAt,
     };
 }
 
@@ -95,7 +98,8 @@ export function siteReader(
             cached = { at: now(), sites: cached.sites };
             return ok(cached.sites);
         }
-        cached = { at: now(), sites: sitesOf(nodes.value) };
+        const at = now();
+        cached = { at, sites: sitesOf(nodes.value, at) };
         return ok(cached.sites);
     };
     return () => {
@@ -129,8 +133,9 @@ const QUORUM_TAINT = `${QUORUM_ONLY_TAINT}=true:NoSchedule`;
  * Site; a node is either labelled compute or tainted quorum-only, never
  * both; the nodes of a Site agree on the compute and the default label;
  * exactly one Site is the default, a compute one. With more than one node
- * (a single-node install has exactly one), at least two compute Sites, for
- * a Database's standby, and three Sites, for etcd's and Garage's quorum.
+ * in a Site (a single-node install has exactly one), at least two compute
+ * Sites, for a Database's standby, and three Sites, for etcd's and
+ * Garage's quorum.
  */
 export function siteProblems(nodes: readonly NodeLabels[]): SiteProblem[] {
     const siteOf = (node: NodeLabels) => (node.site === undefined || node.site === '' ? undefined : node.site);
@@ -245,7 +250,7 @@ export function siteProblems(nodes: readonly NodeLabels[]): SiteProblem[] {
                   ),
               ]
             : []),
-        ...(nodes.length > 1 && compute.length < 2
+        ...(zoned.length > 1 && compute.length < 2
             ? [
                   problem(
                       'compute-sites-below-two',
@@ -256,7 +261,7 @@ export function siteProblems(nodes: readonly NodeLabels[]): SiteProblem[] {
                   ),
               ]
             : []),
-        ...(nodes.length > 1 && ids.length < 3
+        ...(zoned.length > 1 && ids.length < 3
             ? [
                   problem(
                       'sites-below-three',
@@ -294,10 +299,11 @@ const labelValue = (value: string) => value.replaceAll('\\', '\\\\').replaceAll(
 /**
  * The Site checks for Prometheus (text format 0.0.4), which the alerts of
  * infra/monitoring/rules.yaml read (ADR-0008): one series per problem while
- * it lasts, and how many nodes were read. Without a node list nothing but
- * the help: `SiteChecksAbsent` then fires.
+ * it lasts, how many nodes were read and when. Without a node list nothing
+ * but the help; with an old one, `SiteChecksStale` fires on its time.
  */
-export function siteMetrics(nodes: readonly NodeLabels[] | undefined): string {
+export function siteMetrics(sites: Pick<Sites, 'all' | 'readAt'> | undefined): string {
+    const nodes = sites?.all;
     const problems = nodes === undefined ? [] : siteProblems(nodes);
     return [
         '# HELP openupstream_site_problem A problem with the nodes\' Site labels (ADR-0008), 1 while it lasts.',
@@ -309,6 +315,9 @@ export function siteMetrics(nodes: readonly NodeLabels[] | undefined): string {
         '# HELP openupstream_site_nodes The nodes the control plane read for the Site checks.',
         '# TYPE openupstream_site_nodes gauge',
         ...(nodes === undefined ? [] : [`openupstream_site_nodes ${nodes.length}`]),
+        '# HELP openupstream_site_nodes_read_timestamp_seconds When the control plane last read the nodes.',
+        '# TYPE openupstream_site_nodes_read_timestamp_seconds gauge',
+        ...(sites === undefined ? [] : [`openupstream_site_nodes_read_timestamp_seconds ${sites.readAt / 1000}`]),
         '',
     ].join('\n');
 }

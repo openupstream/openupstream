@@ -35,7 +35,8 @@ export interface Identity {
     readonly apiKeyId?: string;
     /**
      * The roles madAuth's admins gave the user (its claims' `roles`), as the
-     * signed token states them; only for a session or `oup`'s access token.
+     * signed token states them: a session carries them, an access token of
+     * `oup` only if madAuth put claims into it; none for an API key.
      */
     readonly roles?: readonly string[];
 }

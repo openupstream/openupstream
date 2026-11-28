@@ -206,12 +206,16 @@ spec:
           annotations:
             summary: "The nodes are in fewer than three Sites"
             description: "etcd and Garage cannot keep their quorum through the loss of a Site. Join a node of another Site."
-        - alert: SiteChecksAbsent
-          # No replica of the control plane reports the Site checks: it is
-          # down or cannot list the nodes, so the alerts above cannot fire.
-          expr: absent(max(openupstream_site_nodes))
+        - alert: SiteChecksStale
+          # No replica of the control plane has read the nodes for five
+          # minutes, or none reports at all: it is down or cannot list the
+          # nodes, so the alerts above show an old state or none. (A failed
+          # read keeps the last list, and its time.)
+          expr: |
+            absent(max(openupstream_site_nodes_read_timestamp_seconds))
+              or (time() - max(openupstream_site_nodes_read_timestamp_seconds) > 300)
           for: 10m
           labels: {severity: warning}
           annotations:
-            summary: The control plane reports no Site checks
+            summary: The control plane's Site checks are missing or more than five minutes old
             description: "Check that the control plane runs and may list the nodes (kubectl auth can-i list nodes --as=system:serviceaccount:project-00000000-0000-4000-8000-000000000002:control-plane)."

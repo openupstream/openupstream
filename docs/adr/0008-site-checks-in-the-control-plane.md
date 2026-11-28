@@ -46,7 +46,9 @@ quorum (etcd, and Garage's and Loki's third copy).
    on the compute and the default label; exactly one Site is the
    default, a compute one. With more than one node: at least two compute
    Sites and three Sites. A single-node install has exactly one node, so
-   the count of nodes tells the layouts apart. Each problem has a kind, the
+   the count of nodes with a Site tells the layouts apart. The install's
+   `check_sites` applies the same rules, the taint by each node's own
+   compute label. Each problem has a kind, the
    node or Site it is about, a sentence and the `kubectl` command that
    fixes it.
 2. **One alert per rule, from a metric of the control plane.** It serves
@@ -61,15 +63,17 @@ quorum (etcd, and Garage's and Loki's third copy).
    - `DefaultSiteMissing`, `DefaultSiteNotUnique`, `DefaultSiteNotCompute`
    - `ComputeSitesBelowTwo`, `SitesBelowThree`
 
-   `SiteChecksAbsent` fires when no replica reports the checks. Both
+   It also serves when it last read the nodes
+   (`openupstream_site_nodes_read_timestamp_seconds`): a failed read keeps
+   the last list, so `SiteChecksStale` fires when no replica has read the
+   nodes for five minutes, or none reports at all. Both
    replicas report the same; each alert takes the max. kube-state-metrics
    no longer exports node labels.
 3. **A "Sites & nodes" page for the installation's admins.**
    `GET /v1/admin/nodes` returns every node (Site, compute, default,
    quorum-only, description, Ready) and the problems, for a caller with
-   madAuth's role `admin` signed in (a session or `oup`'s access token,
-   whose madAuth claims carry the roles); API keys and Account tokens are
-   refused. The dashboard links `/nodes` for such users and marks each node
+   madAuth's role `admin` in a signed token's claims (the dashboard's
+   session carries them); API keys and Account tokens are refused. The dashboard links `/nodes` for such users and marks each node
    that needs attention with the fix. madAuth's `admin` is the
    installation's admin: whoever installs gets it through
    `INITIAL_ADMIN_EMAIL`, and a madAuth admin could grant themselves any
@@ -87,7 +91,7 @@ quorum (etcd, and Garage's and Loki's third copy).
 - The checks run only while the control plane runs, which needs a compute
   node. A cluster with no compute node at all has no control plane, no
   Prometheus and no page; the install's check is what prevents that.
-  `SiteChecksAbsent` covers a control plane that is down or cannot list
+  `SiteChecksStale` covers a control plane that is down or cannot list
   the nodes.
 - The control plane gains a third port and a NetworkPolicy, and the API
   its first route for the installation's admins rather than an Account's

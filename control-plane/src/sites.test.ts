@@ -68,14 +68,14 @@ test('the node list is read again after the TTL; a failed read is logged and kee
     assert.equal(calls, 1, 'cached within the TTL');
     clock = 1000;
     const stale = await read();
-    assert.ok(stale.ok && stale.value.default === 'one', 'the failed read keeps the last list');
+    assert.ok(stale.ok && stale.value.default === 'one' && stale.value.readAt === 0, 'the failed read keeps the last list and its time');
     assert.equal(logged[0]?.['error'], 'down');
     clock = 1500;
     assert.ok((await read()).ok);
     assert.equal(calls, 2, 'not asked again within the TTL after a failure');
     clock = 2000;
     const fresh = await read();
-    assert.ok(fresh.ok && fresh.value.default === 'two');
+    assert.ok(fresh.ok && fresh.value.default === 'two' && fresh.value.readAt === 2000);
     assert.equal(calls, 3);
 });
 
@@ -129,6 +129,8 @@ test('more than one node needs two compute Sites and three Sites', () => {
         ['sites-below-three', null],
     ]);
     assert.deepEqual(kinds([node('a1', 'home-a', { default: true }), node('b1', 'home-b')]), [['sites-below-three', null]]);
+    // A stray node without a Site on a single-node install is that one problem, not a layout.
+    assert.deepEqual(kinds([node('only', 'home', { default: true }), node('x', undefined, { compute: false, quorumOnly: true })]), [['node-without-site', 'x']]);
 });
 
 test('the report lists every node by Site, those without one first', () => {
@@ -145,11 +147,12 @@ test('the report lists every node by Site, those without one first', () => {
 });
 
 test('the metrics hold one series per problem and the node count; nothing without a node list', () => {
-    const text = siteMetrics([...healthy, node('x', undefined, { compute: false, quorumOnly: true })]);
+    const text = siteMetrics({ all: [...healthy, node('x', undefined, { compute: false, quorumOnly: true })], readAt: 1_700_000_000_000 });
     assert.match(text, /^openupstream_site_problem\{problem="node-without-site",node="x",site=""\} 1$/m);
     assert.match(text, /^openupstream_site_nodes 5$/m);
+    assert.match(text, /^openupstream_site_nodes_read_timestamp_seconds 1700000000$/m);
     assert.equal(text.match(/^openupstream_site_problem\{/gm)?.length, 1);
     const blind = siteMetrics(undefined);
-    assert.doesNotMatch(blind, /^openupstream_site_(problem|nodes) /m);
+    assert.doesNotMatch(blind, /^openupstream_site_(problem|nodes|nodes_read_timestamp_seconds)[ {]/m);
     assert.match(blind, /# TYPE openupstream_site_nodes gauge/);
 });

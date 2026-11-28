@@ -11,7 +11,7 @@ export function createMetricsApp(readSites: ReadSites): Hono {
     app.get('/metrics', async (c) => {
         const sites = await readSites();
         c.header('content-type', 'text/plain; version=0.0.4');
-        return c.body(siteMetrics(sites.ok ? sites.value.all : undefined));
+        return c.body(siteMetrics(sites.ok ? sites.value : undefined));
     });
     return app;
 }
