@@ -90,9 +90,10 @@ oup site deploy dist --bucket my-site
 - `oup token delete <name>`: revokes the token at once and drops its
   Postgres roles. Changing tokens needs an owner with `oup login`; neither
   an API key nor a token can.
-- `oup pg create <name> [--memory <MB>] [--storage <GB>] [--site hetzner-fsn1|ovh-lim] [--max-storage <GB> | --no-auto-grow] [--no-wait]`:
-  a Database with its primary in the Site (default `hetzner-fsn1`) and a
-  standby in the other one, 256 MB and 1 GB unless told otherwise. Its
+- `oup pg create <name> [--memory <MB>] [--storage <GB>] [--site <site>] [--max-storage <GB> | --no-auto-grow] [--no-wait]`:
+  a Database with its primary in the Site (default: the installation's
+  default Site, see `oup sites`) and a standby in another one, 256 MB and
+  1 GB unless told otherwise. Its
   storage grows by half once 90% full (decision 111), without a limit
   unless `--max-storage` sets one; `--no-auto-grow` leaves growing to
   `oup pg resize`. It waits
@@ -131,7 +132,7 @@ oup site deploy dist --bucket my-site
   `OUP_API_KEY` (an API key needs `openupstream:write`), the key or the
   Account token gets roles of its own.
 - `oup service deploy <name> --image <ref> [--port <n> | --no-port] [--replicas <n>]
-  [--memory <MB>] [--cpu <millicores>] [--site hetzner-fsn1|ovh-lim]
+  [--memory <MB>] [--cpu <millicores>] [--site <site>]
   [--registry-user <user> --registry-password-stdin] [--no-wait]`: brings
   the Service to what the flags say (ARCHITECTURE.md, decision 94). A new
   one needs `--port`, or `--no-port` for a worker that serves no HTTP
@@ -153,7 +154,7 @@ oup site deploy dist --bucket my-site
   was replaced is gone.
 - `oup job deploy <name> --image <ref> [--schedule <cron> | --no-schedule]
   [--time-zone <IANA name>] [--timeout <seconds>] [--memory <MB>]
-  [--cpu <millicores>] [--site hetzner-fsn1|ovh-lim] [--registry-user <user>
+  [--cpu <millicores>] [--site <site>] [--registry-user <user>
   --registry-password-stdin] [--no-wait] [--no-command | -- <command>
   <arg>…]`: brings the
   Job to what the flags say, as `oup service deploy` does for a Service
@@ -221,6 +222,10 @@ oup site deploy dist --bucket my-site
   every running copy below its Resource, with its Site, its state and its
   restarts; `--json` prints what the API answers. This is the use right
   now, not what is billed.
+- `oup sites`: the compute Sites, where Databases, Services and Jobs run:
+  each Site's id (what `--site` takes), `default` for the one used when
+  `--site` is left out, and where it is as the installation describes it.
+  Which Sites exist is the installation's (ADR-0007).
 - `oup site deploy <dir> --bucket <name> [--keep] [--force]`: makes the
   Bucket mirror the directory (decision 88): changed files only, `index.html`
   files last, then deletes what the directory no longer has, unless

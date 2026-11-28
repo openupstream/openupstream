@@ -11,20 +11,22 @@
  *
  * Pure: the caller reads the free bytes per node and where the instances are.
  */
-import { COMPUTE_SITES, type Site } from '@openupstream/sdk';
+import type { Site } from '@openupstream/sdk';
 import { type Result, err, ok } from '../result.js';
 
 /** Free bytes per node. */
 export type NodeRoom = ReadonlyMap<string, number>;
 
 /**
- * A new Database (or a restore) needs `bytes` on a node in each compute
- * Site, one instance per Site. `siteOf` maps the nodes to their Site. The
- * error is the most any Database could get now.
+ * A new Database (or a restore) needs `bytes` on a node in its Home site,
+ * for the primary, and on a node in one other compute Site, for the standby
+ * (ADR-0007). `siteOf` maps the compute nodes to their Site. The error is
+ * the most a Database in that Home site could get now.
  */
-export function roomForNew(room: NodeRoom, siteOf: ReadonlyMap<string, Site>, bytes: number): Result<void, { readonly largest: number }> {
+export function roomForNew(room: NodeRoom, siteOf: ReadonlyMap<string, Site>, home: Site, bytes: number): Result<void, { readonly largest: number }> {
     const largestIn = (site: Site) => Math.max(0, ...[...room].filter(([node]) => siteOf.get(node) === site).map(([, free]) => free));
-    const largest = Math.min(...COMPUTE_SITES.map(largestIn));
+    const others = [...new Set(siteOf.values())].filter((site) => site !== home);
+    const largest = Math.min(largestIn(home), Math.max(0, ...others.map(largestIn)));
     return bytes <= largest ? ok(undefined) : err({ largest });
 }
 

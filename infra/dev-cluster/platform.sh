@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bootstraps the platform on the dev cluster, after operators.sh, ingress.sh
 # and garage.sh. On a single-node cluster madAuth and the control plane run
-# once instead of once per compute Site, and Databases get no standby
+# once instead of twice in two compute Sites, and Databases get no standby
 # (decision 112):
 #
 # 1. the platform Project's Databases (PLATFORM in sdk/src/internal.ts):
@@ -166,8 +166,8 @@ config_rollout() { # deployment, configmap
     -p "{\"spec\": {\"template\": {\"metadata\": {\"annotations\": {\"openupstream.io/config-hash\": \"$hash\"}}}}}"
 }
 
-# The manifests run two replicas, one per compute Site; SITE_REPLICAS
-# replaces that. Fails if a manifest no longer has that line, rather than
+# The manifests run two replicas in two different compute Sites;
+# SITE_REPLICAS replaces that. Fails if a manifest no longer has that line, rather than
 # silently running the multi-node count.
 replicas() {
   local manifest

@@ -6,12 +6,20 @@
 # down.sh. Unlike the Hetzner cluster it is meant to stay: snapshot.sh saves
 # and restores all three VMs together.
 #
-# The VMs carry the real Site names, so the operators' manifests apply
-# unchanged:
+# By default the VMs carry production's Site ids (SITES in lib.sh chooses
+# others):
 #
-#   PREFIX-hetzner-fsn1  compute Site
+#   PREFIX-hetzner-fsn1  compute Site, the default Site
 #   PREFIX-ovh-lim       compute Site
 #   PREFIX-netcup-nbg    third Site, tainted openupstream.io/third-site
+#
+# The node setup is the only place that labels the nodes (ADR-0007): the
+# compute nodes join with openupstream.io/compute-site=true (the first also
+# openupstream.io/default-site=true), the third with the taint
+# openupstream.io/third-site=true:NoSchedule, and every node without a
+# description gets one (openupstream.io/site-description) once it has
+# joined. install-multi-node.sh only checks them. k3s sets labels only when
+# a node first registers: a node that already runs k3s keeps its own.
 #
 # Each VM has a NIC on the host's bridge (BRIDGE), so it gets an address
 # from the home router's DHCP; k3s takes it as the node's InternalIP, which
@@ -42,6 +50,9 @@ THIRD_CPUS=${THIRD_CPUS:-2}
 THIRD_MEMORY=${THIRD_MEMORY:-4GiB}
 ROOT_SIZE=${ROOT_SIZE:-60GiB}
 VOLUME_SIZE=${VOLUME_SIZE:-40GiB}
+
+[[ ${#SITES[@]} -eq 3 ]] ||
+  { echo "SITES needs three Site ids: two compute Sites, then the third" >&2; exit 1; }
 
 mkdir -p "$STATE"
 chmod 700 "$STATE"
@@ -148,8 +159,9 @@ install_k3s() { # index, extra args...
 }
 
 FIRST=${IPS[0]}
-install_k3s 0 --cluster-init --node-label openupstream.io/gvisor=true
-install_k3s 1 --server "https://$FIRST:6443" --node-label openupstream.io/gvisor=true
+COMPUTE="--node-label openupstream.io/compute-site=true --node-label openupstream.io/gvisor=true"
+install_k3s 0 --cluster-init $COMPUTE --node-label openupstream.io/default-site=true
+install_k3s 1 --server "https://$FIRST:6443" $COMPUTE
 install_k3s 2 --server "https://$FIRST:6443" --node-taint openupstream.io/third-site=true:NoSchedule
 
 incus exec "$(instance "${SITES[0]}")" -- cat /etc/rancher/k3s/k3s.yaml |
@@ -167,7 +179,12 @@ three_nodes() {
 until_ok "all three nodes to register" three_nodes
 KUBECONFIG=$STATE/kubeconfig kubectl wait --for=condition=Ready node --all --timeout=5m
 KUBECONFIG=$STATE/kubeconfig kubectl apply -f ../gvisor/runtimeclass.yaml >/dev/null
+for site in "${SITES[@]}"; do
+  [[ -n $(KUBECONFIG=$STATE/kubeconfig kubectl get node "$PREFIX-$site" -o jsonpath='{.metadata.annotations.openupstream\.io/site-description}') ]] ||
+    KUBECONFIG=$STATE/kubeconfig kubectl annotate node "$PREFIX-$site" \
+      openupstream.io/site-description="Incus VM $PREFIX-$site" >/dev/null
+done
 echo "export KUBECONFIG=$PWD/$STATE/kubeconfig"
 echo "then: PLATFORM_DOMAIN=… CUSTOMER_DOMAIN=… ../dev-cluster/install-multi-node.sh"
-echo "The API server is on $FIRST (hetzner-fsn1); switch the kubeconfig to"
+echo "The API server is on $FIRST (${SITES[0]}); switch the kubeconfig to"
 echo "another node's IP before switching that Site off."

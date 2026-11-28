@@ -4,8 +4,8 @@
  * One Database becomes four objects in its Project's namespace:
  *
  * - a CloudNativePG `Cluster` with two instances: the primary in the Home
- *   site, the standby in the other compute Site (one instance, no standby,
- *   on a single-node dev cluster: decision 112);
+ *   site, the standby in another compute Site (ADR-0007; one instance, no
+ *   standby, on a single-node dev cluster: decision 112);
  * - a PgBouncer `Pooler` of type `rw`, so it follows the primary;
  * - a Barman Cloud `ObjectStore` on Hetzner Object Storage NBG1, the WAL
  *   archive and base backup target;
@@ -18,7 +18,7 @@
  * Pure: no I/O. Invalid input is returned as errors, never thrown.
  */
 import {
-    COMPUTE_SITES,
+    SITE_ID,
     DATABASE_MIN_MEMORY_MB,
     type Database,
     type DatabaseAccess,
@@ -193,7 +193,7 @@ export type DatabaseManifestError =
     | { readonly kind: 'invalid-id'; readonly field: 'project.id' | 'database.id'; readonly value: string }
     | { readonly kind: 'invalid-name'; readonly field: 'project.name' | 'database.name'; readonly value: string }
     | { readonly kind: 'project-mismatch'; readonly projectId: string; readonly databaseProjectId: string }
-    | { readonly kind: 'not-a-compute-site'; readonly value: string }
+    | { readonly kind: 'invalid-site'; readonly value: string }
     | { readonly kind: 'invalid-memory'; readonly memoryMb: number }
     | { readonly kind: 'memory-below-floor'; readonly memoryMb: number; readonly minimumMb: number }
     | { readonly kind: 'invalid-storage'; readonly storageGb: number }
@@ -201,8 +201,12 @@ export type DatabaseManifestError =
 
 export { clusterName, poolerName } from '@openupstream/sdk';
 
-/** Rows come from the database as strings; the type alone does not guarantee this. */
-const isComputeSite = (value: string): value is Site => (COMPUTE_SITES as readonly string[]).includes(value);
+/**
+ * Rows come from the database as strings; the type alone does not guarantee
+ * this. Which Sites are compute Sites is the nodes' (ADR-0007): the control
+ * plane checked that, and the required node affinity keeps the pods there.
+ */
+const isSite = (value: string): value is Site => SITE_ID.test(value);
 
 const validate = (project: Project, database: Database, roles: readonly DatabaseRoleRow[]): DatabaseManifestError[] => {
     const checks: [boolean, DatabaseManifestError][] = [
@@ -214,7 +218,7 @@ const validate = (project: Project, database: Database, roles: readonly Database
             database.projectId === project.id,
             { kind: 'project-mismatch', projectId: project.id, databaseProjectId: database.projectId },
         ],
-        [isComputeSite(database.homeSite), { kind: 'not-a-compute-site', value: database.homeSite }],
+        [isSite(database.homeSite), { kind: 'invalid-site', value: database.homeSite }],
         [Number.isInteger(database.memoryMb), { kind: 'invalid-memory', memoryMb: database.memoryMb }],
         [
             !(database.memoryMb < DATABASE_MIN_MEMORY_MB),

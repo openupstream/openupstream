@@ -8,7 +8,17 @@
 import { PassThrough } from 'node:stream';
 import { createInterface } from 'node:readline';
 import { ApiException, type KubeConfig, KubernetesObjectApi, Log, PatchStrategy } from '@kubernetes/client-node';
-import { SPEC_VERSION_ANNOTATION, type DatabaseState, type JobState, type ServiceState } from '@openupstream/sdk';
+import {
+    COMPUTE_SITE_LABEL,
+    DEFAULT_SITE_LABEL,
+    SITE_DESCRIPTION_ANNOTATION,
+    SPEC_VERSION_ANNOTATION,
+    ZONE_LABEL,
+    type DatabaseState,
+    type JobState,
+    type ServiceState,
+} from '@openupstream/sdk';
+import type { NodeLabels } from './sites.js';
 import { type Result, err, ok } from './result.js';
 
 export interface ObjectRef {
@@ -166,6 +176,8 @@ export interface ControlPlaneKube {
     volumeNodes(namespace: string, name: string): Promise<Result<string[], string>>;
     /** The Site (zone label) of a node; undefined when it has none or is gone. */
     nodeSite(nodeName: string): Promise<Result<string | undefined, string>>;
+    /** Every node's Site labels and description (ADR-0007). */
+    listNodes(): Promise<Result<NodeLabels[], string>>;
     /**
      * One container's log, line by line, each starting with its RFC 3339
      * timestamp; ends with the log, or when `signal` aborts.
@@ -212,6 +224,21 @@ export const quantityIn = (quantity: string | undefined, unit: 'Mi' | 'Gi'): num
     const bytes = quantity === undefined || !quantity.endsWith(unit) ? undefined : bytesOf(quantity);
     return bytes === undefined ? undefined : bytes / (UNITS[unit] as number);
 };
+
+/** A node's Site labels; the client may parse its creation time into a Date. */
+export const nodeLabels = (metadata: {
+    readonly name: string;
+    readonly labels?: Record<string, string>;
+    readonly annotations?: Record<string, string>;
+    readonly creationTimestamp?: Date | string;
+}): NodeLabels => ({
+    name: metadata.name,
+    site: metadata.labels?.[ZONE_LABEL],
+    compute: metadata.labels?.[COMPUTE_SITE_LABEL] === 'true',
+    default: metadata.labels?.[DEFAULT_SITE_LABEL] === 'true',
+    description: metadata.annotations?.[SITE_DESCRIPTION_ANNOTATION],
+    createdAt: metadata.creationTimestamp instanceof Date ? metadata.creationTimestamp.toISOString() : (metadata.creationTimestamp ?? ''),
+});
 
 /** TopoLVM's topology key: one CSIStorageCapacity per node. */
 const TOPOLVM_NODE_LABEL = 'topology.topolvm.io/node';
@@ -288,7 +315,6 @@ interface PodObject {
     };
 }
 
-const ZONE_LABEL = 'topology.kubernetes.io/zone';
 
 const memoryOf = (requests: Record<string, string> | undefined): number => bytesOf(requests?.['memory'] ?? '0') ?? 0;
 
@@ -556,6 +582,18 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
                 return result.error.status === NOT_FOUND ? ok(undefined) : err(result.error.message);
             }
             return ok(result.value.metadata.labels?.[ZONE_LABEL]);
+        },
+        listNodes: async () => {
+            type Node = {
+                apiVersion: string;
+                kind: string;
+                metadata: { name: string; labels?: Record<string, string>; annotations?: Record<string, string>; creationTimestamp?: Date };
+            };
+            const result = await within(api.list<Node>('v1', 'Node'), timeoutMs);
+            if (!result.ok) {
+                return err(result.error.message);
+            }
+            return ok(result.value.items.map((node) => nodeLabels(node.metadata)));
         },
         podLog: async (namespace, pod, container, options, signal) => {
             const sink = new PassThrough();

@@ -1,7 +1,7 @@
 # The control plane, as a Service of the platform Project (PLATFORM in
 # sdk/src/internal.ts): it runs next to its own Database, whose connection
-# Secret CloudNativePG creates in this namespace. Two replicas, one per
-# compute Site. Port 8080 is the public API, 8081 the internal API for the
+# Secret CloudNativePG creates in this namespace. Two replicas in two
+# different compute Sites (min(2, compute Sites), ADR-0007). Port 8080 is the public API, 8081 the internal API for the
 # operators, the billing service and madAuth's sidecar (never routed by
 # ingress), 8082 the waitlist page while hosted sign-up is closed
 # (decision 86; only served with WAITLIST_URL, routed by
@@ -83,8 +83,8 @@ rules:
   - apiGroups: [""]
     resources: [secrets]
     verbs: [create, patch, delete]
-  # The log stream: a Service's or a run's pods by label, their logs, and
-  # the Site (zone label) of the node each runs on. Delete: a Project's
+  # The log stream: a Service's or a run's pods by label, and their logs
+  # (the node's Site: nodes, below). Delete: a Project's
   # database tunnel pods, to end a removed Member's open `owner` session
   # (decision 143); deleting a pod runs no new code, unlike patching its
   # Deployment.
@@ -94,9 +94,12 @@ rules:
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get]
+  # The nodes: the Site (zone label) of the node a pod runs on, and the
+  # Sites themselves, read from the nodes' labels and annotations: the
+  # compute Sites, the default Site and their descriptions (ADR-0007).
   - apiGroups: [""]
     resources: [nodes]
-    verbs: [get]
+    verbs: [get, list]
   # Room for a Database's volumes before its size is accepted (decision 109):
   # TopoLVM's free space per node, and where a Database's volumes are.
   - apiGroups: [storage.k8s.io]
@@ -142,7 +145,7 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
-                  - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+                  - {key: openupstream.io/compute-site, operator: In, values: ["true"]}
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: topology.kubernetes.io/zone

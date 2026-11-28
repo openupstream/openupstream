@@ -2,7 +2,7 @@ import { after, before, describe, mock, test } from 'node:test';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import assert from 'node:assert/strict';
-import { OpenUpstreamClient, errorMessage, ndjsonLines, txtRecordName } from './index.js';
+import { OpenUpstreamClient, SITE_ID, errorMessage, ndjsonLines, txtRecordName } from './index.js';
 
 test('client defaults to the production API', () => {
     const client = new OpenUpstreamClient({ token: 'x' });
@@ -33,6 +33,24 @@ test("a Project's usage is read from its own path", async (t) => {
     const client = new OpenUpstreamClient({ baseUrl: 'https://api.test', token: 'x' });
     assert.deepEqual(await client.getUsage('p 1'), { ok: true, value: usage });
     assert.equal(fetched.mock.calls[0]?.arguments[0], 'https://api.test/v1/projects/p%201/usage');
+});
+
+test('the Sites are read from their own path', async (t) => {
+    const sites = [{ id: 'home-a', description: 'Home VM A', default: true }];
+    const fetched = mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify(sites), { headers: { 'content-type': 'application/json' } }));
+    t.after(() => fetched.mock.restore());
+    const client = new OpenUpstreamClient({ baseUrl: 'https://api.test', token: 'x' });
+    assert.deepEqual(await client.listSites(), { ok: true, value: sites });
+    assert.equal(fetched.mock.calls[0]?.arguments[0], 'https://api.test/v1/sites');
+});
+
+test('a Site id is a Kubernetes label value', () => {
+    for (const id of ['hetzner-fsn1', 'eu-central-1a', 'Home_VM.2', 'a']) {
+        assert.ok(SITE_ID.test(id), id);
+    }
+    for (const id of ['', '-a', 'a-', 'a b', 'x'.repeat(64), 'ü']) {
+        assert.ok(!SITE_ID.test(id), id);
+    }
 });
 
 test('the TXT ownership proof lives under _openupstream', () => {

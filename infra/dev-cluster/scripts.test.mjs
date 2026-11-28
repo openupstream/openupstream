@@ -1,6 +1,6 @@
 // Tests for the dev-cluster scripts' own logic (ARCHITECTURE.md, decision
-// 109): the recorded layout, the entry scripts' node checks and dns.sh's
-// records. kubectl and curl are stubs on PATH; nothing reaches a cluster or
+// 109): the recorded layout, the Sites' node labels (ADR-0007), the entry
+// scripts' node checks and dns.sh's records. kubectl and curl are stubs on PATH; nothing reaches a cluster or
 // bunny.net. Run by `npm test` at the repository root; needs bash and jq.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,9 +14,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const stubs = mkdtempSync(join(tmpdir(), 'dev-cluster-stubs-'));
 
 // kubectl: the layout from LAYOUT_STUB (KUBECTL_FAIL=1 fails every call),
-// node names from NODES_STUB, nodes per Site from SITES_STUB, the single
-// node's labels from LABELED_STUB, nodes as JSON from NODES_JSON_STUB.
-// Writes go to $STUB_LOG.
+// whether a node has the gVisor label from LABELED_STUB, the nodes as JSON
+// from NODES_JSON_STUB. Writes, node labels and annotations included (which
+// check_sites must never make), go to
+// $STUB_LOG.
 writeFileSync(
     join(stubs, 'kubectl'),
     `#!/usr/bin/env bash
@@ -28,12 +29,11 @@ case $args in
   *"create configmap"*) echo "configmap $args" >>"$STUB_LOG"; echo '{}' ;;
   *"create namespace"*) echo '{}' ;;
   "apply -f -") cat >/dev/null ;;
-  *"get nodes -o name"*) for n in \${NODES_STUB:-}; do echo "node/$n"; done ;;
-  *"get nodes -l topology.kubernetes.io/zone in"*) printf '%s' "$NODES_JSON_STUB" ;;
+  "get nodes -o json") printf '%s' "\${NODES_JSON_STUB:-}" ;;
+  "get nodes -l openupstream.io/compute-site=true -o json")
+    printf '%s' "$NODES_JSON_STUB" | jq '.items |= map(select(.metadata.labels["openupstream.io/compute-site"] == "true"))' ;;
   *"openupstream.io/gvisor=true"*) [[ \${LABELED_STUB:-1} == 1 ]] && echo node/a ;;
-  *"get nodes -l topology.kubernetes.io/zone="*)
-    site=\${args#*zone=}; site=\${site%% *}
-    [[ " \${SITES_STUB:-} " == *" $site "* ]] && echo "node/$site" ;;
+  "label node "* | "annotate node "*) echo "$args" >>"$STUB_LOG" ;;
   *"get runtimeclass"*) echo runtimeclass.node.k8s.io/gvisor ;;
   *"wait --for=condition=Ready node"*) echo "node/mini condition met" ;;
   *"runtimeclass.yaml"*) echo "applied $args" >>"$STUB_LOG" ;;
@@ -85,10 +85,11 @@ chmodSync(join(stubs, 'curl'), 0o755);
 const keyFile = join(stubs, 'bunny-api-key');
 writeFileSync(keyFile, 'key\n');
 
+const computeLabels = (site) => ({ 'topology.kubernetes.io/zone': site, 'openupstream.io/compute-site': 'true' });
 const singleNodeJson = JSON.stringify({
     items: [
         {
-            metadata: { labels: { 'topology.kubernetes.io/zone': 'hetzner-fsn1' } },
+            metadata: { labels: { ...computeLabels('hetzner-fsn1'), 'openupstream.io/default-site': 'true' } },
             status: {
                 addresses: [
                     { type: 'InternalIP', address: 'fd00::5' },
@@ -99,9 +100,10 @@ const singleNodeJson = JSON.stringify({
         },
     ],
 });
+// Two compute nodes and a third Site's node, which gets no record.
 const multiNodeJson = JSON.stringify({
-    items: ['hetzner-fsn1', 'ovh-lim'].map((site, i) => ({
-        metadata: { labels: { 'topology.kubernetes.io/zone': site } },
+    items: ['hetzner-fsn1', 'ovh-lim', 'netcup-nbg'].map((site, i) => ({
+        metadata: { labels: i < 2 ? computeLabels(site) : { 'topology.kubernetes.io/zone': site } },
         status: {
             addresses: [
                 { type: 'InternalIP', address: `10.0.1.${i}` },
@@ -110,6 +112,27 @@ const multiNodeJson = JSON.stringify({
         },
     })),
 });
+
+/**
+ * Nodes as `kubectl get nodes -o json` prints them, from
+ * [name, site, { compute, default, tainted, description }]; a site of null
+ * leaves out the zone label.
+ */
+const nodes = (...list) =>
+    JSON.stringify({
+        items: list.map(([name, site, { compute = false, default: isDefault = false, tainted = false, description } = {}]) => ({
+            metadata: {
+                name,
+                labels: {
+                    ...(site ? { 'topology.kubernetes.io/zone': site } : {}),
+                    ...(compute ? { 'openupstream.io/compute-site': 'true' } : {}),
+                    ...(isDefault ? { 'openupstream.io/default-site': 'true' } : {}),
+                },
+                ...(description ? { annotations: { 'openupstream.io/site-description': description } } : {}),
+            },
+            spec: tainted ? { taints: [{ key: 'openupstream.io/third-site', value: 'true', effect: 'NoSchedule' }] } : {},
+        })),
+    });
 
 /** Runs a command in infra/dev-cluster with the stubs first on PATH; returns its status, stderr and stub log. */
 const run = (command, env = {}) => {
@@ -214,22 +237,94 @@ test("platform.sh refuses a WEBSITE_PROJECT_ID that is not a Project's id, befor
     }
 });
 
-test('install-multi-node.sh refuses a cluster without a node in every Site', () => {
-    for (const sites of ['hetzner-fsn1', 'hetzner-fsn1 ovh-lim']) {
-        const { status, stderr, log } = run('./install-multi-node.sh', { SITES_STUB: sites });
-        assert.notEqual(status, 0);
-        assert.match(stderr, /netcup-nbg/);
-        assert.equal(log, '', 'records no layout');
+const checkSites = (layout, env) => run(`set -euo pipefail; source ./lib.sh; check_sites ${layout}`, env);
+// The production layout: two compute Sites, the first the default, and a
+// tainted third Site.
+const valid = nodes(
+    ['a', 'site-a', { compute: true, default: true }],
+    ['a2', 'site-a', { compute: true, default: true }],
+    ['b', 'site-b', { compute: true }],
+    ['c', 'site-c', { tainted: true }],
+);
+
+test('check_sites passes a labelled multi-node layout and changes nothing', () => {
+    const { status, stdout, stderr, log } = checkSites('multi-node', { NODES_JSON_STUB: valid });
+    assert.equal(status, 0, stderr);
+    assert.equal(stdout.trim(), 'Sites: site-a site-b site-c; compute Sites: site-a site-b; default Site: site-a');
+    assert.equal(log, '', 'no label or annotate call');
+});
+
+test('check_sites passes three compute Sites and no other', () => {
+    const { status, stderr } = checkSites('multi-node', {
+        NODES_JSON_STUB: nodes(['a', 'site-a', { compute: true }], ['b', 'site-b', { compute: true, default: true }], ['c', 'site-c', { compute: true }]),
+    });
+    assert.equal(status, 0, stderr);
+});
+
+test('check_sites refuses each broken multi-node layout with the command that fixes it', () => {
+    const a = ['a', 'site-a', { compute: true, default: true }];
+    const b = ['b', 'site-b', { compute: true }];
+    const c = ['c', 'site-c', { tainted: true }];
+    const cases = [
+        [nodes(a, b, c, ['d', null, { tainted: true }]), /node d has no Site: kubectl label node d topology.kubernetes.io\/zone=<Site id>/],
+        [nodes(a, ['a2', 'site-a', { default: true }], b, c), /only some nodes of site-a are labelled openupstream.io\/compute-site=true: kubectl label nodes -l topology.kubernetes.io\/zone=site-a openupstream.io\/compute-site=true/],
+        [nodes(a, ['a2', 'site-a', { compute: true }], b, c), /only some nodes of site-a are labelled openupstream.io\/default-site=true: kubectl label nodes -l topology.kubernetes.io\/zone=site-a openupstream.io\/default-site=true/],
+        [nodes(a, ['b', 'site-b', { tainted: true }], c), /at least two compute Sites.*kubectl label nodes -l topology.kubernetes.io\/zone=<Site> openupstream.io\/compute-site=true/],
+        [nodes(a, b), /at least three Sites/],
+        [nodes(a, b, ['c', 'site-c']), /node c is in no compute Site but lacks the taint: kubectl taint node c openupstream.io\/third-site=true:NoSchedule/],
+        [nodes(a, ['b', 'site-b', { compute: true, tainted: true }], c), /node b is in the compute Site site-b but carries the taint openupstream.io\/third-site: kubectl taint node b openupstream.io\/third-site-/],
+        [nodes(['a', 'site-a', { compute: true }], b, c), /no default Site: kubectl label nodes -l topology.kubernetes.io\/zone=site-a openupstream.io\/default-site=true/],
+        [nodes(a, ['b', 'site-b', { compute: true, default: true }], c), /more than one default Site \(site-a site-b\): keep one, e.g. kubectl label nodes -l topology.kubernetes.io\/zone=site-b openupstream.io\/default-site-/],
+        [nodes(['a', 'site-a', { compute: true }], b, ['c', 'site-c', { tainted: true, default: true }]), /the default Site site-c is no compute Site: kubectl label nodes -l topology.kubernetes.io\/zone=site-c openupstream.io\/default-site-/],
+    ];
+    for (const [json, message] of cases) {
+        const { status, stderr, log } = checkSites('multi-node', { NODES_JSON_STUB: json });
+        assert.notEqual(status, 0, json);
+        assert.match(stderr, /Site labels need fixing/);
+        assert.match(stderr, message);
+        assert.equal(log, '', 'changes nothing');
+    }
+    const unreachable = checkSites('multi-node', { KUBECTL_FAIL: '1' });
+    assert.notEqual(unreachable.status, 0);
+    assert.match(unreachable.stderr, /cannot read the nodes/);
+});
+
+test('check_sites passes one node labelled compute and default, and refuses anything else', () => {
+    const ok = checkSites('single-node', { NODES_JSON_STUB: nodes(['mini', 'home', { compute: true, default: true }]) });
+    assert.equal(ok.status, 0, ok.stderr);
+    assert.equal(ok.stdout.trim(), 'Sites: home; compute Sites: home; default Site: home');
+    assert.equal(ok.log, '');
+    const cases = [
+        [nodes(['mini', 'home']), /node mini is not labelled as the compute and default Site: kubectl label node mini openupstream.io\/compute-site=true openupstream.io\/default-site=true/],
+        [nodes(['mini', 'home', { compute: true }]), /kubectl label node mini openupstream.io\/compute-site=true openupstream.io\/default-site=true/],
+        [nodes(['mini', null, { compute: true, default: true }]), /node mini has no Site: kubectl label node mini topology.kubernetes.io\/zone=<Site id>/],
+        [nodes(['a', 's', { compute: true, default: true }], ['b', 's', { compute: true, default: true }]), /the cluster has 2 nodes; install-single-node.sh needs exactly one/],
+    ];
+    for (const [json, message] of cases) {
+        const { status, stderr, log } = checkSites('single-node', { NODES_JSON_STUB: json });
+        assert.notEqual(status, 0, json);
+        assert.match(stderr, message);
+        assert.equal(log, '');
     }
 });
 
-test('install-single-node.sh refuses anything but one labelled node, and missing domains', () => {
+test('install-multi-node.sh refuses a cluster with too few Sites before it records a layout', () => {
+    const { status, stderr, log } = run('./install-multi-node.sh', {
+        NODES_JSON_STUB: nodes(['a', 'site-a', { compute: true }], ['b', 'site-b', { compute: true }]),
+    });
+    assert.notEqual(status, 0);
+    assert.match(stderr, /at least three Sites/);
+    assert.match(stderr, /no default Site: kubectl label nodes/);
+    assert.equal(log, '', 'records no layout');
+});
+
+test('install-single-node.sh refuses anything but one node with gVisor, and missing domains', () => {
     const domains = { PLATFORM_DOMAIN: 'a.example.com', CUSTOMER_DOMAIN: 'b.example.app' };
-    const three = run('./install-single-node.sh', { NODES_STUB: 'a b c', ...domains });
+    const three = run('./install-single-node.sh', { NODES_JSON_STUB: nodes(['a', 's'], ['b', 's'], ['c', 's']), ...domains });
     assert.match(three.stderr, /has 3 nodes/);
-    const unlabelled = run('./install-single-node.sh', { NODES_STUB: 'a', LABELED_STUB: '0', ...domains });
-    assert.match(unlabelled.stderr, /topology.kubernetes.io\/zone=hetzner-fsn1/);
-    const noDomain = run('./install-single-node.sh', { NODES_STUB: 'a' });
+    const unlabelled = run('./install-single-node.sh', { NODES_JSON_STUB: nodes(['a', 's', { compute: true, default: true }]), LABELED_STUB: '0', ...domains });
+    assert.match(unlabelled.stderr, /openupstream.io\/gvisor=true/);
+    const noDomain = run('./install-single-node.sh', { NODES_JSON_STUB: nodes(['a', 's', { compute: true, default: true }]) });
     assert.match(noDomain.stderr, /set PLATFORM_DOMAIN/);
     for (const result of [three, unlabelled, noDomain]) {
         assert.notEqual(result.status, 0);
@@ -279,10 +374,10 @@ test('dns.sh points a zone apex at every compute node\'s ExternalIP, health-chec
 test('dns.sh leaves multi-node records at private addresses unchecked', () => {
     const homeJson = JSON.stringify({
         items: [
-            ['hetzner-fsn1', '192.168.178.31'],
-            ['ovh-lim', '100.101.1.2'],
+            ['home-a', '192.168.178.31'],
+            ['home-b', '100.101.1.2'],
         ].map(([site, address]) => ({
-            metadata: { labels: { 'topology.kubernetes.io/zone': site } },
+            metadata: { labels: computeLabels(site) },
             status: { addresses: [{ type: 'InternalIP', address }] },
         })),
     });
@@ -347,7 +442,7 @@ const k3s = (env) => {
     return { ...result, kubeconfig: readFileSync(join(state, 'kubeconfig'), 'utf8') };
 };
 
-test('k3s-single-node.sh installs gVisor before k3s, labelled as hetzner-fsn1, with the kubeconfig on the resolved host', () => {
+test('k3s-single-node.sh installs gVisor before k3s, labelled as the compute and default Site hetzner-fsn1, with the kubeconfig on the resolved host', () => {
     const { status, stderr, log, kubeconfig } = k3s({ SSH_HOSTNAME_STUB: 'mini.tailnet.ts.net' });
     assert.equal(status, 0, stderr);
     const lines = log.split('\n');
@@ -355,6 +450,8 @@ test('k3s-single-node.sh installs gVisor before k3s, labelled as hetzner-fsn1, w
     const install = lines.findIndex((line) => line.includes('get.k3s.io'));
     assert.ok(gvisor >= 0 && install > gvisor, log);
     assert.match(lines[install], /--node-label topology.kubernetes.io\/zone=hetzner-fsn1/);
+    assert.match(lines[install], /--node-label openupstream.io\/compute-site=true/);
+    assert.match(lines[install], /--node-label openupstream.io\/default-site=true/);
     assert.match(lines[install], /--node-label openupstream.io\/gvisor=true/);
     assert.match(lines[install], /--tls-san mini.tailnet.ts.net/);
     assert.doesNotMatch(lines[install], /--node-external-ip/);
@@ -363,6 +460,19 @@ test('k3s-single-node.sh installs gVisor before k3s, labelled as hetzner-fsn1, w
     assert.match(kubeconfig, /server: https:\/\/mini.tailnet.ts.net:6443/);
     assert.match(kubeconfig, /name: oup-single-node/);
     assert.match(log, /applied apply -f ..\/gvisor\/runtimeclass.yaml/);
+});
+
+test('k3s-single-node.sh takes the Site id from SITE and its description from SITE_DESCRIPTION, and refuses an id that is no label value', () => {
+    const home = k3s({ SITE: 'home', SITE_DESCRIPTION: 'Home mini PC' });
+    assert.equal(home.status, 0, home.stderr);
+    assert.match(home.log, /get\.k3s\.io.*--node-label topology.kubernetes.io\/zone=home /s);
+    assert.match(home.log, /^annotate node --all --overwrite openupstream.io\/site-description=Home mini PC$/m);
+    assert.doesNotMatch(k3s({}).log, /annotate/);
+    const state = mkdtempSync(join(tmpdir(), 'dev-cluster-state-'));
+    const invalid = run('./k3s-single-node.sh root@mini', { STATE: state, SITE: 'my home' });
+    assert.notEqual(invalid.status, 0);
+    assert.match(invalid.stderr, /SITE must be a label value/);
+    assert.equal(invalid.log, '');
 });
 
 test('k3s-single-node.sh gives NODE_ADDRESS to k3s as the ExternalIP, the address DNS points at', () => {

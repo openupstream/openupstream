@@ -1,8 +1,11 @@
 # Shared by up.sh, down.sh and snapshot.sh; sourced, not run.
 
 PREFIX=${PREFIX:-oup-home}
-SITES=(hetzner-fsn1 ovh-lim netcup-nbg)
-THIRD_SITE=netcup-nbg
+# The three VMs' Site ids, space-separated: two compute Sites, then the
+# third. By default production's, so the platform's data looks like
+# production's; give the same SITES to every script of this folder.
+read -r -a SITES <<<"${SITES:-hetzner-fsn1 ovh-lim netcup-nbg}"
+THIRD_SITE=${SITES[2]:-}
 POOL=${POOL:-default}
 # `remote:` in front of every instance, pool and API path when the host is
 # an Incus remote, nothing on the host itself.

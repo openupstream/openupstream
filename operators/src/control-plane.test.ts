@@ -84,7 +84,7 @@ test('the routing table is checked for its shape', () => {
     assert.equal(parseRoutings({}).ok, false);
 });
 
-test('Services from the control plane: only rows with an image pinned by digest, a compute Site and a port or none', () => {
+test('Services from the control plane: only rows with an image pinned by digest, a Site id and a port or none', () => {
     const row = {
         project: { id: 'p', accountId: 'a', name: 'shop', createdAt: '2026-10-31T00:00:00Z' },
         service: { id: 's', name: 'api', image: 'nginx', imageDigest: `sha256:${'a'.repeat(64)}`, replicas: 1, memoryMb: 128, cpuMillicores: 100, port: 80 },
@@ -94,7 +94,8 @@ test('Services from the control plane: only rows with an image pinned by digest,
     };
     assert.ok(parseServiceRows([row]).ok);
     assert.equal(parseServiceRows([{ ...row, pinnedImage: 'docker.io/library/nginx:latest' }]).ok, false);
-    assert.equal(parseServiceRows([{ ...row, site: 'netcup-nbg' }]).ok, false);
+    assert.equal(parseServiceRows([{ ...row, site: 'home-a' }]).ok, true, 'which Sites exist is the nodes\' (ADR-0007)');
+    assert.equal(parseServiceRows([{ ...row, site: 'not a site' }]).ok, false);
     // A worker (decision 98) has no port; it must not make the whole list malformed.
     assert.ok(parseServiceRows([row, { ...row, service: { ...row.service, port: null } }]).ok);
     assert.equal(parseServiceRows([{ ...row, service: { ...row.service, port: '80' } }]).ok, false);

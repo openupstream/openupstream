@@ -3,7 +3,6 @@
 import {
     type ApiResult,
     type Bucket,
-    COMPUTE_SITES,
     type DatabaseDetails,
     type Domain,
     type JobDetails,
@@ -15,7 +14,7 @@ import {
     type Route,
     type Secret,
     type ServiceDetails,
-    type Site,
+    type SiteInfo,
     type DatabaseAccess,
 } from '@openupstream/sdk';
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
@@ -27,7 +26,9 @@ import { JobCard, JobForm } from './jobs';
 import { BucketCard, BucketForm, DomainCard, DomainForm } from './routing';
 import { Secrets } from './secrets';
 import { ServiceCard, ServiceForm } from './services';
+import { SiteName, SiteOptions, SitesContext, useSites } from './sites';
 import { Usage } from './usage';
+import { defaultSiteOf } from '../lib/sites';
 
 /**
  * The Project, its Databases, Services, Jobs, Secrets (names only), Buckets
@@ -50,6 +51,8 @@ type Loaded = {
     readonly domains: readonly Domain[];
     readonly routes: Readonly<Record<string, readonly Route[]>>;
     readonly usage: ProjectUsage | undefined;
+    /** The compute Sites, for the Site selects; empty when the API could not say (then a new Database gets the default Site). */
+    readonly sites: readonly SiteInfo[];
 };
 
 /** How often the page asks again while it is in front. */
@@ -79,6 +82,7 @@ const loadGranted = async (client: OpenUpstreamClient, project: Project): Promis
             domains: [],
             routes: {},
             usage: undefined,
+            sites: [],
         },
     };
 };
@@ -88,7 +92,7 @@ const load = async (client: OpenUpstreamClient, id: string): Promise<ApiResult<L
     if (reached.ok && accounts.ok && accounts.value.find((account) => account.id === reached.value.accountId)?.role === null) {
         return loadGranted(client, reached.value);
     }
-    const [project, databases, services, jobs, secrets, buckets, domains, usage] = await Promise.all([
+    const [project, databases, services, jobs, secrets, buckets, domains, usage, sites] = await Promise.all([
         client.getProject(id),
         client.listDatabases(id),
         client.listServices(id),
@@ -97,6 +101,7 @@ const load = async (client: OpenUpstreamClient, id: string): Promise<ApiResult<L
         client.listBuckets(id),
         client.listDomains(id),
         client.getUsage(id),
+        client.listSites(),
     ]);
     if (!project.ok) {
         return project;
@@ -136,6 +141,7 @@ const load = async (client: OpenUpstreamClient, id: string): Promise<ApiResult<L
                   domains: domains.value,
                   routes: Object.fromEntries(domains.value.map((domain, index) => [domain.id, routes[index]?.ok ? routes[index].value : []])),
                   usage: usage.ok ? usage.value : undefined,
+                  sites: sites.ok ? sites.value : [],
               },
           };
 };
@@ -191,14 +197,14 @@ export function ProjectPage({ id }: { readonly id: string }) {
     if (loaded.granted !== undefined) {
         return <GrantedProject project={loaded.project} granted={loaded.granted} problem={problem} />;
     }
-    const { project, databases, services, jobs, secrets, buckets, domains, routes, usage } = loaded;
+    const { project, databases, services, jobs, secrets, buckets, domains, routes, usage, sites } = loaded;
     const defaultHostname = domains.find((domain) => domain.kind === 'default')?.hostname;
     const targets = { buckets, services };
     const allRoutes = Object.values(routes).flat();
     const usageOf = (kind: ResourceKind, resourceId: string): ResourceUsage | undefined =>
         usage?.resources.find((resource) => resource.kind === kind && resource.id === resourceId);
     return (
-        <>
+        <SitesContext.Provider value={sites}>
             <p>
                 <a href="/">← Projects</a>
             </p>
@@ -320,7 +326,7 @@ export function ProjectPage({ id }: { readonly id: string }) {
                 <DomainForm existing={domains} onCreate={(input) => change((client) => client.createDomain(project.id, input))} />
             </section>
 
-        </>
+        </SitesContext.Provider>
     );
 }
 
@@ -359,7 +365,7 @@ function DatabaseCard(props: {
             </div>
             <small>
                 {database.memoryMb} MB memory, {database.storageGb} GB storage
-                {database.autoGrow ? (database.maxStorageGb === null ? ', grows by itself' : `, grows by itself up to ${database.maxStorageGb} GB`) : ''}, primary in {database.homeSite}
+                {database.autoGrow ? (database.maxStorageGb === null ? ', grows by itself' : `, grows by itself up to ${database.maxStorageGb} GB`) : ''}, primary in <SiteName id={database.homeSite} />
             </small>
             {problem !== undefined && <p role="alert">{problem}</p>}
             {resizing && (
@@ -412,10 +418,12 @@ function DatabaseCard(props: {
 
 function DatabaseForm(props: {
     readonly existing: readonly DatabaseDetails[];
-    readonly onCreate: (input: { name: string; memoryMb: number; storageGb: number; homeSite: Site }) => Promise<string | undefined>;
+    readonly onCreate: (input: { name: string; memoryMb: number; storageGb: number; homeSite?: string }) => Promise<string | undefined>;
 }) {
     const [name, setName] = useState('');
-    const [homeSite, setHomeSite] = useState<Site>(COMPUTE_SITES[0]);
+    // Empty: the default Site, until one is picked.
+    const [picked, setPicked] = useState('');
+    const homeSite = picked === '' ? defaultSiteOf(useSites()) : picked;
     return (
         <>
             <h3>New Database</h3>
@@ -430,7 +438,7 @@ function DatabaseForm(props: {
                     if (found !== undefined) {
                         return found;
                     }
-                    const refusal = await props.onCreate({ name: trimmed, ...sizes, homeSite });
+                    const refusal = await props.onCreate({ name: trimmed, ...sizes, ...(homeSite === '' ? {} : { homeSite }) });
                     if (refusal === undefined) {
                         setName('');
                     }
@@ -443,10 +451,8 @@ function DatabaseForm(props: {
                 </label>
                 <label>
                     Primary in
-                    <select value={homeSite} onChange={(event) => setHomeSite(COMPUTE_SITES.find((site) => site === event.target.value) ?? COMPUTE_SITES[0])}>
-                        {COMPUTE_SITES.map((site) => (
-                            <option key={site}>{site}</option>
-                        ))}
+                    <select value={homeSite} onChange={(event) => setPicked(event.target.value)}>
+                        {homeSite === '' ? <option value="">The default Site</option> : <SiteOptions current={homeSite} />}
                     </select>
                 </label>
             </SizesForm>

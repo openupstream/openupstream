@@ -2,6 +2,7 @@
 
 import type { Instance, Measured, ResourceUsage } from '@openupstream/sdk';
 import { formatBytes, formatCpu, formatMeasured, usedShare } from '../lib/usage';
+import { SiteName } from './sites';
 
 /** A Resource's CPU, memory and storage against what it was given, then its instances. */
 export function Usage({ usage }: { readonly usage: ResourceUsage }) {
@@ -44,7 +45,7 @@ function InstanceRow({ instance }: { readonly instance: Instance }) {
             <td>
                 {ROLE[instance.role]} <code>{instance.name}</code>
             </td>
-            <td>{instance.site ?? '–'}</td>
+            <td>{instance.site === null ? '–' : <SiteName id={instance.site} />}</td>
             <td>
                 <span className={`state ${instance.state}`}>{instance.state}</span>
                 {instance.restarts > 0 && <small> {instance.restarts} restarts</small>}

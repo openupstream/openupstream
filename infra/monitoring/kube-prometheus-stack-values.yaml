@@ -2,8 +2,9 @@
 # "Observability and customer logs"; decisions 106 and 107). Installed by
 # infra/dev-cluster/monitoring.sh into the namespace `monitoring`.
 #
-# Prometheus and Alertmanager run twice, one replica per compute Site, so a
-# dead Site is alerted on by the other one. Both Prometheus replicas scrape
+# Prometheus and Alertmanager run twice, in two different compute Sites
+# (label openupstream.io/compute-site, ADR-0007), so a dead Site is alerted
+# on by the other one. Both Prometheus replicas scrape
 # everything; the two Alertmanagers gossip and send each alert once.
 
 # The values monitoring.sh sets: the alert recipient and the SES SMTP user.
@@ -105,7 +106,7 @@ alertmanager:
         requiredDuringSchedulingIgnoredDuringExecution:
           nodeSelectorTerms:
             - matchExpressions:
-                - {key: topology.kubernetes.io/zone, operator: In, values: [hetzner-fsn1, ovh-lim]}
+                - {key: openupstream.io/compute-site, operator: In, values: ["true"]}
     topologySpreadConstraints:
       - maxSkew: 1
         topologyKey: topology.kubernetes.io/zone
@@ -143,8 +144,15 @@ prometheus:
       requests: {cpu: 100m, memory: 768Mi}
       limits: {memory: 1536Mi}
 
+kube-state-metrics:
+  # The nodes' Site labels (ADR-0007) as labels of kube_node_labels, for
+  # the alerts on Sites in rules.yaml; kube-state-metrics exports no node
+  # label unless allowed here.
+  metricLabelsAllowlist:
+    - nodes=[topology.kubernetes.io/zone,openupstream.io/compute-site,openupstream.io/default-site]
+
 prometheus-node-exporter:
-  # Every node, the third Site too.
+  # Every node, the non-compute Sites' too.
   tolerations:
     - {key: openupstream.io/third-site, operator: Exists, effect: NoSchedule}
 

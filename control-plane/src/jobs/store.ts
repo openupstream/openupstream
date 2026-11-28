@@ -212,16 +212,16 @@ interface OperatorRow extends Row {
  * needs it, and as the API compares it with the CronJob: the pinned image,
  * and where its runs go (as for a single-replica Service).
  */
-export async function listJobRows(pool: pg.Pool, projectId?: string): Promise<JobRow[]> {
+export async function listJobRows(pool: pg.Pool, defaultSite: Site, projectId?: string): Promise<JobRow[]> {
     const { rows } = await pool.query<OperatorRow>(
         `select ${columns('j.')},
                 p.name as project_name, p.account_id, p.created_at as project_created_at,
-                ${siteOf('j')} as site,
+                ${siteOf('j', '$2')} as site,
                 ${databasesOf('j')} as databases
          from jobs j join projects p on p.id = j.project_id
          where p.deleted_at is null and ($1::uuid is null or j.project_id = $1)
          order by j.project_id, j.created_at, j.id`,
-        [projectId ?? null],
+        [projectId ?? null, defaultSite],
     );
     return rows.flatMap((row) => {
         // Only an image that parsed was ever written; a row that does not is left out, not deployed wrongly.

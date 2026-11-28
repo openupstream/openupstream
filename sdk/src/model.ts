@@ -8,9 +8,23 @@
 export type Id = string;
 export type Timestamp = string;
 
-/** Compute Sites, where Databases, Services and Jobs run. Both are in Germany. */
-export const COMPUTE_SITES = ['hetzner-fsn1', 'ovh-lim'] as const;
-export type Site = (typeof COMPUTE_SITES)[number];
+/**
+ * A Site's id: its nodes' `topology.kubernetes.io/zone` label, so a
+ * Kubernetes label value (ADR-0007). Which Sites exist is the
+ * installation's: `GET /v1/sites` lists the compute Sites, where Databases,
+ * Services and Jobs run.
+ */
+export type Site = string;
+export const SITE_ID = /^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/;
+
+/** A compute Site (`GET /v1/sites`). */
+export interface SiteInfo {
+    id: Site;
+    /** Where it is, as the installation describes it (e.g. `Falkenstein (Hetzner)`); null when it does not. */
+    description: string | null;
+    /** Whether it is the Home site of what is created without one. */
+    default: boolean;
+}
 
 /** The customer: pays, receives one invoice, owns Projects. */
 export interface Account {
@@ -206,7 +220,7 @@ export interface ProjectInput {
 }
 
 /**
- * Creates a Database; homeSite defaults to `hetzner-fsn1`. With
+ * Creates a Database; homeSite defaults to the default Site (`GET /v1/sites`). With
  * `restoreFrom`, it starts as a copy of that Database instead of empty.
  */
 export interface DatabaseInput {
@@ -382,7 +396,7 @@ export interface Service {
     port: number | null;
     /**
      * Where a single replica runs; null: the Home site of the Project's oldest
-     * Database, or `hetzner-fsn1`. Two or more replicas run in both Sites.
+     * Database, or the default Site. Two or more replicas spread over the compute Sites.
      */
     homeSite: Site | null;
     /** Whether the image is pulled with registry credentials. */
@@ -477,7 +491,7 @@ export interface Job {
     schedule: string | null;
     /** IANA time zone the schedule is read in, e.g. `Europe/Berlin`; null: UTC. */
     timeZone: string | null;
-    /** Where its runs go; null: the Home site of the Project's oldest Database, or `hetzner-fsn1`. */
+    /** Where its runs go; null: the Home site of the Project's oldest Database, or the default Site. */
     homeSite: Site | null;
     /** Whether the image is pulled with registry credentials. */
     registryAuth: boolean;

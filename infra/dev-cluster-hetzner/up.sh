@@ -3,12 +3,22 @@
 # session (ARCHITECTURE.md decisions 33 and 52). Install the platform on it
 # with ../dev-cluster/install-multi-node.sh; destroy it with down.sh.
 #
-# Cloud locations stand in for the Sites; nodes carry the real Site names, so
-# the operators' manifests apply unchanged:
+# Cloud locations stand in for the Sites. By default the nodes carry
+# production's Site ids, so the platform's data looks like production's
+# (SITES and LOCATIONS, space-separated, choose others; the first two are
+# the compute Sites):
 #
-#   hetzner-fsn1  fsn1  compute Site
+#   hetzner-fsn1  fsn1  compute Site, the default Site
 #   ovh-lim       hel1  compute Site (stand-in; Hetzner Cloud has no Limburg)
 #   netcup-nbg    nbg1  third Site, tainted openupstream.io/third-site
+#
+# The node setup is the only place that labels the nodes (ADR-0007): the
+# compute nodes join with openupstream.io/compute-site=true (the first also
+# openupstream.io/default-site=true), the third with the taint
+# openupstream.io/third-site=true:NoSchedule, and every node without a
+# description gets one (openupstream.io/site-description) once it has
+# joined. install-multi-node.sh only checks them. k3s sets labels only when
+# a node first registers: a node that already runs k3s keeps its own.
 #
 # Each compute node gets a Hetzner Cloud Volume as its LVM volume group
 # `openupstream`, where TopoLVM puts the Databases' volumes (infra/topolvm);
@@ -26,13 +36,14 @@ SERVER_TYPE=${SERVER_TYPE:-cpx32}
 IMAGE=${IMAGE:-ubuntu-24.04}
 K3S_VERSION=${K3S_VERSION:-v1.36.5+k3s1}
 VOLUME_GB=${VOLUME_GB:-40}
-SITES=(hetzner-fsn1 ovh-lim netcup-nbg)
-location() {
-  case $1 in
-    hetzner-fsn1) echo fsn1 ;;
-    ovh-lim) echo hel1 ;;
-    netcup-nbg) echo nbg1 ;;
-  esac
+read -r -a SITES <<<"${SITES:-hetzner-fsn1 ovh-lim netcup-nbg}"
+read -r -a LOCATIONS <<<"${LOCATIONS:-fsn1 hel1 nbg1}"
+[[ ${#SITES[@]} -eq 3 && ${#LOCATIONS[@]} -eq 3 ]] ||
+  { echo "SITES and LOCATIONS each need three entries: two compute Sites, then the third" >&2; exit 1; }
+location() { # site → its Hetzner Cloud location
+  local i
+  for i in 0 1 2; do [[ ${SITES[$i]} == "$1" ]] && echo "${LOCATIONS[$i]}"; done
+  return 0
 }
 
 mkdir -p "$STATE"
@@ -131,8 +142,9 @@ for node_ip in "${IPS[0]}" "${IPS[1]}"; do
 done
 
 FIRST=${IPS[0]}
-install_k3s "${SITES[0]}" "$FIRST" --cluster-init --node-label openupstream.io/gvisor=true
-install_k3s "${SITES[1]}" "${IPS[1]}" --server "https://$FIRST:6443" --node-label openupstream.io/gvisor=true
+COMPUTE="--node-label openupstream.io/compute-site=true --node-label openupstream.io/gvisor=true"
+install_k3s "${SITES[0]}" "$FIRST" --cluster-init $COMPUTE --node-label openupstream.io/default-site=true
+install_k3s "${SITES[1]}" "${IPS[1]}" --server "https://$FIRST:6443" $COMPUTE
 install_k3s "${SITES[2]}" "${IPS[2]}" --server "https://$FIRST:6443" \
   --node-taint openupstream.io/third-site=true:NoSchedule
 
@@ -142,7 +154,13 @@ chmod 600 "$STATE/kubeconfig"
 
 KUBECONFIG=$STATE/kubeconfig kubectl wait --for=condition=Ready node --all --timeout=5m
 KUBECONFIG=$STATE/kubeconfig kubectl apply -f ../gvisor/runtimeclass.yaml >/dev/null
+# The node's name is its server's.
+for site in "${SITES[@]}"; do
+  [[ -n $(KUBECONFIG=$STATE/kubeconfig kubectl get node "$PREFIX-$site" -o jsonpath='{.metadata.annotations.openupstream\.io/site-description}') ]] ||
+    KUBECONFIG=$STATE/kubeconfig kubectl annotate node "$PREFIX-$site" \
+      openupstream.io/site-description="Hetzner Cloud $(location "$site")" >/dev/null
+done
 echo "export KUBECONFIG=$PWD/$STATE/kubeconfig"
 echo "then: ../dev-cluster/install-multi-node.sh"
-echo "The API server is on $FIRST (hetzner-fsn1); switch the kubeconfig to"
+echo "The API server is on $FIRST (${SITES[0]}); switch the kubeconfig to"
 echo "another node's IP before switching that Site off."

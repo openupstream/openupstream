@@ -1,5 +1,6 @@
 # TopoLVM (chart 17.3.1, TopoLVM 0.42.1): local volumes for the Databases
-# on the compute Sites (ARCHITECTURE.md, "Postgres", decisions 26 and 109).
+# on the compute Sites' nodes, label openupstream.io/compute-site
+# (ARCHITECTURE.md, "Postgres", decisions 26 and 109; ADR-0007).
 #
 # Thick logical volumes in the volume group `openupstream` (vgcreate.sh): a
 # volume reserves its full size, so a node never promises more disk than it
@@ -20,7 +21,7 @@ controller:
   storageCapacityTracking:
     enabled: true
 
-# Only the compute Sites hold Databases; the third Site has no volume group.
+# Only the compute Sites hold Databases; other Sites have no volume group.
 lvmd:
   managed: true
   affinity: &compute
@@ -28,9 +29,9 @@ lvmd:
       requiredDuringSchedulingIgnoredDuringExecution:
         nodeSelectorTerms:
           - matchExpressions:
-              - key: topology.kubernetes.io/zone
+              - key: openupstream.io/compute-site
                 operator: In
-                values: [hetzner-fsn1, ovh-lim]
+                values: ["true"]
   deviceClasses:
     - name: nvme
       volume-group: openupstream

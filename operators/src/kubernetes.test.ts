@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { databaseMetricsPolicyFor, networkPolicyFor, projectObjectsFor } from './kubernetes.js';
+import { databaseMetricsPolicyFor, defaultSiteOf, networkPolicyFor, projectObjectsFor } from './kubernetes.js';
 
 const projectId = '11111111-1111-4111-8111-111111111111';
 
@@ -46,4 +46,17 @@ test('the NetworkPolicy is applied right after the namespace, before anything ru
         projectObjectsFor({ id: projectId, name: 'shop' }).map((object) => object.kind),
         ['Namespace', 'NetworkPolicy'],
     );
+});
+
+test('the bootstrap finds the default Site from the labels of a compute node marked default', () => {
+    const node = (zone: string, compute: boolean, isDefault: boolean) => ({
+        labels: {
+            'topology.kubernetes.io/zone': zone,
+            ...(compute ? { 'openupstream.io/compute-site': 'true' } : {}),
+            ...(isDefault ? { 'openupstream.io/default-site': 'true' } : {}),
+        },
+    });
+    assert.equal(defaultSiteOf([node('home-a', true, false), node('home-b', true, true), node('witness', false, false)]), 'home-b');
+    assert.equal(defaultSiteOf([node('zeta', true, true), node('alpha', true, true)]), 'alpha', 'the first by id when several are marked');
+    assert.equal(defaultSiteOf([node('witness', false, true), node('home-a', true, false), {}]), undefined, 'a non-compute node does not count');
 });

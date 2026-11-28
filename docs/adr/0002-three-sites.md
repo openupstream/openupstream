@@ -1,7 +1,8 @@
 # ADR-0002: Three Sites at three providers
 
 Date: 2026-10-16
-Status: accepted
+Status: accepted; amended by ADR-0007 (the Sites are read from the nodes'
+labels, and this layout is production's, not the only one the code allows)
 
 ## Context
 

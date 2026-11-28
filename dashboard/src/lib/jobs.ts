@@ -1,4 +1,4 @@
-import { COMPUTE_SITES, DNS_LABEL, JOB_LIMITS, type Job, type JobInput, type JobPatch, type JobRun, type Site } from '@openupstream/sdk';
+import { DNS_LABEL, SITE_ID, JOB_LIMITS, type Job, type JobInput, type JobPatch, type JobRun, type Site } from '@openupstream/sdk';
 import { whole, within } from './usage';
 
 /** What a Job form holds, as typed. `schedule` empty: started only by hand; `timeZone` empty: UTC; `homeSite` empty: wherever the Project's data is. */
@@ -51,7 +51,7 @@ export const jobWanted = (fields: JobFields): JobWanted | string => {
     const timeoutSeconds = whole(fields.timeoutSeconds);
     const memoryMb = whole(fields.memoryMb);
     const cpuMillicores = whole(fields.cpuMillicores);
-    const homeSite = fields.homeSite === '' ? null : COMPUTE_SITES.find((site) => site === fields.homeSite);
+    const homeSite = fields.homeSite === '' ? null : SITE_ID.test(fields.homeSite) ? fields.homeSite : undefined;
     return image === '' || /\s/.test(image)
         ? 'Enter the image, e.g. ghcr.io/acme/report:v3.'
         : schedule !== null && !schedule.startsWith('@') && schedule.split(' ').length !== 5

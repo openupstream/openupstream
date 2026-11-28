@@ -121,12 +121,16 @@ _Avoid_: route table, ingress
 
 **Site**:
 One datacenter location of one hosting provider that the platform runs in,
-treated as a single failure domain. A compute Site runs Databases and
-Services; the third Site only keeps quorum and a copy of object data.
+treated as a single failure domain. A compute Site runs Databases, Services
+and Jobs; the other Sites (the third Site in production) only keep quorum
+and a copy of object data. Which Sites exist is the installation's.
 _Avoid_: region, zone, datacenter
 
 **Home site**:
 The Site where a Database's primary runs when nothing has failed.
+
+**Default Site**:
+The compute Site that is the Home site of what is created without one.
 
 **Failover**:
 Moving a Database's primary, or the public ingress, to another Site because

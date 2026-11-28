@@ -8,7 +8,7 @@ const wanted = { image: 'ghcr.io/acme/api:v3', port: 8080, replicas: 1, memoryMb
 test('a Service form: whole numbers within the limits, an empty port for a worker, no Site for no choice', () => {
     assert.deepEqual(serviceWanted(fields), wanted);
     assert.deepEqual(serviceWanted({ ...fields, port: ' ', homeSite: 'ovh-lim', replicas: '10' }), { ...wanted, port: null, homeSite: 'ovh-lim', replicas: 10 });
-    for (const wrong of [{ image: '' }, { image: 'a b' }, { port: '0' }, { port: '65536' }, { port: 'http' }, { replicas: '0' }, { replicas: '11' }, { memoryMb: '63' }, { memoryMb: '1.5' }, { cpuMillicores: '49' }, { cpuMillicores: '8001' }, { homeSite: 'mars' }]) {
+    for (const wrong of [{ image: '' }, { image: 'a b' }, { port: '0' }, { port: '65536' }, { port: 'http' }, { replicas: '0' }, { replicas: '11' }, { memoryMb: '63' }, { memoryMb: '1.5' }, { cpuMillicores: '49' }, { cpuMillicores: '8001' }, { homeSite: 'not a site' }]) {
         assert.equal(typeof serviceWanted({ ...fields, ...wrong }), 'string', JSON.stringify(wrong));
     }
 });

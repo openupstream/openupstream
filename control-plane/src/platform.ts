@@ -6,11 +6,22 @@
  * then on reconciles them like any customer's. The billing Database has no
  * bootstrap: the operator creates it from the seeded row.
  */
-import { PLATFORM } from '@openupstream/sdk';
+import { PLATFORM, type Site } from '@openupstream/sdk';
 import type pg from 'pg';
 
-/** Inserts the rows that are missing, in one statement; never changes or removes existing ones. */
-export async function seedPlatform(pool: pg.Pool, options: { readonly billing: boolean }): Promise<void> {
+/** Whether any of the platform's Database rows (the billing one with `billing`) is not there yet. */
+export async function platformRowsMissing(pool: pg.Pool, options: { readonly billing: boolean }): Promise<boolean> {
+    const { database, authDatabase, billingDatabase } = PLATFORM;
+    const ids = (options.billing ? [database, authDatabase, billingDatabase] : [database, authDatabase]).map((d) => d.id);
+    const { rows } = await pool.query<{ count: number }>('select count(*)::int as count from databases where id = any($1::uuid[])', [ids]);
+    return (rows[0]?.count ?? 0) < ids.length;
+}
+
+/**
+ * Inserts the rows that are missing, in one statement, the Databases with
+ * `homeSite` (the default Site); never changes or removes existing ones.
+ */
+export async function seedPlatform(pool: pg.Pool, options: { readonly billing: boolean; readonly homeSite: Site }): Promise<void> {
     const { account, project, database, authDatabase, billingDatabase } = PLATFORM;
     const databases = options.billing ? [database, authDatabase, billingDatabase] : [database, authDatabase];
     await pool.query(
@@ -35,7 +46,7 @@ export async function seedPlatform(pool: pg.Pool, options: { readonly billing: b
                     id: d.id,
                     project_id: project.id,
                     name: d.name,
-                    home_site: d.homeSite,
+                    home_site: options.homeSite,
                     memory_mb: d.memoryMb,
                     storage_gb: d.storageGb,
                     created_at: d.createdAt,
