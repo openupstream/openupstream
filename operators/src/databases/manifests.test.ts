@@ -462,7 +462,11 @@ test('a second PgBouncer reaches only the standby, one per Site, set up like the
     assert.equal(readPooler.spec.type, 'ro', 'replicas only: nothing answers while no standby is ready (decision 157)');
     assert.equal(readPooler.spec.instances, 2);
     assert.deepEqual(readPooler.spec.cluster, pooler.spec.cluster);
-    assert.deepEqual(readPooler.spec.pgbouncer, pooler.spec.pgbouncer);
+    assert.deepEqual(readPooler.spec.pgbouncer, {
+        ...pooler.spec.pgbouncer,
+        parameters: { ...pooler.spec.pgbouncer.parameters, query_wait_timeout: '30' },
+    });
+    assert.equal(pooler.spec.pgbouncer.parameters?.['query_wait_timeout'], undefined, "the primary's Pooler keeps PgBouncer's 120 s: it is paused through a restart");
     assert.deepEqual(readPooler.spec.template?.spec?.affinity?.podAntiAffinity?.requiredDuringSchedulingIgnoredDuringExecution, [
         { labelSelector: { matchLabels: { 'cnpg.io/poolerName': readPooler.metadata.name } }, topologyKey: ZONE_LABEL },
     ]);

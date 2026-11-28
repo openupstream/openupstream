@@ -93,6 +93,14 @@ export const POOLER_DEAD_SERVER_DETECTION = {
 export const POOLER_LOGIN_RETRY = { server_login_retry: '1' } as const;
 
 /**
+ * How long the Pooler to the standby queues a query while no standby
+ * answers, before it fails it (decision 157). PgBouncer's 120 s would hang
+ * every read for two minutes during a Site outage; a restart of the standby
+ * left readers waiting 15 s (dev cluster, 2026-11-28), which 30 s rides out.
+ */
+export const READ_POOLER_QUEUE = { query_wait_timeout: '30' } as const;
+
+/**
  * How a rolling restart (a new memory size, a new image) treats the
  * primary (decision 110): restarted in place, after the standby, so it
  * stays in its Home site; its smart shutdown waits at most 30 s for
@@ -442,6 +450,7 @@ const poolerFor = (meta: ObjectMeta, cluster: string, config: DatabaseConfig, ty
                 max_prepared_statements: '200',
                 ...POOLER_DEAD_SERVER_DETECTION,
                 ...POOLER_LOGIN_RETRY,
+                ...(type === 'ro' ? READ_POOLER_QUEUE : {}),
             },
         },
         template: {
