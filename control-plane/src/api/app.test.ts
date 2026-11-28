@@ -1111,7 +1111,7 @@ describe('Databases', () => {
         assert.equal(response.headers.get('location'), `/v1/projects/${projectId}/databases/${database.id}`);
     });
 
-    test("the operator sees it at once, with the app user's password ours and its Secrets written (decision 155)", async () => {
+    test("the operator sees it at once, with the app user's password ours and its Secrets written (decision 156)", async () => {
         const row = (await listDatabaseRows(db.pool)).find((candidate) => candidate.database.id === database.id);
         assert.equal(row?.appCredentials, true);
         const written = () =>

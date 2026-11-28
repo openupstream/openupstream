@@ -75,7 +75,7 @@ export type CreateDatabaseError = { readonly kind: 'name-taken'; readonly name: 
 /**
  * `input` is validated by the API; the schema enforces the same rules again.
  * `app` gives the row its id and the sealed password of its `app` user
- * (decision 155) in the one insert, so the operator never sees the Database
+ * (decision 156) in the one insert, so the operator never sees the Database
  * without it; without `app`, CloudNativePG generates a password.
  */
 export async function createDatabase(

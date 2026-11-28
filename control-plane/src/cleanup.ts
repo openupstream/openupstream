@@ -72,7 +72,7 @@ const runningObjects = (database: { id: string; projectId: string }): ObjectRef[
         { apiVersion: CNPG, kind: 'ScheduledBackup', namespace, name: clusterName(database) },
         { apiVersion: CNPG, kind: 'Pooler', namespace, name: poolerName(database) },
         { apiVersion: CNPG, kind: 'Cluster', namespace, name: clusterName(database) },
-        // The `app` user's Secrets, which the control plane wrote (decision 155); gone already for a Database from before.
+        // The `app` user's Secrets, which the control plane wrote (decision 156); gone already for a Database from before.
         { apiVersion: 'v1', kind: 'Secret', namespace, name: databaseAppSecret(database) },
         { apiVersion: 'v1', kind: 'Secret', namespace, name: databaseAppVerifierSecret(database) },
     ];

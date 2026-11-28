@@ -106,6 +106,6 @@ kubectl -n project-<project id> patch pooler db-<database id>-pooler --type merg
 
 Measured on the dev cluster (2026-11-28): clients waited 10 s and no write
 failed, for a Database whose `app` password is the control plane's
-(ARCHITECTURE.md, decision 155); without the pause writes fail for about
+(ARCHITECTURE.md, decision 156); without the pause writes fail for about
 15 s, and for a Database from before that decision the first login after
 the switchover fails once either way.
