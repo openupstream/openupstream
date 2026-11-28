@@ -1108,6 +1108,7 @@ describe('Databases', () => {
             database: 'app',
             user: 'app',
         });
+        assert.deepEqual(database.readConnection, { ...database.connection, host: `db-${database.id}-pooler-ro.project-${projectId}.svc.cluster.local` }, 'its standby, read-only (decision 157)');
         assert.equal(response.headers.get('location'), `/v1/projects/${projectId}/databases/${database.id}`);
     });
 

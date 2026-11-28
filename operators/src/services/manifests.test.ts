@@ -70,7 +70,7 @@ test('a worker without a port gets no Kubernetes Service, no container port and 
     assert.equal((planServices([row()], NODE_BLOCKS).find((o) => o.kind === 'Deployment')?.['spec'] as { minReadySeconds?: number }).minReadySeconds, undefined);
 });
 
-test("the container gets a DATABASE_URL per Database of the Project, the oldest's also as DATABASE_URL, without a password in the manifest", () => {
+test("the container gets a DATABASE_URL and a DATABASE_READ_URL per Database of the Project, the oldest's also without its name, and no password in the manifest", () => {
     assert.equal(podOf(planServices([row()], NODE_BLOCKS).find((o) => o.kind === 'Deployment')).spec.containers[0]?.env, undefined);
     const databases = [
         { id: '44444444-4444-4444-8444-444444444444', name: 'main' },
@@ -78,12 +78,16 @@ test("the container gets a DATABASE_URL per Database of the Project, the oldest'
     ];
     const pod = podOf(planServices([{ ...row(), databases }], NODE_BLOCKS).find((o) => o.kind === 'Deployment'));
     const pooler = (id: string) => `db-${id}-pooler.${namespace}.svc.cluster.local:5432`;
+    const standby = (id: string) => `db-${id}-pooler-ro.${namespace}.svc.cluster.local:5432`;
     assert.deepEqual(pod.spec.containers[0]?.env, [
         { name: 'OUP_DATABASE_PASSWORD_MAIN', valueFrom: { secretKeyRef: { name: `db-${databases[0]?.id}-app`, key: 'password' } } },
         { name: 'DATABASE_URL_MAIN', value: `postgres://app:$(OUP_DATABASE_PASSWORD_MAIN)@${pooler(databases[0]?.id ?? '')}/app` },
+        { name: 'DATABASE_READ_URL_MAIN', value: `postgres://app:$(OUP_DATABASE_PASSWORD_MAIN)@${standby(databases[0]?.id ?? '')}/app` },
         { name: 'OUP_DATABASE_PASSWORD_EVENTS_DB', valueFrom: { secretKeyRef: { name: `db-${databases[1]?.id}-app`, key: 'password' } } },
         { name: 'DATABASE_URL_EVENTS_DB', value: `postgres://app:$(OUP_DATABASE_PASSWORD_EVENTS_DB)@${pooler(databases[1]?.id ?? '')}/app` },
+        { name: 'DATABASE_READ_URL_EVENTS_DB', value: `postgres://app:$(OUP_DATABASE_PASSWORD_EVENTS_DB)@${standby(databases[1]?.id ?? '')}/app` },
         { name: 'DATABASE_URL', value: `postgres://app:$(OUP_DATABASE_PASSWORD_MAIN)@${pooler(databases[0]?.id ?? '')}/app` },
+        { name: 'DATABASE_READ_URL', value: `postgres://app:$(OUP_DATABASE_PASSWORD_MAIN)@${standby(databases[0]?.id ?? '')}/app` },
     ]);
 });
 

@@ -52,6 +52,7 @@ import {
     type ServiceState,
     clusterName,
     databaseConnection,
+    databaseReadConnection,
     jobObjectName,
     jobSpecVersion,
     projectNamespace,
@@ -534,6 +535,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         ...database,
         state: await stateFor(database),
         connection: databaseConnection(database),
+        readConnection: databaseReadConnection(database),
     });
 
     app.get('/v1/health', (c) => c.json({ ok: true }));
@@ -1100,7 +1102,12 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         c.header('location', `/v1/projects/${project.id}/databases/${created.value.id}`);
         // The operator creates the Cluster within one pass.
-        const response: DatabaseDetails = { ...created.value, state: 'provisioning', connection: databaseConnection(created.value) };
+        const response: DatabaseDetails = {
+            ...created.value,
+            state: 'provisioning',
+            connection: databaseConnection(created.value),
+            readConnection: databaseReadConnection(created.value),
+        };
         return c.json(response, 201);
     });
 

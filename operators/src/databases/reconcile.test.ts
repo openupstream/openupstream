@@ -43,7 +43,7 @@ const kinds = (objects: readonly KubeObject[]) => objects.map((object) => object
 const planned = (plan: { projects: readonly (readonly KubeObject[])[]; databases: readonly (readonly KubeObject[])[] }) =>
     [...plan.projects, ...plan.databases].flat();
 
-test('a Project with two Databases gets one namespace, its two NetworkPolicies, one credentials Secret and four objects per Database', () => {
+test('a Project with two Databases gets one namespace, its two NetworkPolicies, one credentials Secret and five objects per Database', () => {
     const rows: DatabaseRow[] = [
         { project, database: orders },
         { project, database: invoices },
@@ -51,8 +51,8 @@ test('a Project with two Databases gets one namespace, its two NetworkPolicies, 
     const plan = planDatabases(rows, config, credentials);
     assert.deepEqual(plan.projects.map(kinds), [['Namespace', 'NetworkPolicy', 'NetworkPolicy', 'Secret']]);
     assert.deepEqual(plan.databases.map(kinds), [
-        ['ObjectStore', 'Cluster', 'Pooler', 'ScheduledBackup'],
-        ['ObjectStore', 'Cluster', 'Pooler', 'ScheduledBackup'],
+        ['ObjectStore', 'Cluster', 'Pooler', 'Pooler', 'ScheduledBackup'],
+        ['ObjectStore', 'Cluster', 'Pooler', 'Pooler', 'ScheduledBackup'],
     ]);
     assert.deepEqual(plan.invalid, []);
 });
@@ -164,7 +164,7 @@ test('reconcile applies the plan in order and reports each object', async () => 
             [...steps].sort((a, b) => a - b),
         );
     }
-    assert.equal(result.value.applied.length, 12);
+    assert.equal(result.value.applied.length, 14);
     assert.deepEqual(result.value.failed, []);
     assert.equal(
         applied.every(({ dryRun }) => !dryRun),
@@ -185,7 +185,7 @@ test('a failed apply is reported and the pass goes on', async () => {
     const { kube, applied } = fakeKube(credentials, ['Cluster']);
     const result = await reconcileDatabases(kube, [{ project, database: orders }], config, options);
     assert.ok(result.ok);
-    assert.equal(applied.length, 8);
+    assert.equal(applied.length, 9);
     assert.deepEqual(result.value.failed, [
         {
             ref: { apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster', namespace, name: `db-${orders.id}` },
@@ -247,7 +247,7 @@ test('when the Clusters cannot be listed no Cluster is applied, as a guess would
     );
     const kindsApplied = applied.map(({ object }) => object.kind);
     assert.equal(kindsApplied.includes('Cluster'), false);
-    assert.deepEqual(kindsApplied.slice(-3), ['ObjectStore', 'Pooler', 'ScheduledBackup']);
+    assert.deepEqual(kindsApplied.slice(-4), ['ObjectStore', 'Pooler', 'Pooler', 'ScheduledBackup']);
 });
 
 test("a row with app credentials names the verifier Secret; one being restored gets it once the restore has finished", () => {

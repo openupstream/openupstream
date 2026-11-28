@@ -31,6 +31,7 @@ import {
     databaseRoleName,
     databaseRoleSecret,
     poolerName,
+    readPoolerName,
 } from '@openupstream/sdk';
 import type { Cluster, ObjectStore, Pooler, ScheduledBackup } from '../generated/index.js';
 import {
@@ -247,6 +248,11 @@ export interface DatabaseManifests {
     readonly objectStore: ObjectStoreManifest;
     readonly cluster: ClusterManifest;
     readonly pooler: PoolerManifest;
+    /**
+     * The Pooler to the standby, for the read URL (decision 157); absent
+     * where a Database has no standby (a single node).
+     */
+    readonly readPooler?: PoolerManifest;
     readonly scheduledBackup: ScheduledBackupManifest;
 }
 
@@ -260,7 +266,7 @@ export type DatabaseManifestError =
     | { readonly kind: 'invalid-storage'; readonly storageGb: number }
     | { readonly kind: 'invalid-role'; readonly id: string; readonly access: string };
 
-export { clusterName, poolerName } from '@openupstream/sdk';
+export { clusterName, poolerName, readPoolerName } from '@openupstream/sdk';
 
 /**
  * Rows come from the database as strings; the type alone does not guarantee
@@ -415,14 +421,19 @@ const clusterFor = (
     },
 });
 
-const poolerFor = (meta: ObjectMeta, cluster: string, config: DatabaseConfig): PoolerManifest => ({
+/**
+ * A Pooler of the Database: `rw` follows the primary; `ro` reaches only
+ * replicas, so nothing answers through it while no standby is ready
+ * (decision 157).
+ */
+const poolerFor = (meta: ObjectMeta, cluster: string, config: DatabaseConfig, type: 'rw' | 'ro' = 'rw'): PoolerManifest => ({
     apiVersion: 'postgresql.cnpg.io/v1',
     kind: 'Pooler',
     metadata: meta,
     spec: {
         cluster: { name: cluster },
         instances: instancesFor(config.layout).pooler,
-        type: 'rw',
+        type,
         pgbouncer: {
             poolMode: 'transaction',
             parameters: {
@@ -617,6 +628,7 @@ export function databaseManifests(
         objectStore: objectStoreFor(meta(cluster), config),
         cluster: clusterFor(meta(cluster), database, config, roles, live, appCredentials),
         pooler: poolerFor(meta(poolerName(database)), cluster, config),
+        ...(instancesFor(config.layout).database > 1 ? { readPooler: poolerFor(meta(readPoolerName(database)), cluster, config, 'ro') } : {}),
         scheduledBackup: scheduledBackupFor(meta(cluster), config),
     });
 }

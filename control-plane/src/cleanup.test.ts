@@ -121,6 +121,7 @@ test('a deleted Database loses its running objects at once, keeps its backups un
     const running = [
         `ScheduledBackup ${namespace}/db-${databaseId}`,
         `Pooler ${namespace}/db-${databaseId}-pooler`,
+        `Pooler ${namespace}/db-${databaseId}-pooler-ro`,
         `Cluster ${namespace}/db-${databaseId}`,
         `Secret ${namespace}/db-${databaseId}-app`,
         `Secret ${namespace}/db-${databaseId}-app-scram`,

@@ -142,7 +142,7 @@ test('runs carry the Job id the control plane lists them by, and the label the e
 test("a run gets the Project's DATABASE_URLs as a Service does", () => {
     const databases = [{ id: '44444444-4444-4444-8444-444444444444', name: 'main' }];
     const container = specOf(cronJobOf([{ ...row(), databases }])).jobTemplate.spec.template.spec.containers[0];
-    assert.deepEqual(container?.env?.map((variable) => variable.name), ['OUP_DATABASE_PASSWORD_MAIN', 'DATABASE_URL_MAIN', 'DATABASE_URL']);
+    assert.deepEqual(container?.env?.map((variable) => variable.name), ['OUP_DATABASE_PASSWORD_MAIN', 'DATABASE_URL_MAIN', 'DATABASE_READ_URL_MAIN', 'DATABASE_URL', 'DATABASE_READ_URL']);
     assert.equal(specOf(cronJobOf([row()])).jobTemplate.spec.template.spec.containers[0]?.env, undefined);
 });
 
