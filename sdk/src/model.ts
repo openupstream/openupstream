@@ -20,7 +20,7 @@ export const SITE_ID = /^[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$/;
 /** A compute Site (`GET /v1/sites`). */
 export interface SiteInfo {
     id: Site;
-    /** Where it is, as the installation describes it (e.g. `Falkenstein (Hetzner)`); null when it does not. */
+    /** What the installation's admins call it (e.g. `Falkenstein (Hetzner)`); null until they name it. */
     description: string | null;
     /** Whether it is the Home site of what is created without one. */
     default: boolean;
@@ -69,14 +69,26 @@ export interface NodeInfo {
     default: boolean;
     /** Tainted quorum-only: only etcd, Garage, Loki and the node agents run there. */
     quorumOnly: boolean;
-    description: string | null;
     /** Kubernetes reports it Ready. */
     ready: boolean;
     createdAt: Timestamp;
 }
 
-/** Every node and what is wrong with the Site labels, for the installation's admins. */
+/** A Site as the installation's admins see it: compute or not, with its description (`GET /v1/admin/nodes`). */
+export interface SiteDetails extends SiteInfo {
+    /** Its nodes are labelled compute: Databases, Services and Jobs run there. */
+    compute: boolean;
+}
+
+/** A Site's description, set by an admin; null removes it, so the id is shown alone (ADR-0009). */
+export interface SiteDescriptionInput {
+    description: string | null;
+}
+
+/** Every Site and node and what is wrong with the Site labels, for the installation's admins. */
 export interface NodesReport {
+    /** Every Site that has a node, by id. */
+    sites: SiteDetails[];
     nodes: NodeInfo[];
     problems: SiteProblem[];
 }

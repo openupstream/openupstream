@@ -7,18 +7,25 @@ on hardware of your own, and is meant to stay: a long-lived installation to
 run apps on, test upgrades of a running cluster, and try changes of
 openupstream, with `snapshot.sh` to go back.
 
-| VM | Stands in for | Default size |
+| VM | Site | Default size |
 | --- | --- | --- |
-| `oup-home-hetzner-fsn1` | `hetzner-fsn1`, compute Site, the default Site | 6 CPUs, 10 GiB, 60 GiB disk + 40 GiB volume |
-| `oup-home-ovh-lim` | `ovh-lim`, compute Site | 6 CPUs, 10 GiB, 60 GiB disk + 40 GiB volume |
-| `oup-home-netcup-nbg` | `netcup-nbg`, no compute Site, tainted `openupstream.io/quorum-only` | 2 CPUs, 4 GiB, 60 GiB disk |
+| `oup-site-1` | `site-1`, compute Site, the default Site | 6 CPUs, 10 GiB, 60 GiB disk + 40 GiB volume |
+| `oup-site-2` | `site-2`, compute Site | 6 CPUs, 10 GiB, 60 GiB disk + 40 GiB volume |
+| `oup-site-3` | `site-3`, no compute Site, tainted `openupstream.io/quorum-only` | 2 CPUs, 4 GiB, 60 GiB disk |
 
 The defaults fit a host where Linux sees 28 GB of RAM, a 32 GB mini PC
 whose integrated GPU keeps 4 GB (`COMPUTE_CPUS`,
 `COMPUTE_MEMORY`, `QUORUM_CPUS`, `QUORUM_MEMORY`, `ROOT_SIZE`, `VOLUME_SIZE`
-change them; `PREFIX` the names). `SITES` chooses other Site ids, two
-compute Sites and then the third (e.g. `SITES="home-a home-b home-c"`);
-give the same to `down.sh` and `snapshot.sh`. The compute VMs' volumes become the LVM
+change them; `PREFIX`, default `oup`, the names). `SITES` chooses other
+Site ids, two compute Sites and then the third (e.g.
+`SITES="home-a home-b home-c"`); give the same to `down.sh` and
+`snapshot.sh`. The defaults claim no location because a Site id is
+permanent: it is stored in node labels, every Database, Service and Job
+row and Garage's layout, so set `SITES` to choose your own once. The human
+name (e.g. "Minisforum at home") is the Site's description, changed
+anytime on the dashboard's "Sites & nodes" page (`/nodes`). A cluster made
+before these defaults keeps its names: give it
+`PREFIX=oup-home SITES="hetzner-fsn1 ovh-lim netcup-nbg"`. The compute VMs' volumes become the LVM
 volume group `openupstream` that TopoLVM allocates the Databases from, as
 the servers' NVMe does (decision 109).
 
@@ -69,9 +76,8 @@ profile, gVisor on the compute VMs (`infra/gvisor`), and k3s with the
 Hetzner dev cluster's settings, then the RuntimeClass `gvisor`. The
 compute nodes join with the label `openupstream.io/compute-site=true`,
 the first also `openupstream.io/default-site=true`, the third with the
-taint `openupstream.io/quorum-only`, and each node without a description
-gets `Incus VM <name>` (`kubectl annotate --overwrite` changes it). This
-is the only place the nodes are labelled; the install only checks them
+taint `openupstream.io/quorum-only`. This is the only place the nodes are
+labelled; the install only checks them
 ([ADR-0007](../../docs/adr/0007-sites-from-node-labels.md)). k3s applies the
 labels only when a node first joins: a cluster made before needs them once
 by hand (the commands are in the [dev-cluster README](../dev-cluster/README.md#sites)). Run

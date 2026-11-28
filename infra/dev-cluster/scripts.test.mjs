@@ -115,12 +115,12 @@ const multiNodeJson = JSON.stringify({
 
 /**
  * Nodes as `kubectl get nodes -o json` prints them, from
- * [name, site, { compute, default, tainted, description }]; a site of null
+ * [name, site, { compute, default, tainted }]; a site of null
  * leaves out the zone label.
  */
 const nodes = (...list) =>
     JSON.stringify({
-        items: list.map(([name, site, { compute = false, default: isDefault = false, tainted = false, description } = {}]) => ({
+        items: list.map(([name, site, { compute = false, default: isDefault = false, tainted = false } = {}]) => ({
             metadata: {
                 name,
                 labels: {
@@ -128,7 +128,6 @@ const nodes = (...list) =>
                     ...(compute ? { 'openupstream.io/compute-site': 'true' } : {}),
                     ...(isDefault ? { 'openupstream.io/default-site': 'true' } : {}),
                 },
-                ...(description ? { annotations: { 'openupstream.io/site-description': description } } : {}),
             },
             spec: tainted ? { taints: [{ key: 'openupstream.io/quorum-only', value: 'true', effect: 'NoSchedule' }] } : {},
         })),
@@ -442,14 +441,14 @@ const k3s = (env) => {
     return { ...result, kubeconfig: readFileSync(join(state, 'kubeconfig'), 'utf8') };
 };
 
-test('k3s-single-node.sh installs gVisor before k3s, labelled as the compute and default Site hetzner-fsn1, with the kubeconfig on the resolved host', () => {
+test('k3s-single-node.sh installs gVisor before k3s, labelled as the compute and default Site site-1, with the kubeconfig on the resolved host', () => {
     const { status, stderr, log, kubeconfig } = k3s({ SSH_HOSTNAME_STUB: 'mini.tailnet.ts.net' });
     assert.equal(status, 0, stderr);
     const lines = log.split('\n');
     const gvisor = lines.findIndex((line) => line.endsWith('bash -s'));
     const install = lines.findIndex((line) => line.includes('get.k3s.io'));
     assert.ok(gvisor >= 0 && install > gvisor, log);
-    assert.match(lines[install], /--node-label topology.kubernetes.io\/zone=hetzner-fsn1/);
+    assert.match(lines[install], /--node-label topology.kubernetes.io\/zone=site-1/);
     assert.match(lines[install], /--node-label openupstream.io\/compute-site=true/);
     assert.match(lines[install], /--node-label openupstream.io\/default-site=true/);
     assert.match(lines[install], /--node-label openupstream.io\/gvisor=true/);
@@ -462,12 +461,11 @@ test('k3s-single-node.sh installs gVisor before k3s, labelled as the compute and
     assert.match(log, /applied apply -f ..\/gvisor\/runtimeclass.yaml/);
 });
 
-test('k3s-single-node.sh takes the Site id from SITE and its description from SITE_DESCRIPTION, and refuses an id that is no label value', () => {
-    const home = k3s({ SITE: 'home', SITE_DESCRIPTION: 'Home mini PC' });
+test('k3s-single-node.sh takes the Site id from SITE and refuses an id that is no label value', () => {
+    const home = k3s({ SITE: 'home' });
     assert.equal(home.status, 0, home.stderr);
     assert.match(home.log, /get\.k3s\.io.*--node-label topology.kubernetes.io\/zone=home /s);
-    assert.match(home.log, /^annotate node --all --overwrite openupstream.io\/site-description=Home mini PC$/m);
-    assert.doesNotMatch(k3s({}).log, /annotate/);
+    assert.doesNotMatch(home.log, /annotate/);
     const state = mkdtempSync(join(tmpdir(), 'dev-cluster-state-'));
     const invalid = run('./k3s-single-node.sh root@mini', { STATE: state, SITE: 'my home' });
     assert.notEqual(invalid.status, 0);

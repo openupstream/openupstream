@@ -93,7 +93,8 @@ import { byNewest, isRunOf, runManifest, runOf } from '../jobs/runs.js';
 import { isTimeZone, scheduleError } from '../jobs/schedule.js';
 import { type ControlPlaneKube, jobStateOf, serviceStateOf, stateOf } from '../kube.js';
 import { openLogStream, siteOf } from '../logs/stream.js';
-import { type ReadSites, type Sites, chooseSite, nodesReport, siteReader } from '../sites.js';
+import { type ReadSites, type Sites, chooseSite, described, nodesReport, siteReader } from '../sites.js';
+import { MAX_DESCRIPTION_LENGTH, setSiteDescription, siteDescriptions } from '../site-descriptions.js';
 import type { PrometheusQuery } from '../prometheus.js';
 import { measure, projectPods, projectUsage, usageOf } from '../usage/live.js';
 import { type RegistryDeps, type ResolveError, parseImageReference, resolveDigest } from '../registry.js';
@@ -173,6 +174,15 @@ const LOG_POLL_MS = 5_000;
 
 /** Checked against the compute Sites once parsed (siteFor). */
 const siteId = z.string().regex(SITE_ID, 'a Site id, as GET /v1/sites lists them');
+/** A Site's description: trimmed, at most MAX_DESCRIPTION_LENGTH characters; empty or null removes it. */
+const siteDescriptionInput = z.object({
+    description: z
+        .string()
+        .trim()
+        .max(MAX_DESCRIPTION_LENGTH, `at most ${MAX_DESCRIPTION_LENGTH} characters`)
+        .regex(/^[^\p{Cc}]*$/u, 'no control characters')
+        .nullable(),
+});
 
 const accountInput = z.strictObject({
     name: z.string().trim().min(1).max(200),
@@ -598,32 +608,64 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     /** A 403 for an Account token on a route that needs a person: it never manages the Account or sees its Members. */
     const tokenRefused = (c: Context<Env>, what: string) => c.json({ error: `an Account token cannot ${what}` }, 403);
 
-    /** The compute Sites, read from the nodes (ADR-0007); any signed-in caller may ask. */
+    /** The compute Sites, read from the nodes (ADR-0007), with their descriptions (ADR-0009); any signed-in caller may ask. */
     app.get('/v1/sites', async (c) => {
         const sites = await readSites();
         if (!sites.ok) {
             deps.log?.({ msg: 'cannot read the Sites', error: sites.error });
             return sitesDown(c);
         }
-        return c.json(sites.value.list);
+        return c.json(described(sites.value.list, await siteDescriptions(pool)));
     });
 
     /**
-     * Every node and what is wrong with the Site labels (ADR-0008), for the
-     * installation's admins: madAuth's role `admin`, signed in (no API key,
-     * no Account token).
+     * The routes for the installation's admins (ADR-0008): madAuth's role
+     * `admin` in a signed token, no API key, no Account token. The 403 for
+     * anyone else, or undefined.
      */
-    app.get('/v1/admin/nodes', async (c) => {
+    const notAdmin = (c: Context<Env>, what: string) => {
         const caller = c.get('identity');
-        if (caller.kind === 'account-token' || caller.scopes !== undefined || !(caller.roles ?? []).includes(ADMIN_ROLE)) {
-            return c.json({ error: "only madAuth's admins may see the nodes, signed in" }, 403);
+        return caller.kind === 'account-token' || caller.scopes !== undefined || !(caller.roles ?? []).includes(ADMIN_ROLE)
+            ? c.json({ error: `only madAuth's admins may ${what}, signed in` }, 403)
+            : undefined;
+    };
+
+    /** Every Site and node and what is wrong with the Site labels (ADR-0008). */
+    app.get('/v1/admin/nodes', async (c) => {
+        const refused = notAdmin(c, 'see the nodes');
+        if (refused !== undefined) {
+            return refused;
         }
         const sites = await readSites();
         if (!sites.ok) {
             deps.log?.({ msg: 'cannot read the Sites', error: sites.error });
             return sitesDown(c);
         }
-        return c.json(nodesReport(sites.value.all));
+        return c.json(nodesReport(sites.value.all, await siteDescriptions(pool)));
+    });
+
+    /** Names a Site that has a node, compute or not, or removes its name with null (ADR-0009). */
+    app.put('/v1/admin/sites/:site', async (c) => {
+        const refused = notAdmin(c, 'name Sites');
+        if (refused !== undefined) {
+            return refused;
+        }
+        const input = siteDescriptionInput.safeParse(await body(c));
+        if (!input.success) {
+            return c.json(invalid(input.error.issues), 400);
+        }
+        const sites = await readSites();
+        if (!sites.ok) {
+            deps.log?.({ msg: 'cannot read the Sites', error: sites.error });
+            return sitesDown(c);
+        }
+        const site = nodesReport(sites.value.all, new Map()).sites.find((each) => each.id === c.req.param('site'));
+        if (site === undefined) {
+            return c.json({ error: 'no node is in that Site' }, 404);
+        }
+        const description = input.data.description === null || input.data.description === '' ? null : input.data.description;
+        await setSiteDescription(pool, site.id, description);
+        return c.json({ ...site, description });
     });
 
     app.get('/v1/accounts', async (c) => {

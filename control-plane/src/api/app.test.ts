@@ -23,6 +23,7 @@ import {
     type Secret,
     type ServiceDetails,
     type ServiceRow,
+    type SiteInfo,
     jobSpecVersion,
     serviceSpecVersion,
 } from '@openupstream/sdk';
@@ -140,9 +141,9 @@ const nodeSites = new Map([
 ]);
 /** The nodes' Site labels (ADR-0007): both compute nodes, the first the default Site; `nodesDown` makes listing them fail. */
 const nodeLabels: NodeLabels[] = [
-    { name: 'node-fsn', site: 'hetzner-fsn1', compute: true, default: true, description: 'Falkenstein (Hetzner)', createdAt: '2026-10-01T00:00:00Z', quorumOnly: false, ready: true },
-    { name: 'node-lim', site: 'ovh-lim', compute: true, default: false, description: undefined, createdAt: '2026-10-01T00:00:00Z', quorumOnly: false, ready: true },
-    { name: 'node-nbg', site: 'netcup-nbg', compute: false, default: false, description: undefined, createdAt: '2026-10-01T00:00:00Z', quorumOnly: true, ready: true },
+    { name: 'node-fsn', site: 'hetzner-fsn1', compute: true, default: true, createdAt: '2026-10-01T00:00:00Z', quorumOnly: false, ready: true },
+    { name: 'node-lim', site: 'ovh-lim', compute: true, default: false, createdAt: '2026-10-01T00:00:00Z', quorumOnly: false, ready: true },
+    { name: 'node-nbg', site: 'netcup-nbg', compute: false, default: false, createdAt: '2026-10-01T00:00:00Z', quorumOnly: true, ready: true },
 ];
 let nodesDown = false;
 const volumeNodes = new Map<string, string[]>();
@@ -1127,7 +1128,7 @@ describe('Databases', () => {
         const sites = await call('GET', '/v1/sites', 'alice');
         assert.equal(sites.status, 200);
         assert.deepEqual(await sites.json(), [
-            { id: 'hetzner-fsn1', description: 'Falkenstein (Hetzner)', default: true },
+            { id: 'hetzner-fsn1', description: null, default: true },
             { id: 'ovh-lim', description: null, default: false },
         ]);
         const post = (body: object) => call('POST', `/v1/projects/${projectId}/databases`, 'alice', { memoryMb: 256, storageGb: 1, ...body });
@@ -1155,7 +1156,7 @@ describe('Databases', () => {
         assert.equal((await asAdmin(['support'])).status, 403);
         const [fsn] = nodeLabels;
         assert.ok(fsn !== undefined);
-        nodeLabels.push({ ...fsn, name: 'node-new', site: undefined, compute: false, default: false, description: undefined, ready: false });
+        nodeLabels.push({ ...fsn, name: 'node-new', site: undefined, compute: false, default: false, ready: false });
         try {
             const response = await asAdmin(['admin']);
             assert.equal(response.status, 200);
@@ -1185,6 +1186,43 @@ describe('Databases', () => {
         } finally {
             nodesDown = false;
         }
+    });
+
+    test("madAuth's admins name a Site that has a node, compute or not; every Site list shows the name", async () => {
+        const put = async (site: string, body: unknown, roles: string[] = ['admin']) =>
+            api.request(`/v1/admin/sites/${site}`, {
+                method: 'PUT',
+                headers: { authorization: `Bearer ${await token('alice', { roles })}`, 'content-type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+        assert.equal((await put('hetzner-fsn1', { description: 'Mine' }, [])).status, 403);
+        const named = await put('hetzner-fsn1', { description: '  Falkenstein (Hetzner) ' });
+        assert.equal(named.status, 200);
+        assert.deepEqual(await named.json(), { id: 'hetzner-fsn1', description: 'Falkenstein (Hetzner)', default: true, compute: true });
+        assert.equal((await put('netcup-nbg', { description: 'Nuremberg (netcup)' })).status, 200);
+        assert.equal((await put('home-z', { description: 'Nowhere' })).status, 404);
+        assert.equal((await put('ovh-lim', { description: 'x'.repeat(101) })).status, 400);
+        assert.equal((await put('ovh-lim', { description: 'two\nlines' })).status, 400);
+        assert.equal((await put('ovh-lim', {})).status, 400);
+        assert.deepEqual(((await (await call('GET', '/v1/sites', 'alice')).json()) as SiteInfo[]).map((site) => [site.id, site.description]), [
+            ['hetzner-fsn1', 'Falkenstein (Hetzner)'],
+            ['ovh-lim', null],
+        ]);
+        const report = (await (
+            await api.request('/v1/admin/nodes', { headers: { authorization: `Bearer ${await token('alice', { roles: ['admin'] })}` } })
+        ).json()) as NodesReport;
+        assert.deepEqual(
+            report.sites.map((site) => [site.id, site.description, site.compute]),
+            [
+                ['hetzner-fsn1', 'Falkenstein (Hetzner)', true],
+                ['netcup-nbg', 'Nuremberg (netcup)', false],
+                ['ovh-lim', null, true],
+            ],
+        );
+        for (const site of ['hetzner-fsn1', 'netcup-nbg']) {
+            assert.equal((await put(site, { description: '' })).status, 200);
+        }
+        assert.deepEqual(((await (await call('GET', '/v1/sites', 'alice')).json()) as SiteInfo[])[0]?.description, null);
     });
 
     test('without the node list a Site cannot be checked: 503, nothing created', async () => {

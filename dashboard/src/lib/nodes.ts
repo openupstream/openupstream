@@ -25,3 +25,10 @@ export const problemsByNode = (
     }, new Map<string, readonly SiteProblem[]>()),
     general: problems.filter((problem) => problem.node === null),
 });
+
+/** The longest Site description the API takes. */
+export const MAX_DESCRIPTION_LENGTH = 100;
+
+/** What is wrong with a Site description as typed, or undefined; empty removes it. */
+export const descriptionProblem = (text: string): string | undefined =>
+    text.trim().length > MAX_DESCRIPTION_LENGTH ? `At most ${MAX_DESCRIPTION_LENGTH} characters.` : undefined;

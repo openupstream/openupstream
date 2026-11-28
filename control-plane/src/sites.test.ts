@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { type NodeLabels, chooseSite, nodesReport, siteMetrics, siteProblems, siteReader, sitesOf } from './sites.js';
+import { type NodeLabels, chooseSite, described, nodesReport, siteMetrics, siteProblems, siteReader, sitesOf } from './sites.js';
 import { err, ok } from './result.js';
 
 const node = (name: string, site: string | undefined, extra: Partial<NodeLabels> = {}): NodeLabels => ({
@@ -8,7 +8,6 @@ const node = (name: string, site: string | undefined, extra: Partial<NodeLabels>
     site,
     compute: true,
     default: false,
-    description: undefined,
     createdAt: '2026-11-01T00:00:00Z',
     quorumOnly: false,
     ready: true,
@@ -41,13 +40,16 @@ test('without a default label, or with several, the first by id is the default',
     assert.equal(sitesOf([node('w', 'netcup-nbg', { compute: false })]).default, undefined);
 });
 
-test("a Site's description is its oldest node's that has one", () => {
-    const sites = sitesOf([
-        node('new', 'home-a', { description: 'Newer', createdAt: '2026-11-20T00:00:00Z' }),
-        node('old', 'home-a', { description: '  Home VM A ', createdAt: '2026-11-02T00:00:00Z' }),
-        node('oldest', 'home-a', { description: ' ', createdAt: '2026-11-01T00:00:00Z' }),
-    ]);
-    assert.equal(sites.list[0]?.description, 'Home VM A');
+test("the nodes give no description; described adds the stored ones, null for the rest", () => {
+    const sites = sitesOf([node('a', 'home-a'), node('b', 'home-b')]);
+    assert.deepEqual(sites.list.map((site) => site.description), [null, null]);
+    assert.deepEqual(
+        described(sites.list, new Map([['home-b', 'Office rack']])).map((site) => [site.id, site.description]),
+        [
+            ['home-a', null],
+            ['home-b', 'Office rack'],
+        ],
+    );
 });
 
 test('a Site is chosen when it is a compute Site, the default when none is given', () => {
@@ -134,16 +136,25 @@ test('more than one node needs two compute Sites and three Sites', () => {
 });
 
 test('the report lists every node by Site, those without one first', () => {
-    const report = nodesReport([node('b1', 'home-b', { description: ' B ' }), node('x', undefined), node('a1', 'home-a', { default: true })]);
+    const report = nodesReport(
+        [node('b1', 'home-b'), node('x', undefined), node('a1', 'home-a', { default: true }), node('q1', 'quorum', { compute: false, quorumOnly: true })],
+        new Map([['home-b', 'B']]),
+    );
     assert.deepEqual(
-        report.nodes.map((each) => [each.name, each.site, each.description]),
+        report.nodes.map((each) => [each.name, each.site]),
         [
-            ['x', null, null],
-            ['a1', 'home-a', null],
-            ['b1', 'home-b', 'B'],
+            ['x', null],
+            ['a1', 'home-a'],
+            ['b1', 'home-b'],
+            ['q1', 'quorum'],
         ],
     );
-    assert.deepEqual(report.problems.map((problem) => problem.kind), ['node-without-site', 'sites-below-three']);
+    assert.deepEqual(report.sites, [
+        { id: 'home-a', description: null, default: true, compute: true },
+        { id: 'home-b', description: 'B', default: false, compute: true },
+        { id: 'quorum', description: null, default: false, compute: false },
+    ]);
+    assert.deepEqual(report.problems.map((problem) => problem.kind), ['node-without-site']);
 });
 
 test('the metrics hold one series per problem and the node count; nothing without a node list', () => {

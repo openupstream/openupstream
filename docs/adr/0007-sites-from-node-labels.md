@@ -3,7 +3,7 @@
 Date: 2026-11-27
 Status: accepted; amended by ADR-0008 (the taint is now
 `openupstream.io/quorum-only`, the alerts come from the control plane's
-Site checks)
+Site checks) and ADR-0009 (Site descriptions are the control plane's)
 
 ## Context
 

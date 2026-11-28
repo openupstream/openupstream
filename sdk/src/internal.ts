@@ -247,8 +247,6 @@ export const DEFAULT_SITE_LABEL = 'openupstream.io/default-site';
  * only etcd, Garage, Loki and the node agents tolerate it.
  */
 export const QUORUM_ONLY_TAINT = 'openupstream.io/quorum-only';
-/** Free text on a Site's nodes saying where it is, e.g. `Falkenstein (Hetzner)`. */
-export const SITE_DESCRIPTION_ANNOTATION = 'openupstream.io/site-description';
 
 /** On a Service's Deployment and a Job's CronJob: the spec version it was applied from (serviceSpecVersion, jobSpecVersion). */
 export const SPEC_VERSION_ANNOTATION = 'openupstream.io/spec-version';

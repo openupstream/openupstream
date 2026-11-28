@@ -91,15 +91,18 @@ Kubernetes 1.33 or later: a Database gets more memory by an in-place pod
 resize (the scripts install k3s 1.36).
 
 The Sites are what the nodes say
-([ADR-0007](adr/0007-sites-from-node-labels.md)); name them after your own
-places. Each node carries its Site's id as `topology.kubernetes.io/zone`;
+([ADR-0007](adr/0007-sites-from-node-labels.md)). A Site id is
+permanent (node labels, every Database, Service and Job row and Garage's
+layout store it), so choose the ids once and let them claim no location
+you might leave, e.g. `site-1`. Each node carries its Site's id as `topology.kubernetes.io/zone`;
 the nodes of a compute Site carry `openupstream.io/compute-site=true`, those
 of the default Home site also `openupstream.io/default-site=true`, every
-other node the taint `openupstream.io/quorum-only=true:NoSchedule`; the
-annotation `openupstream.io/site-description` is shown next to the id. Only
-the node setup scripts below set them: the labels and the taint as k3s
-`--node-label`/`--node-taint` flags when a node joins, the description with
-`kubectl annotate` right after. The install only checks them (at least two
+other node the taint `openupstream.io/quorum-only=true:NoSchedule`. Only
+the node setup scripts below set them, as k3s
+`--node-label`/`--node-taint` flags when a node joins. A Site's human
+name, e.g. `Minisforum at home`, is its description: an admin sets it on
+the dashboard's "Sites & nodes" page (`/nodes`), the control plane stores
+it, and it can change anytime. The install only checks them (at least two
 compute Sites and three Sites, exactly one default Site) and names the
 `kubectl` command for each problem. While the cluster runs, the control
 plane checks the same rules: the dashboard's "Sites & nodes" page (for

@@ -6,19 +6,19 @@
 # down.sh. Unlike the Hetzner cluster it is meant to stay: snapshot.sh saves
 # and restores all three VMs together.
 #
-# By default the VMs carry production's Site ids (SITES in lib.sh chooses
-# others):
+# By default the VMs carry Site ids that claim no location (SITES in
+# lib.sh chooses others, once: a Site id is permanent):
 #
-#   PREFIX-hetzner-fsn1  compute Site, the default Site
-#   PREFIX-ovh-lim       compute Site
-#   PREFIX-netcup-nbg    no compute Site, tainted openupstream.io/quorum-only
+#   PREFIX-site-1  compute Site, the default Site
+#   PREFIX-site-2  compute Site
+#   PREFIX-site-3  no compute Site, tainted openupstream.io/quorum-only
 #
 # The node setup is the only place that labels the nodes (ADR-0007): the
 # compute nodes join with openupstream.io/compute-site=true (the first also
 # openupstream.io/default-site=true), the third with the taint
-# openupstream.io/quorum-only=true:NoSchedule, and every node without a
-# description gets one (openupstream.io/site-description) once it has
-# joined. install-multi-node.sh only checks them. k3s sets labels only when
+# openupstream.io/quorum-only=true:NoSchedule. install-multi-node.sh only
+# checks them. An admin names each Site on the dashboard's "Sites & nodes"
+# page. k3s sets labels only when
 # a node first registers: a node that already runs k3s keeps its own.
 #
 # Each VM has a NIC on the host's bridge (BRIDGE), so it gets an address
@@ -179,11 +179,6 @@ three_nodes() {
 until_ok "all three nodes to register" three_nodes
 KUBECONFIG=$STATE/kubeconfig kubectl wait --for=condition=Ready node --all --timeout=5m
 KUBECONFIG=$STATE/kubeconfig kubectl apply -f ../gvisor/runtimeclass.yaml >/dev/null
-for site in "${SITES[@]}"; do
-  [[ -n $(KUBECONFIG=$STATE/kubeconfig kubectl get node "$PREFIX-$site" -o jsonpath='{.metadata.annotations.openupstream\.io/site-description}') ]] ||
-    KUBECONFIG=$STATE/kubeconfig kubectl annotate node "$PREFIX-$site" \
-      openupstream.io/site-description="Incus VM $PREFIX-$site" >/dev/null
-done
 echo "export KUBECONFIG=$PWD/$STATE/kubeconfig"
 echo "then: PLATFORM_DOMAIN=… CUSTOMER_DOMAIN=… ../dev-cluster/install-multi-node.sh"
 echo "The API server is on $FIRST (${SITES[0]}); switch the kubeconfig to"

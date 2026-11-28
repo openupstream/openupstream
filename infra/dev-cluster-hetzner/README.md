@@ -47,11 +47,11 @@ etcd and flannel `wireguard-native`, each node's public address as its
 ExternalIP (which `dns.sh` puts into DNS), then the RuntimeClass `gvisor`.
 The compute nodes join with the label `openupstream.io/compute-site=true`,
 the first also `openupstream.io/default-site=true`, the third with the
-taint `openupstream.io/quorum-only`, and each node without a description
-gets `Hetzner Cloud <location>`. This is the only place the nodes are
+taint `openupstream.io/quorum-only`. This is the only place the nodes are
 labelled; the install only checks them
 ([ADR-0007](../../docs/adr/0007-sites-from-node-labels.md),
-[dev-cluster README](../dev-cluster/README.md#sites)).
+[dev-cluster README](../dev-cluster/README.md#sites)). An admin names
+each Site on the dashboard's "Sites & nodes" page (`/nodes`).
 
 The kubeconfig points at the first node (`hetzner-fsn1`). Before switching that Site
 off, point it at another node's IP (all three serve the API).

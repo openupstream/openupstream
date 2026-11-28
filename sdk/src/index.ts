@@ -8,7 +8,7 @@
  * The API surface is defined here first and implemented in control-plane/.
  */
 
-export const SDK_VERSION = '0.7.0';
+export const SDK_VERSION = '0.8.0';
 
 export * from './model.js';
 export * from './internal.js';
@@ -54,6 +54,8 @@ import type {
     ServiceDetails,
     ServiceInput,
     ServicePatch,
+    SiteDescriptionInput,
+    SiteDetails,
     SiteInfo,
 } from './model.js';
 
@@ -195,6 +197,11 @@ export class OpenUpstreamClient {
     /** Every node and what is wrong with the Site labels; only for madAuth's `admin` role, signed in (ADR-0008). */
     listNodes(): Promise<ApiResult<NodesReport>> {
         return this.#call('GET', '/v1/admin/nodes');
+    }
+
+    /** Names a Site, or removes its name with null; only for madAuth's `admin` role, signed in (ADR-0009). */
+    setSiteDescription(site: string, input: SiteDescriptionInput): Promise<ApiResult<SiteDetails>> {
+        return this.#call('PUT', `/v1/admin/sites/${encodeURIComponent(site)}`, input);
     }
 
     listProjects(): Promise<ApiResult<Project[]>> {
