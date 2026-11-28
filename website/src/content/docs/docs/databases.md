@@ -58,6 +58,8 @@ should not load the primary, such as reports, exports and dashboards.
   use `DATABASE_URL` if the query must run anyway.
 - For about half a minute after a failover, the instance that just became
   the primary may still answer.
+- A query waits at most 30 seconds for its turn, also when many long
+  queries run at once: then it fails, and can be tried again.
 
 ### Pooling
 
