@@ -41,6 +41,24 @@ The URL points at PgBouncer, which follows the primary through a failover.
 From outside the Project, a Database is reachable only from your own
 machine, with `oup pg proxy` (below).
 
+### Reading from the standby
+
+Next to each of those variables there is one for the Database's standby:
+`DATABASE_READ_URL_<NAME>` and `DATABASE_READ_URL`. Use it for queries that
+should not load the primary, such as reports, exports and dashboards.
+
+- It is read-only: a write is refused.
+- The standby is a moment behind the primary, usually well under a second.
+  Do not use it to read back what you just wrote.
+- The standby runs in the other Site, so each query takes a little longer
+  than one to the primary.
+- It answers only while the standby is up. While the standby restarts,
+  queries wait, for up to 30 seconds. After a failover there is no standby
+  until the failed Site is back, and connections fail: catch the error and
+  use `DATABASE_URL` if the query must run anyway.
+- For about half a minute after a failover, the instance that just became
+  the primary may still answer.
+
 ### Pooling
 
 PgBouncer runs in transaction mode: a connection to Postgres is yours for
