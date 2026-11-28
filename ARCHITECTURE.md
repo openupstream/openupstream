@@ -677,6 +677,24 @@ digest (#55).
   `SET`) need a direct connection to the Cluster. TCP keepalives and
   `tcp_user_timeout` drop connections to a primary in a dark Site, which
   sends no reset (#50).
+- A second Pooler of type `ro`, `db-<database id>-pooler-ro`, set up the
+  same, reaches only the standby (decision 157): the read URL, for queries
+  that must not load the primary and may read data a moment old. Nothing
+  answers there while no standby is ready, by choice: a new connection
+  fails within about a second, and a query already waiting is failed after
+  30 s (`query_wait_timeout`; PgBouncer's 120 s would hang every read for
+  two minutes through a Site outage). Its connections to Postgres live
+  30 s (`server_lifetime`), since a standby that is promoted keeps the
+  connections it has. A single node has no standby and no such Pooler.
+  Measured on the dev cluster (2026-11-28): every read came from the
+  standby and a write was refused (`read-only transaction`); with a write
+  every 100 ms the newest row a reader saw was 20 to 130 ms old; the
+  standby's pod deleted, a held connection waited 15 s and lost nothing,
+  new connections failed meanwhile; the standby stopped for a minute, the
+  held connection's query failed after 30 s and the primary's writer lost
+  nothing; after a switchover reads were still answered by the new
+  primary for 35 s, then by the new standby (without the 30 s limit:
+  still after 40 s, with PgBouncer's limit of an hour to go).
 - Reachable from inside the cluster by the Project's Services and Jobs,
   and from a Member's own machine with `oup pg proxy` (decision 126): a
   WebSocket per connection through
@@ -861,7 +879,9 @@ digest (#55).
   into the old ones.
 - Every Service and Job gets a URL per live Database of its Project
   (#97): `DATABASE_URL_<NAME>` (the name upper-cased, `-` as `_`) and the
-  oldest Database's also as `DATABASE_URL`, pointing at its Pooler. The
+  oldest Database's also as `DATABASE_URL`, pointing at its Pooler; and
+  next to each `DATABASE_READ_URL_<NAME>` and `DATABASE_READ_URL`, pointing
+  at the Pooler to its standby (decision 157). The
   operator writes only a `secretKeyRef` to the Database's `db-<id>-app`
   Secret (the control plane's, decision 156; CloudNativePG's for a Database from before) (as `OUP_DATABASE_PASSWORD_<NAME>`, also in the environment) and
   a `$(VAR)` reference in the URL, so the password stays in the Project's
@@ -1506,6 +1526,7 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 154 | The predefined roles `pg_read_all_data` and `pg_write_all_data` get `CONNECT` on the application database when a Cluster is created (`postInitApplicationSQL`, next to pgvector) | `CONNECT` for `PUBLIC` again; a CloudNativePG `Database` resource with `permissions` per role; granting each caller's role as it is created | CloudNativePG 1.31 revokes `CONNECT` from `PUBLIC` on the databases it creates, and a caller's `read` or `write` role (decision 126) is only a member of those predefined roles, so on a new Database it was refused with `permission denied for database` (`owner` roles inherit from `app`, which owns it). One statement at bootstrap covers every such role, now and later, where a `Database` resource would be a fifth object per Database with a list to keep in step with the roles, and CloudNativePG runs no SQL after bootstrap. Tried on the dev cluster (2026-11-28): `PUBLIC` cannot connect, a member of `pg_read_all_data` connects and reads, a role without it is refused. Costs: any role put into those predefined roles may connect, which only our roles are; a restored Database keeps its source's privileges, so one whose source was created by 1.31 before this change would lack the grant (no such Database exists) |
 | 155 | A Site's description is stored in the control plane's Postgres (`site_descriptions`) and set by the installation's admins on the "Sites & nodes" page (`PUT /v1/admin/sites/{id}`, any Site with a node); the annotation `openupstream.io/site-description` is gone. Site ids are permanent: the Incus scripts default to `site-1` … `site-3` (VMs `oup-site-1` …), a single node to `site-1`, and the docs say to choose ids once ([ADR-0009](docs/adr/0009-site-names-in-the-control-plane.md)) | the page patching the annotation (needs `patch` on nodes and an admission policy); only showing the `kubectl annotate` command; defaults named after production's providers or the host machine | labels say where things run and belong to the node setup; a name is display text and belongs with everything else people edit through the API, so the control plane keeps read-only access to nodes. A name survives its Site's nodes being replaced. An id is in labels, rows, placement rules and Garage's layout, so it cannot follow a move: a default that names a place is wrong wherever the scripts run elsewhere. Costs: a table and an admin endpoint; renaming an id stays unsupported |
 | 156 | The control plane generates the `app` user's password of a new Database, seals it with the Project's data key (`databases.app_password`, written in the row's own insert, so the operator never sees the Database without it) and writes two Secrets from it in the secrets pass and right after the create: `db-<id>-app` with the password, under the name CloudNativePG gave its own, and `db-<id>-app-scram` with its SCRAM-SHA-256 verifier, salted from the Database's id; the row tells the operator (`appCredentials`), and the Cluster names the verifier Secret as its application Secret (`bootstrap.initdb.secret`). Both Secrets go with the Database | CloudNativePG's generated password (until now); the same with `cnpg.io/passwordPassthrough`; a `cert` rule in `pg_hba` for the Pooler's client certificate, mapped to every role; the operator deriving the verifier from CloudNativePG's Secret; setting the old verifier again with SQL after each restart; a fix in CloudNativePG; found afterwards in CloudNativePG's own issue and not tried here: Services logging in as a managed role that is a member of `app` (a managed role's applied password is recorded in the Cluster's status, so it is not set again; it would change the user every Service connects as), and the Pooler's `authQuerySecret` with the cleartext password (deprecated) | CloudNativePG's instance manager sets the password from the application Secret whenever an instance becomes primary (it remembers the Secret's version only in memory) and encodes a cleartext one with a new random salt, also with pass-through, where Postgres salts it. PgBouncer logs in to Postgres with the SCRAM keys of the client's own login, so after a new salt its next login failed with `password authentication failed`: the client whose query caused it was disconnected and the others got `server login has been failing`, after every restart, switchover and failover. That made holding connections behind a paused Pooler pointless (decision 152). A value that already is a verifier is applied unchanged (`EnsureEncryptedPassword`). Measured on the dev cluster (2026-11-28): the salt changed with a restart and with a switchover, and with neither once the Secret held a verifier; a held connection then survived both. `pg_hba` cannot tell the Pooler from a direct client of the same user, and the operator has no business reading Secrets in every namespace. The control plane already seals and renders the callers' role passwords the same way (decision 126). Costs: one more secret the control plane holds, and a lost key-encryption key now also loses the `app` passwords (the Databases keep running; a new password would have to be set); only new Databases get it: one from before keeps CloudNativePG's password, since its Services already run with it, and the platform's own two are created before the control plane exists; a restored Database gets a password of its own, applied once its restore has finished; between the create and the first Secrets write the Cluster waits for its Secret (49 s to `ready` for the first Database of a new Project on the dev cluster, as before); the verifier's salt is derived, not random, which a salt may be; the passwords must need no SASLprep, which ours (URL-safe base64) do not; CloudNativePG has it as [issue 11676](https://github.com/cloudnative-pg/cloudnative-pg/issues/11676), open since 2026-10-16 and reproduced there on 1.30.0 and 1.30.1, with a fix proposed (skip the `ALTER ROLE` when the stored verifier still matches the Secret) and no release yet: once one has it, CloudNativePG's own password would do again, also for the Databases from before and the platform's own |
+| 157 | Every Database has a read URL: a second Pooler of type `ro` (`db-<id>-pooler-ro`) to its standby, given to the Project's Services and Jobs as `DATABASE_READ_URL_<NAME>` and `DATABASE_READ_URL` and returned by the API as `readConnection` (SDK 0.9.0). It is for the second of two uses, the first being to read and write on the primary: queries that must not load the primary and may read data a moment old. While no standby is ready it fails (a new connection within about a second, a queued query after 30 s), and its connections to Postgres live 30 s. No new instances and no change to what a Database costs | CloudNativePG's `r` target, any instance (never empty, but half the reads stay on the primary); `ro` with a fallback to the primary while no standby is ready, switched by the operator (as Aiven's reads fail over to the primary); a URL per Site, or one that leads to the instance in the pod's own Site (Kubernetes' same-zone routing); further read replicas per Database, billed per instance, as [Render](https://render.com/docs/postgresql-read-replicas), [Supabase](https://supabase.com/docs/guides/platform/read-replicas) and Crunchy Bridge do; reads routed by themselves | the standby is paid for and answered nothing. [Aiven](https://aiven.io/docs/products/postgresql/howto/create-read-replica) lets a plan's standby answer reads the same way, and everyone gives the application a second connection string and leaves the choice of query to it. Failing keeps the one promise the URL makes, also while a Database runs on one instance after a failover, when a heavy report on the primary would hurt most; an application that wants its reads to survive that uses `DATABASE_URL` then. A URL per Site reads as the primary in the Home site, and a Service with pods in both Sites has one environment for all of them. Measured on the dev cluster (2026-11-28, figures in the Postgres section): reads only from the standby, 20 to 130 ms behind a writer writing every 100 ms, the primary's writer untouched by all of it. Costs: every read crosses to the other Site, a round trip not yet measured for the servers (decision 119); reads are behind the primary, so not for reading back one's own write; for about 35 s after a failover or switchover the instance that became primary still answers reads (PgBouncer keeps a connection until it is 30 s old; without that limit, for up to an hour); the read URL is down for as long as a Site is, since CloudNativePG cannot build a standby anywhere else; a query waits up to 30 s before it fails, and a restart of the standby longer than that fails reads instead of delaying them; connections are opened anew every 30 s, across Sites; two more PgBouncer pods per Database, which request no memory or CPU (as the first two) and whose CPU seconds are metered to the Database like the first two's, so "no change to what a Database costs" holds but for those; the 30 s in the queue also count the wait for a free connection in the pool, so with more reports at once than the pool has connections a read can fail although the standby is up; rolling it out restarts every Service once, for the new variables; a single node has no standby, so the URL never answers there: the variables and `readConnection` name a Service that does not exist, and a client gets a name-resolution error (`docs/self-hosting.md`); more read capacity than one standby needs further instances (Open question 28); Services' environment was checked in tests only, not on the cluster |
 
 ## Open questions
 
@@ -1775,7 +1796,10 @@ Decisions table once it is settled.
     (decision 150). A second standby would keep a standby after a
     failover, while CloudNativePG rebuilds one, and allow synchronous
     replication to one of two standbys (no lost writes, no writes blocked
-    by one standby down); read replicas would need a `-ro` endpoint. Open:
+    by one standby down). The standby answers reads through the read URL
+    since decision 157; more read capacity, or reads in the Home site,
+    would take further instances, which the rule of one instance per Site
+    does not allow today. Open:
     an `instances` field per Database (1 up to the number of compute
     Sites, default 2, billed per instance, changeable later, as
     DigitalOcean's standby nodes or Aiven's plans), what one instance
@@ -2014,6 +2038,13 @@ Decisions table once it is settled.
    own keep CloudNativePG's password; the guard pausing a failback
    switchover by itself; an in-place restart of Postgres for a changed
    parameter, not tried; dropping our own `app` password again once CloudNativePG's issue 11676 is fixed in a release we run.
+
+7. Read scaling (decision 157). Done on the dev cluster (2026-11-28): every
+   Database has a read URL on its standby; the run found that PgBouncer
+   queued reads for two minutes without a standby and kept reading from a
+   standby that had been promoted, both limited to 30 s now. Open: the
+   round trip between the real Sites; further read replicas and reads in
+   the Home site (Open question 28).
 
 ### After v1: ProjectMatch
 

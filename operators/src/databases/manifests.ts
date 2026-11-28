@@ -31,6 +31,7 @@ import {
     databaseRoleName,
     databaseRoleSecret,
     poolerName,
+    readPoolerName,
 } from '@openupstream/sdk';
 import type { Cluster, ObjectStore, Pooler, ScheduledBackup } from '../generated/index.js';
 import {
@@ -90,6 +91,22 @@ export const POOLER_DEAD_SERVER_DETECTION = {
  * (dev cluster, 2026-11-15).
  */
 export const POOLER_LOGIN_RETRY = { server_login_retry: '1' } as const;
+
+/**
+ * What the Pooler to the standby sets apart from the primary's (decision
+ * 157; dev cluster, 2026-11-28).
+ *
+ * - It queues a query for 30 s while no standby answers, then fails it.
+ *   PgBouncer's 120 s would hang every read for two minutes during a Site
+ *   outage; a restart of the standby left readers waiting 15 s, which 30 s
+ *   rides out.
+ * - It closes a connection to Postgres after 30 s instead of an hour. A
+ *   standby that is promoted keeps the connections it has, so the Pooler
+ *   went on reading from what had become the primary, 40 s after a
+ *   switchover and with no end in sight. A connection opened anew goes
+ *   through the `ro` Service, to an instance that is a standby then.
+ */
+export const READ_POOLER = { query_wait_timeout: '30', server_lifetime: '30' } as const;
 
 /**
  * How a rolling restart (a new memory size, a new image) treats the
@@ -247,6 +264,11 @@ export interface DatabaseManifests {
     readonly objectStore: ObjectStoreManifest;
     readonly cluster: ClusterManifest;
     readonly pooler: PoolerManifest;
+    /**
+     * The Pooler to the standby, for the read URL (decision 157); absent
+     * where a Database has no standby (a single node).
+     */
+    readonly readPooler?: PoolerManifest;
     readonly scheduledBackup: ScheduledBackupManifest;
 }
 
@@ -260,7 +282,7 @@ export type DatabaseManifestError =
     | { readonly kind: 'invalid-storage'; readonly storageGb: number }
     | { readonly kind: 'invalid-role'; readonly id: string; readonly access: string };
 
-export { clusterName, poolerName } from '@openupstream/sdk';
+export { clusterName, poolerName, readPoolerName } from '@openupstream/sdk';
 
 /**
  * Rows come from the database as strings; the type alone does not guarantee
@@ -415,14 +437,19 @@ const clusterFor = (
     },
 });
 
-const poolerFor = (meta: ObjectMeta, cluster: string, config: DatabaseConfig): PoolerManifest => ({
+/**
+ * A Pooler of the Database: `rw` follows the primary; `ro` reaches only
+ * replicas, so nothing answers through it while no standby is ready
+ * (decision 157).
+ */
+const poolerFor = (meta: ObjectMeta, cluster: string, config: DatabaseConfig, type: 'rw' | 'ro' = 'rw'): PoolerManifest => ({
     apiVersion: 'postgresql.cnpg.io/v1',
     kind: 'Pooler',
     metadata: meta,
     spec: {
         cluster: { name: cluster },
         instances: instancesFor(config.layout).pooler,
-        type: 'rw',
+        type,
         pgbouncer: {
             poolMode: 'transaction',
             parameters: {
@@ -431,6 +458,7 @@ const poolerFor = (meta: ObjectMeta, cluster: string, config: DatabaseConfig): P
                 max_prepared_statements: '200',
                 ...POOLER_DEAD_SERVER_DETECTION,
                 ...POOLER_LOGIN_RETRY,
+                ...(type === 'ro' ? READ_POOLER : {}),
             },
         },
         template: {
@@ -617,6 +645,7 @@ export function databaseManifests(
         objectStore: objectStoreFor(meta(cluster), config),
         cluster: clusterFor(meta(cluster), database, config, roles, live, appCredentials),
         pooler: poolerFor(meta(poolerName(database)), cluster, config),
+        ...(instancesFor(config.layout).database > 1 ? { readPooler: poolerFor(meta(readPoolerName(database)), cluster, config, 'ro') } : {}),
         scheduledBackup: scheduledBackupFor(meta(cluster), config),
     });
 }

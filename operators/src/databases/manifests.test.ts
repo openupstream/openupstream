@@ -194,6 +194,7 @@ test('on a single-node cluster a Database runs one instance and one PgBouncer, e
     assert.deepEqual({ ...pooler.spec, instances: 2 }, multiNode.pooler.spec);
     assert.deepEqual(singleNode.value.objectStore, multiNode.objectStore);
     assert.deepEqual(singleNode.value.scheduledBackup, multiNode.scheduledBackup);
+    assert.equal(singleNode.value.readPooler, undefined, 'no standby to read from');
 });
 
 test('a restored Database on a single-node cluster runs one instance too', () => {
@@ -452,4 +453,22 @@ test("with the control plane's app credentials the Cluster reads the app user's 
     assert.ok(ours.ok);
     assert.deepEqual(ours.value.cluster.spec.bootstrap?.initdb?.secret, { name: `db-${database.id}-app-scram` });
     assert.equal(manifestsFor().cluster.spec.bootstrap?.initdb?.secret, undefined, "a Database from before: CloudNativePG's own Secret");
+});
+
+test('a second PgBouncer reaches only the standby, one per Site, set up like the first', () => {
+    const { pooler, readPooler } = manifestsFor();
+    assert.ok(readPooler);
+    assert.equal(readPooler.metadata.name, `db-${database.id}-pooler-ro`);
+    assert.equal(readPooler.spec.type, 'ro', 'replicas only: nothing answers while no standby is ready (decision 157)');
+    assert.equal(readPooler.spec.instances, 2);
+    assert.deepEqual(readPooler.spec.cluster, pooler.spec.cluster);
+    assert.deepEqual(readPooler.spec.pgbouncer, {
+        ...pooler.spec.pgbouncer,
+        // No two minutes in the queue without a standby, and no connection kept to a standby that became the primary.
+        parameters: { ...pooler.spec.pgbouncer.parameters, query_wait_timeout: '30', server_lifetime: '30' },
+    });
+    assert.equal(pooler.spec.pgbouncer.parameters?.['query_wait_timeout'], undefined, "the primary's Pooler keeps PgBouncer's 120 s: it is paused through a restart");
+    assert.deepEqual(readPooler.spec.template?.spec?.affinity?.podAntiAffinity?.requiredDuringSchedulingIgnoredDuringExecution, [
+        { labelSelector: { matchLabels: { 'cnpg.io/poolerName': readPooler.metadata.name } }, topologyKey: ZONE_LABEL },
+    ]);
 });

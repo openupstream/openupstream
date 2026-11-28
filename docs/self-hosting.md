@@ -280,7 +280,9 @@ for the platform alone) runs the whole platform with one copy of everything, for
 development only: losing it loses everything but the Databases' backups.
 Nothing needs to be reachable from the internet, and no disk needs
 preparing: Databases use k3s's local-path storage on the root filesystem,
-not TopoLVM.
+not TopoLVM. A Database has no standby there, so its read URL
+(`DATABASE_READ_URL`, decision 157) leads nowhere: a client gets a
+name-resolution error.
 
 1. Give the machine a fixed address in your router (a DHCP reservation):
    its DNS records point at that address. In a Tailscale network, use its

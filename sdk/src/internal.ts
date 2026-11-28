@@ -19,6 +19,12 @@ export const clusterName = (database: Pick<Database, 'id'>): string => `db-${dat
 export const poolerName = (database: Pick<Database, 'id'>): string => `${clusterName(database)}-pooler`;
 
 /**
+ * The Database's second Pooler, of type `ro`: to its standby, never to its
+ * primary (decision 157). The restart guard pauses only `poolerName`'s.
+ */
+export const readPoolerName = (database: Pick<Database, 'id'>): string => `${poolerName(database)}-ro`;
+
+/**
  * The CPU each instance of a Database is guaranteed (decision 151): one core
  * per 4 GiB of its memory, the ratio of the compute servers (16 threads,
  * 64 GB), as a Kubernetes request with no limit, so it uses idle cores too.
@@ -87,6 +93,16 @@ export const databaseConnection = (database: Pick<Database, 'id' | 'projectId'>)
     port: 5432,
     database: 'app',
     user: 'app',
+});
+
+/**
+ * Where they reach its standby, for queries that must not load the primary
+ * and may read slightly old data (decision 157): the Database's `ro` Pooler.
+ * Nothing answers there while no standby is ready.
+ */
+export const databaseReadConnection = (database: Pick<Database, 'id' | 'projectId'>): DatabaseConnection => ({
+    ...databaseConnection(database),
+    host: `${readPoolerName(database)}.${projectNamespace(database.projectId)}.svc.cluster.local`,
 });
 
 /**

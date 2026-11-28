@@ -20,6 +20,9 @@ standby runs in the Frankfurt region.
   command, and both grow without a restart. Each instance is guaranteed a quarter core per GB of memory and
   uses idle cores beyond that, with no CPU limit. Storage grows online, and by itself as the Database fills up,
   unless you turn that off or set a maximum.
+- **A read URL on the standby.** Queries that should not load the primary,
+  such as reports and exports, can go to the standby through a connection
+  string of their own, at no extra cost. They read data a moment old.
 - **pgvector** is enabled in every Database.
 - **Always on.** A Database never sleeps, so the first query is as fast as
   the next. The smallest size is 256 MB of memory and 1 GB of storage.

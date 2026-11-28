@@ -39,7 +39,7 @@ export interface DatabasePlan {
      * database tunnel once a caller has a role there. Applied first.
      */
     readonly projects: readonly ApplyChain[];
-    /** Per Database: ObjectStore, Cluster, Pooler, ScheduledBackup. */
+    /** Per Database: ObjectStore, Cluster, Pooler, the Pooler to its standby where it has one, ScheduledBackup. */
     readonly databases: readonly ApplyChain[];
     /** Rows that cannot run; their existing objects are left alone. */
     readonly invalid: readonly { readonly databaseId: string; readonly errors: readonly RestoreError[] }[];
@@ -128,6 +128,7 @@ export function planDatabases(
             manifests.objectStore,
             manifests.cluster,
             manifests.pooler,
+            ...(manifests.readPooler === undefined ? [] : [manifests.readPooler]),
             manifests.scheduledBackup,
         ]),
         invalid: results.flatMap(({ row, result }) =>

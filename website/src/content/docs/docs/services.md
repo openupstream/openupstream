@@ -76,6 +76,8 @@ A container gets, as environment variables:
 - the Project's [Secrets](/docs/secrets/)
 - `DATABASE_URL` and `DATABASE_URL_<NAME>` for the Project's
   [Databases](/docs/databases/)
+- `DATABASE_READ_URL` and `DATABASE_READ_URL_<NAME>` for their standbys,
+  read-only
 
 Changing a Secret, or adding or deleting a Database, restarts the Service
 with the new values.

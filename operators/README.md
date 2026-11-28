@@ -62,6 +62,8 @@ Traefik already implements is configured, not reimplemented.
 - `databaseEnv` (`src/kubernetes.ts`, decision 97): the environment both
   operators give a container for the Project's Databases,
   `DATABASE_URL_<NAME>` per Database and `DATABASE_URL` for the oldest,
+  `DATABASE_READ_URL_<NAME>` and `DATABASE_READ_URL` for their standbys
+  (decision 157),
   with the password from the Database's `db-<id>-app` Secret (written by
   the control plane, decision 156) through a `secretKeyRef`; no operator
   reads that Secret.

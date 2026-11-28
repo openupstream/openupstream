@@ -343,6 +343,16 @@ export interface DatabaseConnection {
 export interface DatabaseDetails extends Database {
     state: DatabaseState;
     connection: DatabaseConnection;
+    /**
+     * Where the Project's Services and Jobs reach the Database's standby,
+     * read-only (decision 157): for queries that must not load the primary
+     * and may read data a moment old. They get it as
+     * `DATABASE_READ_URL_<NAME>`, the oldest Database's also as
+     * `DATABASE_READ_URL`. Connections fail while no standby is ready (a
+     * restart of the standby; after a failover until the other Site is
+     * back), and always on an installation with a single node.
+     */
+    readConnection: DatabaseConnection;
 }
 
 /**
