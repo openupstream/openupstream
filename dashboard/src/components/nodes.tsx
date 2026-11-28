@@ -150,6 +150,12 @@ export function NodesPage() {
                 </ul>
             )}
             <h2>Sites</h2>
+            <p>
+                <small>
+                    A Site is a place that can fail as a whole, not a machine; for example, one datacenter of one provider. A Site&apos;s id is set when its
+                    first node joins and can&apos;t be changed. Its name is what everyone sees next to the id; change it here anytime.
+                </small>
+            </p>
             <table>
                 <thead>
                     <tr>
@@ -165,12 +171,6 @@ export function NodesPage() {
                     ))}
                 </tbody>
             </table>
-            <p>
-                <small>
-                    A Site&apos;s id is permanent: its nodes carry it from when they join, and Databases, Services and Jobs store it. Its name is what everyone
-                    sees next to the id, e.g. when choosing where a Database runs; change it here anytime.
-                </small>
-            </p>
             <h2>Nodes</h2>
             <table>
                 <thead>
