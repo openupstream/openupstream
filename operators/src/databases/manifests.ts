@@ -93,12 +93,20 @@ export const POOLER_DEAD_SERVER_DETECTION = {
 export const POOLER_LOGIN_RETRY = { server_login_retry: '1' } as const;
 
 /**
- * How long the Pooler to the standby queues a query while no standby
- * answers, before it fails it (decision 157). PgBouncer's 120 s would hang
- * every read for two minutes during a Site outage; a restart of the standby
- * left readers waiting 15 s (dev cluster, 2026-11-28), which 30 s rides out.
+ * What the Pooler to the standby sets apart from the primary's (decision
+ * 157; dev cluster, 2026-11-28).
+ *
+ * - It queues a query for 30 s while no standby answers, then fails it.
+ *   PgBouncer's 120 s would hang every read for two minutes during a Site
+ *   outage; a restart of the standby left readers waiting 15 s, which 30 s
+ *   rides out.
+ * - It closes a connection to Postgres after 30 s instead of an hour. A
+ *   standby that is promoted keeps the connections it has, so the Pooler
+ *   went on reading from what had become the primary, 40 s after a
+ *   switchover and with no end in sight. A connection opened anew goes
+ *   through the `ro` Service, to an instance that is a standby then.
  */
-export const READ_POOLER_QUEUE = { query_wait_timeout: '30' } as const;
+export const READ_POOLER = { query_wait_timeout: '30', server_lifetime: '30' } as const;
 
 /**
  * How a rolling restart (a new memory size, a new image) treats the
@@ -450,7 +458,7 @@ const poolerFor = (meta: ObjectMeta, cluster: string, config: DatabaseConfig, ty
                 max_prepared_statements: '200',
                 ...POOLER_DEAD_SERVER_DETECTION,
                 ...POOLER_LOGIN_RETRY,
-                ...(type === 'ro' ? READ_POOLER_QUEUE : {}),
+                ...(type === 'ro' ? READ_POOLER : {}),
             },
         },
         template: {

@@ -464,7 +464,8 @@ test('a second PgBouncer reaches only the standby, one per Site, set up like the
     assert.deepEqual(readPooler.spec.cluster, pooler.spec.cluster);
     assert.deepEqual(readPooler.spec.pgbouncer, {
         ...pooler.spec.pgbouncer,
-        parameters: { ...pooler.spec.pgbouncer.parameters, query_wait_timeout: '30' },
+        // No two minutes in the queue without a standby, and no connection kept to a standby that became the primary.
+        parameters: { ...pooler.spec.pgbouncer.parameters, query_wait_timeout: '30', server_lifetime: '30' },
     });
     assert.equal(pooler.spec.pgbouncer.parameters?.['query_wait_timeout'], undefined, "the primary's Pooler keeps PgBouncer's 120 s: it is paused through a restart");
     assert.deepEqual(readPooler.spec.template?.spec?.affinity?.podAntiAffinity?.requiredDuringSchedulingIgnoredDuringExecution, [
