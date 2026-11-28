@@ -26,6 +26,7 @@ const fakes = () => {
         storageCapacity: async () => ok(undefined),
         volumeNodes: async () => ok([]),
         nodeFree: async () => ok(undefined),
+        podsResizing: async () => ok(0),
         growVolumes: async () => ok([]),
         readDeployment: async () => ok(undefined),
         readCronJob: async () => ok(undefined),

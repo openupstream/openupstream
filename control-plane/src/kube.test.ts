@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { millicoresOf, podCpuRequest, podMemoryRequest, quantityIn, stateOf } from './kube.js';
+import { isResizing, millicoresOf, podCpuRequest, podMemoryRequest, quantityIn, stateOf } from './kube.js';
 
 const healthy = { instances: 2, readyInstances: 2, ready: true, memoryMb: 512, storageGb: 5 };
 const wanted = { memoryMb: 512, storageGb: 5 };
@@ -57,4 +57,13 @@ test("a pod's CPU request as the scheduler counts it", () => {
     const sidecar = { ...container('200m'), restartPolicy: 'Always' };
     assert.equal(podCpuRequest({ spec: { containers: [container('100m')], initContainers: [sidecar] } }), 300, 'a sidecar runs with the containers');
     assert.equal(podCpuRequest({ spec: { containers: [container('100m')], initContainers: [sidecar, container('500m')] } }), 700, 'an init container after a sidecar runs next to it');
+});
+
+test('a pod is resizing while the kubelet has its in-place resize pending or in progress', () => {
+    const pod = (...conditions: { type: string; status: string }[]) => ({ status: { conditions } });
+    assert.equal(isResizing(pod({ type: 'Ready', status: 'True' })), false);
+    assert.equal(isResizing(pod({ type: 'Ready', status: 'True' }, { type: 'PodResizePending', status: 'True' })), true, 'deferred: the node has no room now');
+    assert.equal(isResizing(pod({ type: 'PodResizeInProgress', status: 'True' })), true);
+    assert.equal(isResizing(pod({ type: 'PodResizeInProgress', status: 'False' })), false);
+    assert.equal(isResizing({}), false);
 });

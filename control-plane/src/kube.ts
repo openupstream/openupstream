@@ -151,6 +151,13 @@ export interface NodeFree {
 export interface ControlPlaneKube {
     /** undefined when the Cluster does not exist (yet). */
     readCluster(namespace: string, name: string): Promise<Result<ClusterStatus | undefined, string>>;
+    /**
+     * How many pods of the Cluster `name` have not got the resources their
+     * spec asks for yet: a grow resizes them in place (decision 152), and
+     * one the node has no room for waits on the pod, where the Cluster's
+     * status does not show it.
+     */
+    podsResizing(namespace: string, name: string): Promise<Result<number, string>>;
     /** The recovery window of the archive of the Cluster `name` in its ObjectStore of that name; undefined when there is no ObjectStore. */
     readRecoveryWindow(namespace: string, name: string): Promise<Result<RecoveryWindow | undefined, string>>;
     /** undefined when the Deployment does not exist (yet). */
@@ -328,8 +335,15 @@ interface PodObject {
         phase?: string;
         startTime?: Date | string;
         containerStatuses?: { name: string; restartCount?: number; state?: { running?: unknown; terminated?: unknown; waiting?: unknown } }[];
+        conditions?: { type: string; status: string }[];
     };
 }
+
+/** The kubelet's conditions on a pod whose in-place resize is not done: waiting for room, or being applied. */
+const RESIZE_CONDITIONS: readonly string[] = ['PodResizePending', 'PodResizeInProgress'];
+
+export const isResizing = (pod: Pick<PodObject, 'status'>): boolean =>
+    (pod.status?.conditions ?? []).some((condition) => RESIZE_CONDITIONS.includes(condition.type) && condition.status === 'True');
 
 
 type Amounts = Record<string, string> | undefined;
@@ -419,6 +433,13 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
                 resizingVolumes: cluster.status?.resizingPVC?.length ?? 0,
                 phase: cluster.status?.phase,
             });
+        },
+        podsResizing: async (namespace, name) => {
+            const result = await within(
+                api.list<PodObject>('v1', 'Pod', namespace, undefined, undefined, undefined, undefined, `cnpg.io/cluster=${name}`),
+                timeoutMs,
+            );
+            return result.ok ? ok(result.value.items.filter(isResizing).length) : err(result.error.message);
         },
         readRecoveryWindow: async (namespace, name) => {
             const result = await within(
