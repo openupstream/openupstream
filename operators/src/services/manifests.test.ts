@@ -206,6 +206,37 @@ test("a deleted Service's Deployment goes before its Service; the shared Network
     assert.deepEqual(shared.map((o) => o.kind), ['Namespace', 'NetworkPolicy']);
 });
 
+test('two or more replicas get a PodDisruptionBudget that lets a drain stop one ready pod at a time; a single replica none', () => {
+    const name = 'svc-22222222-2222-4222-8222-222222222222';
+    assert.deepEqual(
+        planServices([row({ replicas: 2 })], NODE_BLOCKS)
+            .filter((o) => o.metadata.labels?.['openupstream.io/service-id'] !== undefined)
+            .map((o) => o.kind),
+        ['Deployment', 'PodDisruptionBudget', 'Service'],
+    );
+    const budget = planServices([row({ replicas: 2 })], NODE_BLOCKS).find((o) => o.kind === 'PodDisruptionBudget');
+    assert.equal(budget?.metadata.name, name);
+    assert.equal(budget?.metadata.labels?.['openupstream.io/component'], 'services');
+    assert.deepEqual(budget?.['spec'], {
+        maxUnavailable: 1,
+        selector: { matchLabels: { 'openupstream.io/service-id': '22222222-2222-4222-8222-222222222222' } },
+        unhealthyPodEvictionPolicy: 'AlwaysAllow',
+    });
+    assert.deepEqual(planServices([row()], NODE_BLOCKS).filter((o) => o.kind === 'PodDisruptionBudget'), []);
+});
+
+test("a Service scaled down to one replica loses its PodDisruptionBudget; a deleted one's goes before its Deployment", async () => {
+    const name = 'svc-22222222-2222-4222-8222-222222222222';
+    const gone = 'svc-99999999-9999-4999-8999-999999999999';
+    const { kube, removed } = fakeKube([
+        { apiVersion: 'policy/v1', kind: 'PodDisruptionBudget', namespace, name },
+        { apiVersion: 'policy/v1', kind: 'PodDisruptionBudget', namespace, name: gone },
+        { apiVersion: 'apps/v1', kind: 'Deployment', namespace, name: gone },
+    ]);
+    await reconcileServices(kube, [row()], NODE_BLOCKS);
+    assert.deepEqual(removed, [`PodDisruptionBudget ${name}`, `PodDisruptionBudget ${gone}`, `Deployment ${gone}`]);
+});
+
 test('without the Services nothing is applied or deleted', async () => {
     const { kube, applied, removed } = fakeKube([{ apiVersion: 'apps/v1', kind: 'Deployment', namespace, name: 'svc-x' }]);
     const log = await servicesPass(async () => err({ kind: 'unreachable', message: 'down' }), listNodes, kube);

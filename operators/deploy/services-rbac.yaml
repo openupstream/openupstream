@@ -1,6 +1,6 @@
 # What the Services reconcile pass (src/services/reconcile.ts) may do:
 # apply a Project's namespace and NetworkPolicies, and each Service's
-# Deployment and Kubernetes Service, and delete those of its objects that
+# Deployment, Kubernetes Service and PodDisruptionBudget, and delete those of its objects that
 # are no longer wanted (ARCHITECTURE.md, decision 93). Server-side apply is
 # a PATCH that creates missing objects, so every applied kind needs `patch`
 # and `create`; pruning lists by label and deletes. Namespaces are only
@@ -31,6 +31,10 @@ rules:
     verbs: [create, patch, list, delete]
   - apiGroups: [networking.k8s.io]
     resources: [networkpolicies]
+    verbs: [create, patch, list, delete]
+  # One per Service with two or more replicas (decision 157).
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
     verbs: [create, patch, list, delete]
   # The nodes' addresses, left out of the egress policy but for 80 and 443
   # (decision 105): listed every pass, watched to start a pass when a node
