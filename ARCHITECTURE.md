@@ -69,25 +69,25 @@ The table is production; nothing in the code names a Site (decision 150,
 [ADR-0007](docs/adr/0007-sites-from-node-labels.md)). A Site is what its
 nodes' `topology.kubernetes.io/zone` label says; the nodes of a compute
 Site carry `openupstream.io/compute-site=true`, those of one compute Site
-`openupstream.io/default-site=true` (the default Home site). Every other Site's nodes carry the taint
-`openupstream.io/quorum-only`. A node gets them when it joins, from its
-node setup, and nothing else writes them; the install only checks them and
-refuses a `multi-node` cluster with fewer than two compute Sites or three
-Sites in all. While it runs, the control plane checks the same rules on
-the node list it reads (decision 153,
+`openupstream.io/default-site=true` (the default Home site). Every other
+Site's nodes carry the taint `openupstream.io/quorum-only`. A node gets
+them when it joins, from its node setup, and nothing else writes them; the
+install only checks them and refuses a `multi-node` cluster with fewer than
+two compute Sites or three Sites in all. While it runs, the control plane
+checks the same rules on the node list it reads (decision 153,
 [ADR-0008](docs/adr/0008-site-checks-in-the-control-plane.md)): an alert
 per rule fires on its metric, and the dashboard's "Sites & nodes" page
-shows madAuth's admins every node and what needs fixing, with the
-`kubectl` command. Beyond that any number of Sites works. The control
-plane lists the compute Sites at `GET /v1/sites`, and the dashboard and
-`oup sites` show them with their description: what people call the Site
-(e.g. `Falkenstein (Hetzner)`), which the installation's admins set on the
-"Sites & nodes" page and the control plane keeps in its Postgres (decision
-155, [ADR-0009](docs/adr/0009-site-names-in-the-control-plane.md)). A
-Site's id is permanent, so self-hosted installations default to neutral
-ids (`site-1`, …) and leave the place to the description. With more than two compute
-Sites, a Database still runs two instances (primary and one standby in
-another compute Site) and what runs twice still runs twice, in two
+shows madAuth's admins every node and what needs fixing, with the `kubectl`
+command. Beyond that any number of Sites works. The control plane lists the
+compute Sites at `GET /v1/sites`, and the dashboard and `oup sites` show
+them with their description: what people call the Site (e.g. `Falkenstein
+(Hetzner)`), which the installation's admins set on the "Sites & nodes"
+page and the control plane keeps in its Postgres (decision 155,
+[ADR-0009](docs/adr/0009-site-names-in-the-control-plane.md)). A Site's id
+is permanent, so self-hosted installations default to neutral ids
+(`site-1`, …) and leave the place to the description. With more than two
+compute Sites, a Database still runs two instances (primary and one standby
+in another compute Site) and what runs twice still runs twice, in two
 different compute Sites; Garage and Loki keep three copies in three Sites.
 
 When any one Site fails, or its whole provider does:
