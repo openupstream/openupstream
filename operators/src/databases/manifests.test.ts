@@ -132,12 +132,13 @@ test("nothing tolerates the third Site's taint", () => {
 
 test('memory is reserved at the configured size and buffers scale with it', () => {
     const { cluster } = manifestsFor({ memoryMb: 1024 });
-    assert.deepEqual(cluster.spec.resources, { requests: { memory: '1024Mi' }, limits: { memory: '1024Mi' } });
+    assert.deepEqual(cluster.spec.resources, { requests: { memory: '1024Mi', cpu: '250m' }, limits: { memory: '1024Mi' } }, 'a CPU share, no CPU limit');
     assert.equal(cluster.spec.postgresql?.parameters?.['shared_buffers'], '256MB');
 });
 
 test('256 MB is the memory floor', () => {
     assert.deepEqual(manifestsFor({ memoryMb: 256 }).cluster.spec.resources?.limits, { memory: '256Mi' });
+    assert.deepEqual(manifestsFor({ memoryMb: 256 }).cluster.spec.resources?.requests, { memory: '256Mi', cpu: '63m' }, 'a quarter core per GiB, rounded up');
     assert.deepEqual(errorsFor({ memoryMb: 255 }), [{ kind: 'memory-below-floor', memoryMb: 255, minimumMb: 256 }]);
     assert.deepEqual(errorsFor({ memoryMb: 1024.5 }), [{ kind: 'invalid-memory', memoryMb: 1024.5 }]);
     assert.deepEqual(errorsFor({ memoryMb: Number.NaN }), [{ kind: 'invalid-memory', memoryMb: Number.NaN }]);

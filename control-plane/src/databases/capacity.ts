@@ -1,8 +1,10 @@
 /**
  * Whether the compute Sites have room for a Database (ARCHITECTURE.md,
  * decisions 109 and 110), checked before its row says a size no node can
- * give: disk from TopoLVM's free space, memory from each node's allocatable
- * memory less what its pods request. A Database the scheduler cannot place
+ * give: disk from TopoLVM's free space, memory and CPU from each node's
+ * allocatable less what its pods request (decision 151: an instance requests
+ * CPU in proportion to its memory, so the CPU left on a node caps the memory
+ * a Database can still take there). A Database the scheduler cannot place
  * stays `provisioning`; a volume TopoLVM cannot grow keeps its old size, and
  * a memory size no node fits leaves the restarted standby Pending, while the
  * row (and the bill) has the new size (dev cluster, 2026-11-15). Racy by
@@ -11,7 +13,7 @@
  *
  * Pure: the caller reads the free bytes per node and where the instances are.
  */
-import type { Site } from '@openupstream/sdk';
+import { DATABASE_MILLICORES_PER_GIB, type Site } from '@openupstream/sdk';
 import { type Result, err, ok } from '../result.js';
 
 /** Free bytes per node. */
@@ -38,3 +40,10 @@ export function roomForGrowth(room: NodeRoom, instanceNodes: readonly string[], 
 
 export const GiB = 1024 ** 3;
 export const MiB = 1024 ** 2;
+
+/**
+ * The memory a Database instance could still take on a node: what is free,
+ * or less if the node has too little CPU left for that memory's share.
+ */
+export const databaseMemoryRoom = (free: { readonly memoryBytes: number; readonly cpuMillicores: number }): number =>
+    Math.max(0, Math.min(free.memoryBytes, Math.floor((free.cpuMillicores * GiB) / DATABASE_MILLICORES_PER_GIB)));

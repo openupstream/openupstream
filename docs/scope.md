@@ -19,7 +19,8 @@ deletes it all.
    in the Frankfurt region (async), automatic failover, PgBouncer
    (transaction pooling; session features such as `LISTEN` need a direct
    connection), always on with a 256 MB floor, memory and storage
-   resizable, storage growing by itself as it fills (unless the customer
+   resizable, a guaranteed CPU share that follows the memory (a quarter
+   core per GB, no CPU limit), storage growing by itself as it fills (unless the customer
    turns that off or sets a maximum), backups and point-in-time
    recovery into a new Database (also of a deleted one, within the backup
    retention window), pgvector enabled.

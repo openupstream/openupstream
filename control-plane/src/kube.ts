@@ -142,6 +142,12 @@ export interface PodLogOptions {
     readonly sinceTime?: string;
 }
 
+/** What a new pod could still request on a node. */
+export interface NodeFree {
+    readonly memoryBytes: number;
+    readonly cpuMillicores: number;
+}
+
 export interface ControlPlaneKube {
     /** undefined when the Cluster does not exist (yet). */
     readCluster(namespace: string, name: string): Promise<Result<ClusterStatus | undefined, string>>;
@@ -165,11 +171,11 @@ export interface ControlPlaneKube {
      */
     storageCapacity(): Promise<Result<Map<string, number> | undefined, string>>;
     /**
-     * Memory a new pod could still request on the node: its allocatable
-     * memory less what its running and pending pods request; undefined when
-     * the node is gone.
+     * Memory and CPU a new pod could still request on the node: its
+     * allocatable less what its running and pending pods request; undefined
+     * when the node is gone.
      */
-    memoryFree(nodeName: string): Promise<Result<number | undefined, string>>;
+    nodeFree(nodeName: string): Promise<Result<NodeFree | undefined, string>>;
     /** Raises every PVC of the Cluster `name` asking for less than `storageGb` to it; the names it raised. */
     growVolumes(namespace: string, name: string, storageGb: number): Promise<Result<string[], string>>;
     /** The nodes holding the volumes of the Cluster `name` (its PVCs' selected node). */
@@ -217,6 +223,15 @@ export const bytesOf = (quantity: string): number | undefined => {
     const match = /^(\d+)(Ki|Mi|Gi|Ti|k|M|G|T)?$/.exec(quantity);
     const unit = UNITS[match?.[2] ?? ''];
     return match === null || unit === undefined ? undefined : Number(match[1]) * unit;
+};
+
+const CPU_SUFFIXES: Readonly<Record<string, number>> = { n: 1e-9, u: 1e-6, m: 1e-3, '': 1, k: 1e3, M: 1e6, G: 1e9 };
+
+/** `250m` → 250, `2` → 2000, `0.5` → 500, `1e3` → 1000000: CPU in millicores, rounded up; undefined when not a CPU quantity. */
+export const millicoresOf = (quantity: string): number | undefined => {
+    const match = /^(\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(n|u|m|k|M|G)?$/.exec(quantity);
+    const factor = CPU_SUFFIXES[match?.[2] ?? ''];
+    return match === null || factor === undefined ? undefined : Math.ceil(Number(match[1]) * factor * 1000 - 1e-9);
 };
 
 /** `512Mi` → 512, `10Gi` → 10: whole units only, as the operator writes them; undefined otherwise. */
@@ -304,7 +319,8 @@ interface PodObject {
     spec?: {
         nodeName?: string;
         containers?: { name: string; resources?: { requests?: Record<string, string> } }[];
-        initContainers?: { name: string; resources?: { requests?: Record<string, string> } }[];
+        /** `restartPolicy: Always` makes one a sidecar, which runs alongside the containers. */
+        initContainers?: { name: string; restartPolicy?: string; resources?: { requests?: Record<string, string> } }[];
         /** Set from the RuntimeClass (gVisor's) and counted by the scheduler. */
         overhead?: Record<string, string>;
     };
@@ -316,18 +332,32 @@ interface PodObject {
 }
 
 
-const memoryOf = (requests: Record<string, string> | undefined): number => bytesOf(requests?.['memory'] ?? '0') ?? 0;
+type Amounts = Record<string, string> | undefined;
 
 /**
- * Memory the scheduler reserves for a pod: its containers' requests, or
- * its largest init container's if that is more, plus the RuntimeClass's
- * overhead.
+ * What the scheduler reserves for a pod of one resource: its containers'
+ * and sidecars' requests, or its largest init container's (plus the sidecars
+ * started before it) if that is more, plus the RuntimeClass's overhead.
  */
-export const podMemoryRequest = (pod: Pick<PodObject, 'spec'>): number => {
-    const containers = (pod.spec?.containers ?? []).reduce((sum, container) => sum + memoryOf(container.resources?.requests), 0);
-    const init = Math.max(0, ...(pod.spec?.initContainers ?? []).map((container) => memoryOf(container.resources?.requests)));
-    return Math.max(containers, init) + memoryOf(pod.spec?.overhead);
-};
+const podRequestOf =
+    (amountOf: (amounts: Amounts) => number) =>
+    (pod: Pick<PodObject, 'spec'>): number => {
+        const inits = pod.spec?.initContainers ?? [];
+        const sidecarsBefore = (index: number) =>
+            inits.slice(0, index).reduce((sum, container) => sum + (container.restartPolicy === 'Always' ? amountOf(container.resources?.requests) : 0), 0);
+        const running = (pod.spec?.containers ?? []).reduce((sum, container) => sum + amountOf(container.resources?.requests), sidecarsBefore(inits.length));
+        const init = Math.max(
+            0,
+            ...inits.map((container, index) => (container.restartPolicy === 'Always' ? 0 : sidecarsBefore(index) + amountOf(container.resources?.requests))),
+        );
+        return Math.max(running, init) + amountOf(pod.spec?.overhead);
+    };
+
+/** In bytes. */
+export const podMemoryRequest = podRequestOf((amounts) => bytesOf(amounts?.['memory'] ?? '0') ?? 0);
+
+/** In millicores. */
+export const podCpuRequest = podRequestOf((amounts) => millicoresOf(amounts?.['cpu'] ?? '0') ?? 0);
 
 const podInfoOf = (pod: PodObject): PodInfo => ({
     name: pod.metadata.name,
@@ -484,7 +514,7 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
             });
             return ok(entries.length === 0 ? undefined : new Map(entries));
         },
-        memoryFree: async (nodeName) => {
+        nodeFree: async (nodeName) => {
             const node = await within(
                 api.read<{ apiVersion: string; kind: string; metadata: { name: string }; status?: { allocatable?: Record<string, string> } }>({
                     apiVersion: 'v1',
@@ -496,9 +526,10 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
             if (!node.ok) {
                 return node.error.status === NOT_FOUND ? ok(undefined) : err(node.error.message);
             }
-            const allocatable = bytesOf(node.value.status?.allocatable?.['memory'] ?? '');
-            if (allocatable === undefined) {
-                return err(`node ${nodeName} states no allocatable memory`);
+            const memory = bytesOf(node.value.status?.allocatable?.['memory'] ?? '');
+            const cpu = millicoresOf(node.value.status?.allocatable?.['cpu'] ?? '');
+            if (memory === undefined || cpu === undefined) {
+                return err(`node ${nodeName} states no allocatable memory or CPU`);
             }
             const pods = await within(
                 api.list<PodObject>('v1', 'Pod', undefined, undefined, undefined, undefined, `spec.nodeName=${nodeName},status.phase!=Succeeded,status.phase!=Failed`),
@@ -507,8 +538,8 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
             if (!pods.ok) {
                 return err(pods.error.message);
             }
-            const requested = pods.value.items.reduce((sum, pod) => sum + podMemoryRequest(pod), 0);
-            return ok(allocatable - requested);
+            const requested = (podRequest: (pod: PodObject) => number) => pods.value.items.reduce((sum, pod) => sum + podRequest(pod), 0);
+            return ok({ memoryBytes: memory - requested(podMemoryRequest), cpuMillicores: cpu - requested(podCpuRequest) });
         },
         growVolumes: async (namespace, name, storageGb) => {
             const pvcs = await within(

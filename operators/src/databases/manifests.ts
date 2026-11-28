@@ -26,6 +26,7 @@ import {
     type Project,
     type Site,
     clusterName,
+    databaseCpuMillicores,
     databaseRoleName,
     databaseRoleSecret,
     poolerName,
@@ -310,8 +311,9 @@ const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig
                 ],
             },
         },
+        // CPU: a share in proportion to the memory, no limit (decision 151).
         resources: {
-            requests: { memory: `${database.memoryMb}Mi` },
+            requests: { memory: `${database.memoryMb}Mi`, cpu: `${databaseCpuMillicores(database.memoryMb)}m` },
             limits: { memory: `${database.memoryMb}Mi` },
         },
         postgresql: {

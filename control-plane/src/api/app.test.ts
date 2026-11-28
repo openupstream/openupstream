@@ -34,7 +34,7 @@ import { forgetDroppedRoles, revokeApiKey, roleFor } from '../databases/roles.js
 import { syncProjectSecrets } from '../secrets/render.js';
 import { ensureDefaultDomains } from '../domains/store.js';
 import { listDomainRoutings } from '../routes/store.js';
-import { type ClusterStatus, type ControlPlaneKube, type CronJobStatus, type DeploymentStatus, type KubeJob, type PodInfo, type RecoveryWindow, type SecretManifest } from '../kube.js';
+import { type ClusterStatus, type ControlPlaneKube, type CronJobStatus, type DeploymentStatus, type KubeJob, type NodeFree, type PodInfo, type RecoveryWindow, type SecretManifest } from '../kube.js';
 import type { RegistryDeps } from '../registry.js';
 import { listServiceRows } from '../services/store.js';
 import { listJobRows } from '../jobs/store.js';
@@ -144,7 +144,7 @@ const nodeLabels: NodeLabels[] = [
 let nodesDown = false;
 const volumeNodes = new Map<string, string[]>();
 /** What a new pod could still request per node, in bytes. */
-const memoryFree = new Map<string, number>();
+const nodeFree = new Map<string, NodeFree>();
 
 /** The recovery windows of the fake Kubernetes' ObjectStores, by name; a string is an error. */
 const recoveryWindows = new Map<string, RecoveryWindow | string>();
@@ -164,7 +164,7 @@ const kube: ControlPlaneKube = {
     },
     storageCapacity: async () => ok(storageCapacity),
     volumeNodes: async (_namespace, name) => ok(volumeNodes.get(name) ?? []),
-    memoryFree: async (node) => ok(memoryFree.get(node)),
+    nodeFree: async (node) => ok(nodeFree.get(node)),
     growVolumes: async () => ok([]),
     readRecoveryWindow: async (_namespace, name) => {
         const window = recoveryWindows.get(name);
@@ -1226,10 +1226,15 @@ describe('Databases', () => {
         ]);
         volumeNodes.set(`db-${created.id}`, ['node-fsn', 'node-lim']);
         const MiB = 1024 ** 2;
-        memoryFree.set('node-fsn', 4096 * MiB).set('node-lim', 1500 * MiB);
+        nodeFree.set('node-fsn', { memoryBytes: 4096 * MiB, cpuMillicores: 4000 }).set('node-lim', { memoryBytes: 1500 * MiB, cpuMillicores: 4000 });
         const tooMuchMemory = await patch({ memoryMb: 2560 });
         assert.equal(tooMuchMemory.status, 507, 'ovh-lim has 1500 MB free, the instance needs 1536 MB more');
         assert.match(((await tooMuchMemory.json()) as { error: string }).error, /at most 1500 MB more/);
+        nodeFree.set('node-lim', { memoryBytes: 8192 * MiB, cpuMillicores: 200 });
+        const tooLittleCpu = await patch({ memoryMb: 2048 });
+        assert.equal(tooLittleCpu.status, 507, "ovh-lim has the memory, but 200m of CPU is the share of 819 MB, not of 1024 MB more");
+        assert.match(((await tooLittleCpu.json()) as { error: string }).error, /at most 819 MB more/);
+        nodeFree.set('node-lim', { memoryBytes: 1500 * MiB, cpuMillicores: 4000 });
         const tooBig = await patch({ storageGb: 25 });
         assert.equal(tooBig.status, 507, 'ovh-lim has room for 14 GB more, not 15');
         assert.match(((await tooBig.json()) as { error: string }).error, /at most 14 GB more/);
@@ -1247,7 +1252,7 @@ describe('Databases', () => {
         assert.equal((await patch({ storageGb: 14 })).status, 200, 'no volumes yet: room in both Sites as for a new one');
         assert.equal((await patch({ storageGb: 15 })).status, 507);
         storageCapacity = undefined;
-        memoryFree.clear();
+        nodeFree.clear();
 
         clusters.set(`db-${created.id}`, { instances: 2, readyInstances: 2, ready: true, memoryMb: 1024, storageGb: 14 });
         const state = async () =>
