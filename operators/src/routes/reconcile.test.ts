@@ -35,6 +35,7 @@ const fakeKube = (existing: ObjectRef[]) => {
             listed.push(selector);
             return ok(existing.filter((ref) => ref.apiVersion === apiVersion && ref.kind === kind));
         },
+        listObjects: async () => ok([]),
         remove: async (ref) => {
             removed.push(`${ref.kind} ${ref.name}`);
             return ok(undefined);

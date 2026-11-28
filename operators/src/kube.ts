@@ -41,6 +41,8 @@ export interface Kube {
     readSecret(namespace: string, name: string): Promise<Result<Record<string, string> | undefined, KubeError>>;
     /** The objects of one kind in all namespaces that carry the labels in `labelSelector`, e.g. `a=b,c=d`. */
     list(apiVersion: string, kind: string, labelSelector: string): Promise<Result<ObjectRef[], KubeError>>;
+    /** The same objects whole, as the API server holds them. */
+    listObjects(apiVersion: string, kind: string, labelSelector: string): Promise<Result<KubeObject[], KubeError>>;
     /** Deletes the object; one that is already gone counts as deleted. */
     remove(ref: ObjectRef): Promise<Result<void, KubeError>>;
 }
@@ -156,6 +158,12 @@ export function kubeFrom(config: KubeConfig, { timeoutMs = KUBE_CALL_TIMEOUT_MS 
                           ],
                 ),
             );
+        },
+        listObjects: async (apiVersion, kind, labelSelector) => {
+            const result = await attempt(() =>
+                api.list<KubeObject>(apiVersion, kind, undefined, undefined, undefined, undefined, undefined, labelSelector),
+            );
+            return result.ok ? ok(result.value.items) : result;
         },
         remove: async (ref) => {
             // Background: what the object owns goes with it (a CronJob's runs, a Deployment's pods), whatever the kind's default.

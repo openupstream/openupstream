@@ -4,7 +4,7 @@ import type { Database, Project } from '@openupstream/sdk';
 import type { Kube, KubeError, KubeObject } from '../kube.js';
 import { LABELS, MANAGED_BY } from '../kubernetes.js';
 import { type Result, err, ok } from '../result.js';
-import type { DatabaseConfig } from './manifests.js';
+import { type DatabaseConfig, databaseManifests } from './manifests.js';
 import { type DatabaseRow, planDatabases, reconcileDatabases } from './reconcile.js';
 
 const project: Project = {
@@ -81,14 +81,14 @@ test('a restoring row gets the recovery bootstrap; once finished, the Cluster no
     assert.deepEqual(
         restoring.databases.map((chain) => clusterSpec(chain)?.bootstrap),
         [
-            { initdb: { postInitApplicationSQL: ['CREATE EXTENSION IF NOT EXISTS vector'] } },
+            { initdb: { postInitApplicationSQL: ['CREATE EXTENSION IF NOT EXISTS vector', 'GRANT CONNECT ON DATABASE app TO pg_read_all_data, pg_write_all_data'] } },
             { recovery: { source: 'origin', recoveryTarget: { targetTime: '2026-10-17T10:30:00.000Z' } } },
         ],
     );
     assert.deepEqual(restoring.invalid, []);
     const finished = planDatabases([{ project, database: restored }], config, credentials);
     const [chain] = finished.databases;
-    assert.deepEqual(clusterSpec(chain ?? [])?.bootstrap, { initdb: { postInitApplicationSQL: ['CREATE EXTENSION IF NOT EXISTS vector'] } });
+    assert.deepEqual(clusterSpec(chain ?? [])?.bootstrap, { initdb: { postInitApplicationSQL: ['CREATE EXTENSION IF NOT EXISTS vector', 'GRANT CONNECT ON DATABASE app TO pg_read_all_data, pg_write_all_data'] } });
     assert.equal(clusterSpec(chain ?? [])?.externalClusters, undefined);
 });
 
@@ -118,7 +118,7 @@ test('no rows: nothing to apply', () => {
 });
 
 /** Records what the reconcile pass sends; fails applies for the given kinds. */
-const fakeKube = (secret: Record<string, string> | undefined, failKinds: readonly string[] = []) => {
+const fakeKube = (secret: Record<string, string> | undefined, failKinds: readonly string[] = [], clusters: Result<KubeObject[], KubeError> = ok([])) => {
     const applied: { object: KubeObject; dryRun: boolean }[] = [];
     const kube: Kube = {
         apply: async (object, { dryRun }): Promise<Result<void, KubeError>> => {
@@ -127,6 +127,7 @@ const fakeKube = (secret: Record<string, string> | undefined, failKinds: readonl
         },
         readSecret: async () => ok(secret),
         list: async () => ok([]),
+        listObjects: async () => clusters,
         remove: async () => ok(undefined),
     };
     return { kube, applied };
@@ -214,5 +215,30 @@ test('backup credentials without the keys the ObjectStore reads are refused', as
             missingKeys: ['ACCESS_SECRET_KEY'],
         },
     });
+    assert.equal(applied.length, 0);
+});
+
+test('a grown Database keeps the shared_buffers its Cluster has; the pass reads the Clusters first', async () => {
+    const before = databaseManifests(project, orders, config);
+    assert.ok(before.ok);
+    const { kube, applied } = fakeKube(credentials, [], ok([before.value.cluster]));
+    const result = await reconcileDatabases(kube, [{ project, database: { ...orders, memoryMb: 2048 } }, { project, database: invoices }], config, options);
+    assert.ok(result.ok);
+    const spec = (name: string) =>
+        applied.find(({ object }) => object.kind === 'Cluster' && object.metadata.name === name)?.object['spec'] as
+            | { resources: { limits: { memory: string } }; postgresql: { parameters: { shared_buffers: string } } }
+            | undefined;
+    assert.deepEqual(
+        [spec(`db-${orders.id}`)?.resources.limits.memory, spec(`db-${orders.id}`)?.postgresql.parameters.shared_buffers],
+        ['2048Mi', '128MB'],
+        'grown from 512 MB: the buffers of 512 MB',
+    );
+    assert.equal(spec(`db-${invoices.id}`)?.postgresql.parameters.shared_buffers, '128MB', 'no Cluster yet: a quarter of its 512 MB');
+});
+
+test('when the Clusters cannot be listed nothing is applied: a guess would restart grown Databases', async () => {
+    const { kube, applied } = fakeKube(credentials, [], err({ status: 0, message: 'no answer' }));
+    const result = await reconcileDatabases(kube, [{ project, database: orders }], config, options);
+    assert.deepEqual(result, { ok: false, error: { kind: 'kube', error: { status: 0, message: 'no answer' } } });
     assert.equal(applied.length, 0);
 });

@@ -8,9 +8,10 @@
  * listing.
  *
  * `planDatabases` is pure and decides everything; `reconcileDatabases` reads
- * the backup credentials, applies the plan with server-side apply and reports.
+ * the backup credentials and the Clusters that exist, applies the plan with
+ * server-side apply and reports.
  */
-import type { DatabaseRow, Project } from '@openupstream/sdk';
+import { type DatabaseRow, type Project, clusterName } from '@openupstream/sdk';
 import { type Kube, type KubeError, type KubeObject, type ObjectRef, refOf } from '../kube.js';
 import { LABELS, MANAGED_BY, databaseMetricsPolicyFor, projectNamespace, projectObjectsFor } from '../kubernetes.js';
 import { type Result, err, ok } from '../result.js';
@@ -18,8 +19,10 @@ import {
     BACKUP_CREDENTIAL_KEYS,
     type DatabaseConfig,
     type DatabaseManifests,
+    type LiveCluster,
     type RestoreError,
     databaseManifests,
+    liveClusterOf,
     restoredDatabaseManifests,
 } from './manifests.js';
 import { type TunnelSettings, tunnelObjects } from './tunnel.js';
@@ -68,33 +71,42 @@ const uniqueBy = <T>(items: readonly T[], key: (item: T) => string): T[] => [
  * goes after its retention window. CloudNativePG reads the bootstrap only
  * when it creates the Cluster, so dropping it changes nothing else.
  */
-const manifestsFor = (row: DatabaseRow, config: DatabaseConfig): Result<DatabaseManifests, RestoreError[]> => {
+const manifestsFor = (row: DatabaseRow, config: DatabaseConfig, live: LiveCluster | undefined): Result<DatabaseManifests, RestoreError[]> => {
     const restore = row.database.restoredFrom;
     const roles = row.roles ?? [];
     return restore === undefined || row.restoring !== true
-        ? databaseManifests(row.project, row.database, config, roles)
+        ? databaseManifests(row.project, row.database, config, roles, live)
         : restoredDatabaseManifests(
               row.project,
               row.database,
               config,
               { database: { id: restore.databaseId, projectId: row.project.id }, targetTime: restore.targetTime },
               roles,
+              live,
           );
 };
+
+/** The Clusters that exist, by `liveClusterKey`. */
+export type LiveClusters = ReadonlyMap<string, LiveCluster>;
+
+export const liveClusterKey = (namespace: string, name: string): string => `${namespace}/${name}`;
 
 /**
  * What to apply so the cluster runs every Database in `rows`.
  * `backupCredentials` is the `data` of the platform's backup credentials
  * Secret. Without `tunnel` no Project gets a database tunnel; the roles
- * are added to the Clusters all the same.
+ * are added to the Clusters all the same. `live` holds the Clusters that
+ * exist: one keeps its `shared_buffers` through a grow (decision 152).
  */
 export function planDatabases(
     rows: readonly DatabaseRow[],
     config: DatabaseConfig,
     backupCredentials: Readonly<Record<string, string>>,
     tunnel?: TunnelSettings,
+    live: LiveClusters = new Map(),
 ): DatabasePlan {
-    const results = rows.map((row) => ({ row, result: manifestsFor(row, config) }));
+    const liveOf = (row: DatabaseRow) => live.get(liveClusterKey(projectNamespace(row.project.id), clusterName(row.database)));
+    const results = rows.map((row) => ({ row, result: manifestsFor(row, config, liveOf(row)) }));
     const valid = results.flatMap(({ row, result }) => (result.ok ? [{ row, manifests: result.value }] : []));
     const projects = uniqueBy(
         valid.map(({ row }) => row.project),
@@ -167,7 +179,14 @@ export async function reconcileDatabases(
     if (missingKeys.length > 0) {
         return err({ kind: 'incomplete-backup-credentials', namespace, name, missingKeys });
     }
-    const plan = planDatabases(rows, config, credentials.value, options.tunnel);
+    // Read before planning: without it every Cluster would be given the
+    // `shared_buffers` of a new one, and a grown Database would restart.
+    const clusters = await kube.listObjects('postgresql.cnpg.io/v1', 'Cluster', `${LABELS.managedBy}=${MANAGED_BY}`);
+    if (!clusters.ok) {
+        return err({ kind: 'kube', error: clusters.error });
+    }
+    const live = new Map(clusters.value.map((cluster) => [liveClusterKey(cluster.metadata.namespace ?? '', cluster.metadata.name), liveClusterOf(cluster)]));
+    const plan = planDatabases(rows, config, credentials.value, options.tunnel, live);
     const dryRun = options.dryRun ?? false;
 
     // Chains run side by side, each in order: a namespace exists before its

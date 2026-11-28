@@ -22,6 +22,7 @@ const kube = (applied: string[] = []): Kube => ({
     },
     readSecret: async () => ok(credentials),
     list: async () => ok([]),
+    listObjects: async () => ok([]),
     remove: async () => ok(undefined),
 });
 
