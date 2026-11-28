@@ -446,3 +446,10 @@ test('what a Cluster asks for now is read from the form the manifests write', ()
     assert.deepEqual(liveClusterOf({ spec: { resources: { limits: { memory: '1Gi' } }, postgresql: { parameters: { shared_buffers: '1GB' } } } }), {}, 'other units: absent');
     assert.deepEqual(liveClusterOf({}), {});
 });
+
+test("with the control plane's app credentials the Cluster reads the app user's verifier from their Secret", () => {
+    const ours = databaseManifests(project, database, config, [], undefined, true);
+    assert.ok(ours.ok);
+    assert.deepEqual(ours.value.cluster.spec.bootstrap?.initdb?.secret, { name: `db-${database.id}-app-scram` });
+    assert.equal(manifestsFor().cluster.spec.bootstrap?.initdb?.secret, undefined, "a Database from before: CloudNativePG's own Secret");
+});

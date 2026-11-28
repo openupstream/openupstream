@@ -72,16 +72,22 @@ export async function getDatabase(pool: pg.Pool, projectId: string, id: string):
 
 export type CreateDatabaseError = { readonly kind: 'name-taken'; readonly name: string } | { readonly kind: 'held' };
 
-/** `input` is validated by the API; the schema enforces the same rules again. */
+/**
+ * `input` is validated by the API; the schema enforces the same rules again.
+ * `app` gives the row its id and the sealed password of its `app` user
+ * (decision 155) in the one insert, so the operator never sees the Database
+ * without it; without `app`, CloudNativePG generates a password.
+ */
 export async function createDatabase(
     pool: pg.Pool,
     projectId: string,
     input: DatabaseInput & { readonly homeSite: Site },
+    app?: { readonly id: string; readonly sealedPassword: Buffer },
 ): Promise<Result<Database, CreateDatabaseError>> {
     const inserted = await unlessCodes<pg.QueryResult<DatabaseRow>, CreateDatabaseError>(
         pool.query<DatabaseRow>(
-            `insert into databases (project_id, name, home_site, memory_mb, storage_gb, restore_source_id, restore_target_time, auto_grow, max_storage_gb)
-             values ($1, $2, $3, $4, $5, $6, $7, coalesce($8, true), $9) returning ${COLUMNS}`,
+            `insert into databases (project_id, name, home_site, memory_mb, storage_gb, restore_source_id, restore_target_time, auto_grow, max_storage_gb, id, app_password)
+             values ($1, $2, $3, $4, $5, $6, $7, coalesce($8, true), $9, coalesce($10, gen_random_uuid()), $11) returning ${COLUMNS}`,
             [
                 projectId,
                 input.name,
@@ -92,6 +98,8 @@ export async function createDatabase(
                 input.restoreFrom?.targetTime ?? null,
                 input.autoGrow ?? null,
                 input.maxStorageGb ?? null,
+                app?.id ?? null,
+                app?.sealedPassword ?? null,
             ],
         ),
         { [UNIQUE_VIOLATION]: { kind: 'name-taken', name: input.name }, [ACCOUNT_HELD]: { kind: 'held' } },

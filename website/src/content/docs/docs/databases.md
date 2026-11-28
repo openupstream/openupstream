@@ -99,8 +99,11 @@ oup pg resize main --storage 20
   quarter core per GB. Postgres's `shared_buffers` keeps its size until
   the next restart; until then the added memory is used as the operating
   system's file cache.
-- **Less memory** restarts the standby, then the primary. Writes pause for
-  seconds; plan for about a minute in all.
+- **Less memory** restarts the standby, then the primary. While the
+  primary restarts, your connections through the pooler stay open and
+  queries wait, for about 15 seconds; a client that gives up sooner (a
+  short connect or statement timeout) sees an error. Direct connections
+  are closed. Plan for about a minute in all.
 - The Database reads `resizing` until both instances have the new size.
 
 ## Storage that grows by itself

@@ -37,8 +37,9 @@ standby runs in the Frankfurt region.
   port 443. Nothing faces the internet on Postgres's port, so tools that
   cannot run `oup`, such as a hosted BI tool, cannot connect.
 - **Storage only grows.** It cannot be made smaller again.
-- **Reducing memory restarts both instances** one after the other. Writes
-  pause for seconds. Adding memory does not restart them.
+- **Reducing memory restarts both instances** one after the other.
+  Connections through the pooler are held meanwhile and queries wait about
+  15 seconds. Adding memory does not restart them.
 - **CPU follows memory.** There is no separate CPU size: for more
   guaranteed CPU, give the Database more memory.
 - **No scale to zero.** An idle Database costs its memory and storage.

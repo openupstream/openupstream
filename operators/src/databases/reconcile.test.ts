@@ -128,6 +128,7 @@ const fakeKube = (secret: Record<string, string> | undefined, failKinds: readonl
         readSecret: async () => ok(secret),
         list: async () => ok([]),
         listObjects: async () => clusters,
+        read: async () => ok(undefined),
         remove: async () => ok(undefined),
     };
     return { kube, applied };
@@ -247,4 +248,15 @@ test('when the Clusters cannot be listed no Cluster is applied, as a guess would
     const kindsApplied = applied.map(({ object }) => object.kind);
     assert.equal(kindsApplied.includes('Cluster'), false);
     assert.deepEqual(kindsApplied.slice(-3), ['ObjectStore', 'Pooler', 'ScheduledBackup']);
+});
+
+test("a row with app credentials names the verifier Secret; one being restored gets it once the restore has finished", () => {
+    const secretOf = (plan: ReturnType<typeof planDatabases>) =>
+        (plan.databases[0]?.find((object) => object.kind === 'Cluster')?.['spec'] as { bootstrap?: { initdb?: { secret?: unknown }; recovery?: unknown } }).bootstrap;
+    assert.deepEqual(secretOf(planDatabases([{ project, database: orders, appCredentials: true }], config, credentials))?.initdb?.secret, { name: `db-${orders.id}-app-scram` });
+    assert.equal(secretOf(planDatabases([{ project, database: orders }], config, credentials))?.initdb?.secret, undefined);
+    const restored = { ...invoices, restoredFrom: { databaseId: orders.id } };
+    const restoring = secretOf(planDatabases([{ project, database: restored, restoring: true, appCredentials: true }], config, credentials));
+    assert.ok(restoring?.recovery !== undefined && restoring.initdb === undefined);
+    assert.deepEqual(secretOf(planDatabases([{ project, database: restored, appCredentials: true }], config, credentials))?.initdb?.secret, { name: `db-${invoices.id}-app-scram` });
 });

@@ -82,11 +82,30 @@ Cluster reports 2 ready instances.
 
 ## Fail back to the Home site
 
-A switchover, the same status change `kubectl cnpg promote` makes:
+A switchover, the same status change `kubectl cnpg promote` makes. Pause the
+Pooler first, so PgBouncer holds the clients' connections and queues their
+queries instead of failing them (the operator's restart guard does this for
+restarts, not for a switchover started by hand):
+
+```bash
+kubectl -n project-<project id> patch pooler db-<database id>-pooler --type merge -p '{"spec":{"pgbouncer":{"paused":true}}}'
+```
+
 
 ```bash
 kubectl -n project-<project id> patch cluster db-<database id> --subresource=status --type merge -p '{"status":{"targetPrimary":"db-<database id>-<instance in the Home site>","targetPrimaryTimestamp":"<now, RFC 3339>","phase":"Switchover in progress","phaseReason":"Switching over to db-<database id>-<instance>"}}'
 ```
 
-Writes pause for about 15 s. Done when `currentPrimary` is the instance in
-the Home site and the phase is `Cluster in healthy state`.
+Done when `currentPrimary` is the instance in the Home site and its pod has
+the label `cnpg.io/instanceRole=primary` and is Ready. Resume the Pooler
+then, not later: every second it stays paused the clients wait.
+
+```bash
+kubectl -n project-<project id> patch pooler db-<database id>-pooler --type merge -p '{"spec":{"pgbouncer":{"paused":false}}}'
+```
+
+Measured on the dev cluster (2026-11-28): clients waited 10 s and no write
+failed, for a Database whose `app` password is the control plane's
+(ARCHITECTURE.md, decision 155); without the pause writes fail for about
+15 s, and for a Database from before that decision the first login after
+the switchover fails once either way.

@@ -17,6 +17,9 @@ export interface KubeObject {
         readonly namespace?: string;
         readonly labels?: Readonly<Record<string, string>>;
         readonly annotations?: Readonly<Record<string, string>>;
+        /** Set by the API server, so only on objects read from it. */
+        readonly uid?: string;
+        readonly deletionTimestamp?: Date;
     };
     readonly [field: string]: unknown;
 }
@@ -35,8 +38,14 @@ export interface KubeError {
 }
 
 export interface Kube {
-    /** Server-side apply, forcing ownership of the fields we set. */
-    apply(object: KubeObject, options: { readonly dryRun: boolean }): Promise<Result<void, KubeError>>;
+    /**
+     * Server-side apply, forcing ownership of the fields we set, under
+     * FIELD_MANAGER or `fieldManager`: a second manager owns its fields of
+     * an object apart from the first one's.
+     */
+    apply(object: KubeObject, options: { readonly dryRun: boolean; readonly fieldManager?: string }): Promise<Result<void, KubeError>>;
+    /** The object, or undefined when it does not exist. */
+    read(ref: ObjectRef): Promise<Result<KubeObject | undefined, KubeError>>;
     /** A Secret's `data` (base64 values), or undefined when it does not exist. */
     readSecret(namespace: string, name: string): Promise<Result<Record<string, string> | undefined, KubeError>>;
     /** The objects of one kind in all namespaces that carry the labels in `labelSelector`, e.g. `a=b,c=d`. */
@@ -111,18 +120,31 @@ export function kubeFrom(config: KubeConfig, { timeoutMs = KUBE_CALL_TIMEOUT_MS 
     const api = KubernetesObjectApi.makeApiClient(config);
     const attempt = <T>(call: () => Promise<T>) => attemptWithin(call, timeoutMs);
     return {
-        apply: async (object, { dryRun }) => {
+        apply: async (object, { dryRun, fieldManager }) => {
             const result = await attempt(() =>
                 api.patch(
                     toClientModel(object),
                     undefined,
                     dryRun ? DRY_RUN_ALL : undefined,
-                    FIELD_MANAGER,
+                    fieldManager ?? FIELD_MANAGER,
                     true,
                     PatchStrategy.ServerSideApply,
                 ),
             );
             return result.ok ? ok(undefined) : result;
+        },
+        read: async (ref) => {
+            const result = await attempt(() =>
+                api.read<KubeObject>({
+                    apiVersion: ref.apiVersion,
+                    kind: ref.kind,
+                    metadata: { name: ref.name, ...(ref.namespace === undefined ? {} : { namespace: ref.namespace }) },
+                }),
+            );
+            if (!result.ok) {
+                return result.error.status === 404 ? ok(undefined) : result;
+            }
+            return ok(result.value);
         },
         readSecret: async (namespace, name) => {
             const result = await attempt(() =>

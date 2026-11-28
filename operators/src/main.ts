@@ -23,6 +23,7 @@ import { KubeConfig } from '@kubernetes/client-node';
 import { controlPlaneJobs, controlPlaneRoutings, controlPlaneRows, controlPlaneServices } from './control-plane.js';
 import { type PassLog, databasesPass, runPasses, wakeup } from './databases/loop.js';
 import { databaseConfigProblem, type DatabaseConfig } from './databases/manifests.js';
+import { runGuard } from './databases/pause.js';
 import { jobsPass } from './jobs/loop.js';
 import { kubeFrom } from './kube.js';
 import { nodesFor } from './nodes.js';
@@ -112,4 +113,6 @@ const jobs = (): (() => Promise<PassLog>) => {
 const passes = { databases, routes, services, jobs } as const;
 const pass = await passes[operator]();
 log({ msg: `${operator} operator started`, controlPlaneUrl, intervalMs });
-await runPasses(pass, intervalMs, log, stop.signal, wait);
+// Next to the Databases pass: Poolers are paused while a primary restarts (decision 152).
+const guard = operator === 'databases' ? runGuard(kube, log, stop.signal) : Promise.resolve();
+await Promise.all([runPasses(pass, intervalMs, log, stop.signal, wait), guard]);

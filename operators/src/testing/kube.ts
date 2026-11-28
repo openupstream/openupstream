@@ -14,6 +14,7 @@ export const fakeKube = (existing: readonly ObjectRef[]) => {
         readSecret: async () => ok(undefined),
         list: async (apiVersion, kind) => ok(existing.filter((ref) => ref.apiVersion === apiVersion && ref.kind === kind)),
         listObjects: async () => ok([]),
+        read: async () => ok(undefined),
         remove: async (ref) => {
             removed.push(`${ref.kind} ${ref.name}`);
             return ok(undefined);

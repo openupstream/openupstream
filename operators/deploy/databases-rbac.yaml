@@ -38,8 +38,13 @@ rules:
     resources: [clusters, poolers, scheduledbackups]
     verbs: [create, patch]
   - apiGroups: [postgresql.cnpg.io]
-    resources: [clusters]
+    resources: [clusters, poolers]
     verbs: [list]
+  # The restart guard (src/databases/pause.ts) reads a primary's pod to see
+  # when it serves again, and resumes the Pooler it paused.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get]
   - apiGroups: [barmancloud.cnpg.io]
     resources: [objectstores]
     verbs: [create, patch]
