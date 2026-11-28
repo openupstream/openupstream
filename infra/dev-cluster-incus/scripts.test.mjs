@@ -70,7 +70,7 @@ test('instance names carry the remote only when INCUS_REMOTE is set', () => {
 });
 
 test('SITES chooses the VMs\' Site ids, the third one without a volume', () => {
-    const sites = 'source ./lib.sh; echo "${SITES[*]} / $THIRD_SITE"';
+    const sites = 'source ./lib.sh; echo "${SITES[*]} / $QUORUM_SITE"';
     assert.equal(run(sites).stdout, 'hetzner-fsn1 ovh-lim netcup-nbg / netcup-nbg\n');
     assert.equal(run(sites, { SITES: 'home-a home-b home-c' }).stdout, 'home-a home-b home-c / home-c\n');
     const { log } = run('YES=1 SKIP_DNS=1 ./down.sh', { SITES: 'home-a home-b home-c', STATE: mkdtempSync(join(tmpdir(), 'incus-state-')) });

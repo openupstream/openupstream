@@ -110,7 +110,7 @@ Traefik already implements is configured, not reimplemented.
   (ingress only from the Project's own pods, Traefik and CloudNativePG's
   operator; ARCHITECTURE.md, decision 89), which every operator applies
   identically under one field manager before anything goes into the
-  namespace, labels, the Site zone label and the third Site's taint, and
+  namespace, labels, the Site zone label and the quorum-only taint, and
   the egress policy of customer pods (`customerEgressPolicy`).
 - `src/nodes.ts` (decision 105): the Nodes' addresses, which the egress
   policy leaves out but for 80 and 443. The Services and Jobs passes list

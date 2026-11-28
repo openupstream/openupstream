@@ -6,7 +6,9 @@ the EU; today everything runs in Germany, in three Sites at three providers
 stop your Databases or Buckets, nor Services with two or more replicas;
 single-replica Services restart in the other Site. A self-hosted
 installation runs in Sites of its own choosing, two compute Sites or more
-(decision 150); `oup sites` and the dashboard list them.
+(decision 150); `oup sites` and the dashboard list them, and the
+dashboard's "Sites & nodes" page shows its admins every node and what is
+wrong with their Site labels (decision 153).
 
 ## Offered
 

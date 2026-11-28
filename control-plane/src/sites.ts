@@ -4,7 +4,17 @@
  * label the default Home site, and the description annotation says where it
  * is. Nothing here names a Site.
  */
-import type { Site, SiteInfo } from '@openupstream/sdk';
+import {
+    COMPUTE_SITE_LABEL,
+    DEFAULT_SITE_LABEL,
+    QUORUM_ONLY_TAINT,
+    type NodeInfo,
+    type NodesReport,
+    type Site,
+    type SiteInfo,
+    type SiteProblem,
+    ZONE_LABEL,
+} from '@openupstream/sdk';
 import { type Result, err, ok } from './result.js';
 
 /** What the control plane reads from a node. */
@@ -16,6 +26,10 @@ export interface NodeLabels {
     readonly default: boolean;
     readonly description: string | undefined;
     readonly createdAt: string;
+    /** It carries the quorum-only taint with the effect NoSchedule. */
+    readonly quorumOnly: boolean;
+    /** Its Ready condition is True. */
+    readonly ready: boolean;
 }
 
 export interface Sites {
@@ -25,6 +39,10 @@ export interface Sites {
     readonly default: Site | undefined;
     /** The Site of each compute node. */
     readonly nodes: ReadonlyMap<string, Site>;
+    /** Every node as it was read, compute or not. */
+    readonly all: readonly NodeLabels[];
+    /** When the nodes were read, in ms since the epoch; a failed read keeps the last time. */
+    readonly readAt: number;
 }
 
 const byId = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -35,7 +53,7 @@ const byId = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
  * first by id among them, or among all, so there always is one. A Site's
  * description is its oldest node's.
  */
-export function sitesOf(nodes: readonly NodeLabels[]): Sites {
+export function sitesOf(nodes: readonly NodeLabels[], readAt = 0): Sites {
     const compute = nodes.filter((node): node is NodeLabels & { site: string } => node.compute && node.site !== undefined && node.site !== '');
     const ids = [...new Set(compute.map((node) => node.site))].sort(byId);
     const labelled = ids.filter((id) => compute.some((node) => node.site === id && node.default));
@@ -46,6 +64,8 @@ export function sitesOf(nodes: readonly NodeLabels[]): Sites {
         list: ids.map((id) => ({ id, description: description(id), default: id === defaultSite })),
         default: defaultSite,
         nodes: new Map(compute.map((node) => [node.name, node.site])),
+        all: nodes,
+        readAt,
     };
 }
 
@@ -78,7 +98,8 @@ export function siteReader(
             cached = { at: now(), sites: cached.sites };
             return ok(cached.sites);
         }
-        cached = { at: now(), sites: sitesOf(nodes.value) };
+        const at = now();
+        cached = { at, sites: sitesOf(nodes.value, at) };
         return ok(cached.sites);
     };
     return () => {
@@ -101,4 +122,202 @@ export function chooseSite(sites: Sites, wanted: string | undefined): Result<Sit
         return sites.default === undefined ? err({ kind: 'none' }) : ok(sites.default);
     }
     return sites.list.some((site) => site.id === wanted) ? ok(wanted) : err({ kind: 'unknown', site: wanted, sites: sites.list.map((site) => site.id) });
+}
+
+const QUORUM_TAINT = `${QUORUM_ONLY_TAINT}=true:NoSchedule`;
+
+/**
+ * What is wrong with the nodes' Site labels: the rules of the install's
+ * `check_sites` (infra/dev-cluster/lib.sh), checked again while the cluster
+ * runs (ADR-0008), each with the command that fixes it. Every node has a
+ * Site; a node is either labelled compute or tainted quorum-only, never
+ * both; the nodes of a Site agree on the compute and the default label;
+ * exactly one Site is the default, a compute one. With more than one node
+ * in a Site (a single-node install has exactly one), at least two compute
+ * Sites, for a Database's standby, and three Sites, for etcd's and
+ * Garage's quorum.
+ */
+export function siteProblems(nodes: readonly NodeLabels[]): SiteProblem[] {
+    const siteOf = (node: NodeLabels) => (node.site === undefined || node.site === '' ? undefined : node.site);
+    const problem = (kind: SiteProblem['kind'], node: string | null, site: string | null, message: string, fix: string): SiteProblem => ({
+        kind,
+        node,
+        site,
+        message,
+        fix,
+    });
+    const byNode = [...nodes]
+        .sort((a, b) => byId(a.name, b.name))
+        .flatMap((node): SiteProblem[] => {
+            const site = siteOf(node) ?? null;
+            return [
+                ...(site === null
+                    ? [problem('node-without-site', node.name, null, `Node ${node.name} has no Site.`, `kubectl label node ${node.name} ${ZONE_LABEL}=<Site id>`)]
+                    : []),
+                ...(!node.compute && !node.quorumOnly
+                    ? [
+                          problem(
+                              'node-neither-compute-nor-quorum',
+                              node.name,
+                              site,
+                              `Node ${node.name} is neither labelled compute nor tainted quorum-only, so Databases, Services and Jobs never run there while other pods may.`,
+                              `kubectl label node ${node.name} ${COMPUTE_SITE_LABEL}=true, or kubectl taint node ${node.name} ${QUORUM_TAINT}`,
+                          ),
+                      ]
+                    : []),
+                ...(node.compute && node.quorumOnly
+                    ? [
+                          problem(
+                              'node-compute-and-quorum',
+                              node.name,
+                              site,
+                              `Node ${node.name} is labelled compute but tainted quorum-only, so nothing of a compute Site runs there.`,
+                              `kubectl taint node ${node.name} ${QUORUM_ONLY_TAINT}-, or kubectl label node ${node.name} ${COMPUTE_SITE_LABEL}-`,
+                          ),
+                      ]
+                    : []),
+            ];
+        });
+
+    const zoned = nodes.flatMap((node) => {
+        const site = siteOf(node);
+        return site === undefined ? [] : [{ ...node, site }];
+    });
+    const ids = [...new Set(zoned.map((node) => node.site))].sort(byId);
+    const ofSite = (id: string) => zoned.filter((node) => node.site === id);
+    const compute = ids.filter((id) => ofSite(id).some((node) => node.compute));
+    const defaults = ids.filter((id) => ofSite(id).some((node) => node.default));
+    const bySite = ids.flatMap((id): SiteProblem[] => {
+        const members = ofSite(id);
+        const mixed = (has: (node: NodeLabels) => boolean) => members.some(has) && !members.every(has);
+        return [
+            ...(mixed((node) => node.compute)
+                ? [
+                      problem(
+                          'site-mixed-compute',
+                          null,
+                          id,
+                          `Only some nodes of Site ${id} are labelled compute.`,
+                          `kubectl label nodes -l ${ZONE_LABEL}=${id} ${COMPUTE_SITE_LABEL}=true, or ${COMPUTE_SITE_LABEL}- on all of them`,
+                      ),
+                  ]
+                : []),
+            ...(mixed((node) => node.default)
+                ? [
+                      problem(
+                          'site-mixed-default',
+                          null,
+                          id,
+                          `Only some nodes of Site ${id} are labelled the default Site.`,
+                          `kubectl label nodes -l ${ZONE_LABEL}=${id} ${DEFAULT_SITE_LABEL}=true, or ${DEFAULT_SITE_LABEL}- on all of them`,
+                      ),
+                  ]
+                : []),
+            ...(defaults.includes(id) && !compute.includes(id)
+                ? [
+                      problem(
+                          'default-site-not-compute',
+                          null,
+                          id,
+                          `The default Site ${id} is no compute Site.`,
+                          `kubectl label nodes -l ${ZONE_LABEL}=${id} ${DEFAULT_SITE_LABEL}-, then kubectl label nodes -l ${ZONE_LABEL}=<compute Site> ${DEFAULT_SITE_LABEL}=true`,
+                      ),
+                  ]
+                : []),
+        ];
+    });
+
+    const cluster: SiteProblem[] = [
+        ...(defaults.length === 0
+            ? [
+                  problem(
+                      'default-site-missing',
+                      null,
+                      null,
+                      'No Site is labelled the default; what is created without a Home site goes to the first compute Site by id.',
+                      `kubectl label nodes -l ${ZONE_LABEL}=${compute[0] ?? '<compute Site>'} ${DEFAULT_SITE_LABEL}=true`,
+                  ),
+              ]
+            : []),
+        ...(defaults.length > 1
+            ? [
+                  problem(
+                      'default-site-not-unique',
+                      null,
+                      null,
+                      `${defaults.length} Sites are labelled the default (${defaults.join(', ')}); the first by id is used.`,
+                      `kubectl label nodes -l ${ZONE_LABEL}=${defaults[defaults.length - 1]} ${DEFAULT_SITE_LABEL}- (keep one)`,
+                  ),
+              ]
+            : []),
+        ...(zoned.length > 1 && compute.length < 2
+            ? [
+                  problem(
+                      'compute-sites-below-two',
+                      null,
+                      null,
+                      `There ${compute.length === 1 ? 'is one compute Site' : 'are no compute Sites'}; a Database's standby needs a second one.`,
+                      `kubectl label nodes -l ${ZONE_LABEL}=<Site> ${COMPUTE_SITE_LABEL}=true, and kubectl taint node <name> ${QUORUM_ONLY_TAINT}- on each of its nodes that has the taint`,
+                  ),
+              ]
+            : []),
+        ...(zoned.length > 1 && ids.length < 3
+            ? [
+                  problem(
+                      'sites-below-three',
+                      null,
+                      null,
+                      `The nodes are in ${ids.length} Site${ids.length === 1 ? '' : 's'}; etcd's and Garage's quorum needs three.`,
+                      'join a node of another Site',
+                  ),
+              ]
+            : []),
+    ];
+    return [...byNode, ...bySite, ...cluster];
+}
+
+/** Every node, by Site (those without one first) and name, and what is wrong with the Site labels. */
+export function nodesReport(nodes: readonly NodeLabels[]): NodesReport {
+    const info = (node: NodeLabels): NodeInfo => ({
+        name: node.name,
+        site: node.site === undefined || node.site === '' ? null : node.site,
+        compute: node.compute,
+        default: node.default,
+        quorumOnly: node.quorumOnly,
+        description: node.description === undefined || node.description.trim() === '' ? null : node.description.trim(),
+        ready: node.ready,
+        createdAt: node.createdAt,
+    });
+    return {
+        nodes: nodes.map(info).sort((a, b) => byId(a.site ?? '', b.site ?? '') || byId(a.name, b.name)),
+        problems: siteProblems(nodes),
+    };
+}
+
+const labelValue = (value: string) => value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('\n', '\\n');
+
+/**
+ * The Site checks for Prometheus (text format 0.0.4), which the alerts of
+ * infra/monitoring/rules.yaml read (ADR-0008): one series per problem while
+ * it lasts, how many nodes were read and when. Without a node list nothing
+ * but the help; with an old one, `SiteChecksStale` fires on its time.
+ */
+export function siteMetrics(sites: Pick<Sites, 'all' | 'readAt'> | undefined): string {
+    const nodes = sites?.all;
+    const problems = nodes === undefined ? [] : siteProblems(nodes);
+    return [
+        '# HELP openupstream_site_problem A problem with the nodes\' Site labels (ADR-0008), 1 while it lasts.',
+        '# TYPE openupstream_site_problem gauge',
+        ...problems.map(
+            (problem) =>
+                `openupstream_site_problem{problem="${problem.kind}",node="${labelValue(problem.node ?? '')}",site="${labelValue(problem.site ?? '')}"} 1`,
+        ),
+        '# HELP openupstream_site_nodes The nodes the control plane read for the Site checks.',
+        '# TYPE openupstream_site_nodes gauge',
+        ...(nodes === undefined ? [] : [`openupstream_site_nodes ${nodes.length}`]),
+        '# HELP openupstream_site_nodes_read_timestamp_seconds When the control plane last read the nodes.',
+        '# TYPE openupstream_site_nodes_read_timestamp_seconds gauge',
+        ...(sites === undefined ? [] : [`openupstream_site_nodes_read_timestamp_seconds ${sites.readAt / 1000}`]),
+        '',
+    ].join('\n');
 }

@@ -11,12 +11,12 @@
 #
 #   PREFIX-hetzner-fsn1  compute Site, the default Site
 #   PREFIX-ovh-lim       compute Site
-#   PREFIX-netcup-nbg    third Site, tainted openupstream.io/third-site
+#   PREFIX-netcup-nbg    no compute Site, tainted openupstream.io/quorum-only
 #
 # The node setup is the only place that labels the nodes (ADR-0007): the
 # compute nodes join with openupstream.io/compute-site=true (the first also
 # openupstream.io/default-site=true), the third with the taint
-# openupstream.io/third-site=true:NoSchedule, and every node without a
+# openupstream.io/quorum-only=true:NoSchedule, and every node without a
 # description gets one (openupstream.io/site-description) once it has
 # joined. install-multi-node.sh only checks them. k3s sets labels only when
 # a node first registers: a node that already runs k3s keeps its own.
@@ -46,8 +46,8 @@ BRIDGE=${BRIDGE:-br0}
 # 28: 10 + 10 + 4 GiB, leaving about 4 GiB for the host.
 COMPUTE_CPUS=${COMPUTE_CPUS:-6}
 COMPUTE_MEMORY=${COMPUTE_MEMORY:-10GiB}
-THIRD_CPUS=${THIRD_CPUS:-2}
-THIRD_MEMORY=${THIRD_MEMORY:-4GiB}
+QUORUM_CPUS=${QUORUM_CPUS:-2}
+QUORUM_MEMORY=${QUORUM_MEMORY:-4GiB}
 ROOT_SIZE=${ROOT_SIZE:-60GiB}
 VOLUME_SIZE=${VOLUME_SIZE:-40GiB}
 
@@ -63,7 +63,7 @@ for i in 0 1 2; do
   vm=$(instance "$site")
   if ! incus info "$vm" >/dev/null 2>&1; then
     cpus=$COMPUTE_CPUS memory=$COMPUTE_MEMORY
-    [[ $site == "$THIRD_SITE" ]] && cpus=$THIRD_CPUS memory=$THIRD_MEMORY
+    [[ $site == "$QUORUM_SITE" ]] && cpus=$QUORUM_CPUS memory=$QUORUM_MEMORY
     echo "creating $vm ($cpus CPUs, $memory)"
     incus init "$IMAGE" "$vm" --vm --storage "$POOL" \
       -c limits.cpu="$cpus" -c limits.memory="$memory" \
@@ -77,7 +77,7 @@ for i in 0 1 2; do
   devices=$(incus config device list "$vm")
   grep -qx eth0 <<<"$devices" ||
     incus config device add "$vm" eth0 nic nictype=bridged parent="$BRIDGE" >/dev/null
-  if [[ $site != "$THIRD_SITE" ]]; then
+  if [[ $site != "$QUORUM_SITE" ]]; then
     volume=$(volume_name "$site")
     incus storage volume show "$R$POOL" "$volume" >/dev/null 2>&1 ||
       incus storage volume create "$R$POOL" "$volume" --type=block size="$VOLUME_SIZE" >/dev/null
@@ -162,7 +162,7 @@ FIRST=${IPS[0]}
 COMPUTE="--node-label openupstream.io/compute-site=true --node-label openupstream.io/gvisor=true"
 install_k3s 0 --cluster-init $COMPUTE --node-label openupstream.io/default-site=true
 install_k3s 1 --server "https://$FIRST:6443" $COMPUTE
-install_k3s 2 --server "https://$FIRST:6443" --node-taint openupstream.io/third-site=true:NoSchedule
+install_k3s 2 --server "https://$FIRST:6443" --node-taint openupstream.io/quorum-only=true:NoSchedule
 
 incus exec "$(instance "${SITES[0]}")" -- cat /etc/rancher/k3s/k3s.yaml |
   sed "s/127.0.0.1/$FIRST/; s/: default$/: $PREFIX/" >"$STATE/kubeconfig"

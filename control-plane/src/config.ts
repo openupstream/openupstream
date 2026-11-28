@@ -13,6 +13,8 @@ export interface Config {
     readonly databaseUrl: string;
     readonly port: number;
     readonly internalPort: number;
+    /** Where Prometheus reads the Site checks (src/metrics.ts). */
+    readonly metricsPort: number;
     readonly allowedCallers: ReadonlySet<string>;
     /** ServiceAccounts that may read Accounts and place or lift Holds: the billing service. None by default. */
     readonly billingCallers: ReadonlySet<string>;
@@ -176,8 +178,9 @@ export function configFrom(env: Env): Result<Config, string[]> {
     }
     const publicPort = port(env['PORT'], 8080);
     const internalPort = port(env['INTERNAL_PORT'], 8081);
-    if (publicPort === undefined || internalPort === undefined) {
-        problems.push('PORT and INTERNAL_PORT must be port numbers');
+    const metricsPort = port(env['METRICS_PORT'], 8083);
+    if (publicPort === undefined || internalPort === undefined || metricsPort === undefined) {
+        problems.push('PORT, INTERNAL_PORT and METRICS_PORT must be port numbers');
     }
     const newAccountHolds = list(env['NEW_ACCOUNT_HOLDS']);
     if (!newAccountHolds.every((reason) => DNS_LABEL.test(reason))) {
@@ -197,6 +200,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
         retention === undefined ||
         publicPort === undefined ||
         internalPort === undefined ||
+        metricsPort === undefined ||
         kek === undefined ||
         !kek.ok
     ) {
@@ -206,6 +210,7 @@ export function configFrom(env: Env): Result<Config, string[]> {
         databaseUrl,
         port: publicPort,
         internalPort,
+        metricsPort,
         allowedCallers: new Set(list(env['ALLOWED_CALLERS'] ?? DEFAULT_ALLOWED_CALLERS.join(','))),
         billingCallers: new Set(list(env['BILLING_CALLERS'])),
         routesCallers: new Set(list(env['ROUTES_CALLERS'] ?? DEFAULT_ROUTES_CALLERS.join(','))),

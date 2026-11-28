@@ -2,6 +2,7 @@
 
 import type { MadauthUser } from '@madauth/web';
 import type { ReactNode } from 'react';
+import { isAdmin } from '../lib/nodes';
 import { type User, manageApiKeys, signIn, signOut, useUser } from '../lib/session';
 
 function Header({ user }: { readonly user: User }) {
@@ -12,6 +13,7 @@ function Header({ user }: { readonly user: User }) {
             </a>
             <nav>
                 <a href="/cli">CLI</a>
+                {user != null && isAdmin(user.claims) && <a href="/nodes">Sites &amp; nodes</a>}
                 {user != null && (
                     <>
                         <span>{user.email ?? user.name ?? user.id}</span>

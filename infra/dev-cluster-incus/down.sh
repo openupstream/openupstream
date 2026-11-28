@@ -32,7 +32,7 @@ for site in "${SITES[@]}"; do
   incus delete --force "$vm"
 done
 for site in "${SITES[@]}"; do
-  [[ $site == "$THIRD_SITE" ]] && continue
+  [[ $site == "$QUORUM_SITE" ]] && continue
   volume=$(volume_name "$site")
   incus storage volume show "$R$POOL" "$volume" >/dev/null 2>&1 || continue
   echo "deleting volume $volume"

@@ -93,14 +93,17 @@ The Sites are what the nodes say
 places. Each node carries its Site's id as `topology.kubernetes.io/zone`;
 the nodes of a compute Site carry `openupstream.io/compute-site=true`, those
 of the default Home site also `openupstream.io/default-site=true`, every
-other node the taint `openupstream.io/third-site=true:NoSchedule`; the
+other node the taint `openupstream.io/quorum-only=true:NoSchedule`; the
 annotation `openupstream.io/site-description` is shown next to the id. Only
 the node setup scripts below set them: the labels and the taint as k3s
 `--node-label`/`--node-taint` flags when a node joins, the description with
 `kubectl annotate` right after. The install only checks them (at least two
 compute Sites and three Sites, exactly one default Site) and names the
-`kubectl` command for each problem; the alerts `SiteNodeWithoutRole` and
-`DefaultSiteNotOne` catch drift while the cluster runs. The
+`kubectl` command for each problem. While the cluster runs, the control
+plane checks the same rules: the dashboard's "Sites & nodes" page (for
+madAuth's admins) marks every node that needs attention with the command
+that fixes it, and an alert per rule fires after 10 minutes (decision
+153). The
 [infra/dev-cluster](../infra/dev-cluster/README.md#sites) README has the
 details and how to move the default Site. A cluster set up before needs
 the labels once:

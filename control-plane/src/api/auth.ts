@@ -33,7 +33,23 @@ export interface Identity {
     readonly scopes: readonly string[] | undefined;
     /** madAuth's id of the API key, the same for the key's life; only for an API key. */
     readonly apiKeyId?: string;
+    /**
+     * The roles madAuth's admins gave the user (its claims' `roles`), as the
+     * signed token states them: a session carries them, an access token of
+     * `oup` only if madAuth put claims into it; none for an API key.
+     */
+    readonly roles?: readonly string[];
 }
+
+/** madAuth's role for its admins, who are also the installation's (ADR-0008). */
+export const ADMIN_ROLE = 'admin';
+
+/** The roles in a token's madAuth claims (`{ claims: { roles: [...] } }`); empty without any. */
+export const rolesOf = (payload: Record<string, unknown>): string[] => {
+    const claims = payload['claims'];
+    const roles = typeof claims === 'object' && claims !== null ? (claims as Record<string, unknown>)['roles'] : undefined;
+    return Array.isArray(roles) ? roles.filter((role): role is string => typeof role === 'string') : [];
+};
 
 /** An Account token (decision 144): it belongs to one Account, with the developer role or only grants. */
 export interface AccountTokenIdentity {
@@ -99,6 +115,7 @@ function jwtVerifier(keys: JWTVerifyGetKey, options: Parameters<typeof jwtVerify
                           subject: payload.sub,
                           email: typeof payload['email'] === 'string' ? payload['email'] : undefined,
                           scopes: undefined,
+                          roles: rolesOf(payload),
                       })
                     : err({ kind: 'invalid', reason: 'token has no subject' } as const),
             (error: unknown) => err(sessionError(error)),

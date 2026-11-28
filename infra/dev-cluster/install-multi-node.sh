@@ -10,7 +10,7 @@
 # script never changes a label. It refuses, before recording anything, a
 # node without a Site, fewer than two compute Sites or three Sites, a
 # default Site that is not exactly one compute Site, or a taint
-# openupstream.io/third-site=true:NoSchedule missing outside the compute
+# openupstream.io/quorum-only=true:NoSchedule missing outside the compute
 # Sites or present inside: then Garage's three copies, etcd's quorum and
 # the Databases' standbys have nowhere to go. Each refusal names the
 # kubectl command that fixes it. For one node, use install-single-node.sh.

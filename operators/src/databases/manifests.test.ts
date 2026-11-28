@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Database, Project, Site } from '@openupstream/sdk';
-import { COMPUTE_SITE_LABEL, LABELS, THIRD_SITE_TAINT, ZONE_LABEL } from '../kubernetes.js';
+import { COMPUTE_SITE_LABEL, LABELS, QUORUM_ONLY_TAINT, ZONE_LABEL } from '../kubernetes.js';
 import {
     BACKUP_CREDENTIAL_KEYS,
     BACKUP_ENDPOINT,
@@ -116,18 +116,18 @@ test('instances and poolers may only run in the compute Sites', () => {
     assert.deepEqual(admittedSites(poolerRequired), ['home-a', 'home-b', 'home-c']);
 });
 
-test("nothing tolerates the third Site's taint", () => {
+test("nothing tolerates the quorum-only taint", () => {
     const { cluster, pooler } = manifestsFor();
     const tolerations: Toleration[] = [
         ...(cluster.spec.affinity?.tolerations ?? []),
         ...(pooler.spec.template?.spec?.tolerations ?? []),
     ];
     assert.equal(
-        tolerations.some((t) => tolerates(t, THIRD_SITE_TAINT)),
+        tolerations.some((t) => tolerates(t, QUORUM_ONLY_TAINT)),
         false,
     );
     // The check itself: a blanket toleration would have been caught.
-    assert.equal(tolerates({ operator: 'Exists' }, THIRD_SITE_TAINT), true);
+    assert.equal(tolerates({ operator: 'Exists' }, QUORUM_ONLY_TAINT), true);
 });
 
 test('memory is reserved at the configured size and buffers scale with it', () => {

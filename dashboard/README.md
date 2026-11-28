@@ -15,6 +15,11 @@ What it does now:
   (decision 139) sees its Projects without create and delete, and a
   Project's page with only the Databases their grants name, each with its
   level and the `oup pg proxy` command to reach it
+- for madAuth's admins (role `admin`), "Sites & nodes" (`/nodes`, decision
+  153): every node with its Site, role (compute or quorum-only), default
+  label and state, and what is wrong with the Site labels, each problem
+  with the `kubectl` command that fixes it; asked again every 30 seconds
+  while it is in front
 - a Project's page (`/project?id=<id>`), asked again every 10 seconds
   while it is in front:
   - Databases: list with state, create (name, memory, storage, Site),
