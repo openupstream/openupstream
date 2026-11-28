@@ -9,11 +9,18 @@
 #    and Postgres never starts (decision 113);
 # 2. gVisor (infra/gvisor/install.sh), before k3s first starts;
 # 3. k3s as a single server with the same settings as on the Hetzner dev
-#    cluster, the node labelled as the compute Site hetzner-fsn1 and for
-#    gVisor;
+#    cluster, the node labelled with its Site SITE (default hetzner-fsn1)
+#    as the compute and default Site (ADR-0007), and for gVisor;
 # 4. the RuntimeClass gvisor, and the kubeconfig in .state/kubeconfig.
 #
 #   ./k3s-single-node.sh root@192.168.1.50
+#
+# SITE is the node's Site id (default hetzner-fsn1), e.g. SITE=home. It is
+# set when k3s first registers the node; the platform's data names it as
+# the Home site, so it stays. SITE_DESCRIPTION, if set, becomes the node's
+# openupstream.io/site-description, shown next to the id (on every run).
+# This script is the only place that labels the node (ADR-0007);
+# install-single-node.sh only checks it.
 #
 # Then install the platform with install-single-node.sh. Running it again
 # on a machine that already has k3s installs nothing and only fetches the
@@ -42,6 +49,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 source ./lib.sh
 TARGET=${1:?usage: ./k3s-single-node.sh <user@host>}
+# The Site id; k3s sets node labels only when it registers the node.
+SITE=${SITE:-hetzner-fsn1}
+valid_site_id "$SITE" ||
+  { echo "SITE must be a label value: letters, digits, '-', '_' and '.', at most 63: $SITE" >&2; exit 1; }
 HOST=${HOST:-$(ssh -G "$TARGET" | awk '$1 == "hostname" {print $2}')}
 STATE=${STATE:-.state}
 K3S_VERSION=${K3S_VERSION:-v1.36.5+k3s1}
@@ -79,7 +90,9 @@ else
   # (no other node to move pods to); the rest as in up.sh.
   echo "installing k3s on $HOST"
   "${SSH[@]}" "curl -sfL https://get.k3s.io | $SUDO env INSTALL_K3S_VERSION='$K3S_VERSION' sh -s - server \
-  --node-label topology.kubernetes.io/zone=$SINGLE_NODE_SITE \
+  --node-label $ZONE_LABEL=$SITE \
+  --node-label $COMPUTE_LABEL=true \
+  --node-label $DEFAULT_LABEL=true \
   --node-label openupstream.io/gvisor=true \
   --tls-san $HOST \
   ${NODE_ADDRESS:+--node-external-ip $NODE_ADDRESS} \
@@ -93,5 +106,9 @@ chmod 600 "$STATE/kubeconfig"
 
 KUBECONFIG=$STATE/kubeconfig kubectl wait --for=condition=Ready node --all --timeout=5m
 KUBECONFIG=$STATE/kubeconfig kubectl apply -f ../gvisor/runtimeclass.yaml >/dev/null
+if [[ -n ${SITE_DESCRIPTION:-} ]]; then
+  KUBECONFIG=$STATE/kubeconfig kubectl annotate node --all --overwrite \
+    openupstream.io/site-description="$SITE_DESCRIPTION" >/dev/null
+fi
 echo "export KUBECONFIG=$PWD/$STATE/kubeconfig"
 echo "then: PLATFORM_DOMAIN=… CUSTOMER_DOMAIN=… ./install-single-node.sh"

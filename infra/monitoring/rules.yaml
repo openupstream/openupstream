@@ -18,7 +18,8 @@ spec:
             summary: Postgres instance {{ $labels.pod }} in {{ $labels.namespace }} does not answer
             description: Its metrics have not been scraped for 5 minutes; the Database may run on one instance only.
         - alert: DatabaseMissingStandby
-          # Every Database runs one instance per compute Site (decision 26).
+          # Every Database runs a primary and a standby, in two compute
+          # Sites (decision 26, ADR-0007).
           # monitoring.sh fills in DATABASE_INSTANCES: 2, or 1 on a
           # single-node dev cluster, where this never fires (decision 112).
           expr: count by (namespace, cluster) (up{job="monitoring/cnpg-instances"} == 1) < DATABASE_INSTANCES
@@ -127,3 +128,34 @@ spec:
           annotations:
             summary: Traefik pod {{ $labels.pod }} does not answer
             description: Its Site serves no traffic until the DNS health check drops it.
+    - name: sites
+      # The Sites are what the nodes' labels say, set when a node joins
+      # (ADR-0007); the install checks them once, these while the cluster
+      # runs, so a node added or relabelled later is caught too.
+      rules:
+        - alert: SiteNodeWithoutRole
+          # A node in a Site but neither a compute node nor tainted as a
+          # node of another Site: customers' pods never go there, and the
+          # platform's pods that do not tolerate the taint may.
+          expr: |
+            kube_node_labels{label_topology_kubernetes_io_zone!=""}
+              unless on (node) kube_node_labels{label_openupstream_io_compute_site="true"}
+              unless on (node) kube_node_spec_taint{key="openupstream.io/third-site", effect="NoSchedule"}
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: Node {{ $labels.node }} in Site {{ $labels.label_topology_kubernetes_io_zone }} has neither the compute label nor the third-site taint
+            description: "Label it (kubectl label node {{ $labels.node }} openupstream.io/compute-site=true) or taint it (kubectl taint node {{ $labels.node }} openupstream.io/third-site=true:NoSchedule)."
+        - alert: DefaultSiteNotOne
+          # Exactly one compute Site is the default Home site. Without one,
+          # the control plane takes the first compute Site by id; with
+          # several, the first of those.
+          expr: |
+            (count(count by (label_topology_kubernetes_io_zone) (
+              kube_node_labels{label_openupstream_io_compute_site="true", label_openupstream_io_default_site="true"}
+            )) or vector(0)) != 1
+          for: 10m
+          labels: {severity: warning}
+          annotations:
+            summary: "{{ $value }} compute Sites are labelled the default Site, not one"
+            description: New Databases, Services and Jobs without a Home site go to the first by id. Label the nodes of exactly one compute Site openupstream.io/default-site=true.

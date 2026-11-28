@@ -81,6 +81,6 @@ alloy:
 
 controller:
   type: daemonset
-  # Every node: Garage runs on the third Site too.
+  # Every node: Garage runs on the non-compute Sites too.
   tolerations:
     - {key: openupstream.io/third-site, operator: Exists, effect: NoSchedule}

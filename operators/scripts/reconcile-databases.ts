@@ -9,14 +9,17 @@
  *
  * rows.json is `[{ "project": Project, "database": Database }]`; config.json
  * is a DatabaseConfig. The backup credentials are read from the Secret
- * `openupstream-system/<config.backup.credentialsSecret>`.
+ * `openupstream-system/<config.backup.credentialsSecret>`. With --platform
+ * the Databases' Home site is the default Site, read from the nodes' labels
+ * (ADR-0007), which the install sets before this runs.
  */
 import { readFileSync } from 'node:fs';
-import { KubeConfig } from '@kubernetes/client-node';
-import { PLATFORM_ROWS } from '@openupstream/sdk';
+import { KubeConfig, KubernetesObjectApi } from '@kubernetes/client-node';
+import { COMPUTE_SITE_LABEL, DEFAULT_SITE_LABEL, platformRows } from '@openupstream/sdk';
 import { databaseConfigProblem, type DatabaseConfig } from '../src/databases/manifests.js';
 import { type DatabaseRow, reconcileDatabases } from '../src/databases/reconcile.js';
 import { kubeFrom } from '../src/kube.js';
+import { defaultSiteOf } from '../src/kubernetes.js';
 
 const args = process.argv.slice(2);
 const platform = args.includes('--platform');
@@ -26,10 +29,6 @@ if ((!platform && rowsPath === undefined) || configPath === undefined) {
     console.error('usage: reconcile-databases.ts (<rows.json> | --platform) <config.json> [--dry-run]');
     process.exit(2);
 }
-const rows: DatabaseRow[] =
-    rowsPath === undefined
-        ? [...PLATFORM_ROWS]
-        : JSON.parse(readFileSync(rowsPath, 'utf8'));
 const config: DatabaseConfig = JSON.parse(readFileSync(configPath, 'utf8'));
 const problem = databaseConfigProblem(config);
 if (problem !== undefined) {
@@ -39,6 +38,19 @@ if (problem !== undefined) {
 
 const kubeConfig = new KubeConfig();
 kubeConfig.loadFromDefault();
+
+/** The default Site the nodes' labels name; undefined when none does. */
+const defaultSite = async (): Promise<string | undefined> => {
+    const nodes = await KubernetesObjectApi.makeApiClient(kubeConfig).list('v1', 'Node');
+    return defaultSiteOf(nodes.items.map((node) => ({ ...(node.metadata?.labels === undefined ? {} : { labels: node.metadata.labels }) })));
+};
+
+const homeSite = platform ? await defaultSite() : undefined;
+if (platform && homeSite === undefined) {
+    console.error(`no node is labelled ${COMPUTE_SITE_LABEL}=true,${DEFAULT_SITE_LABEL}=true; label the nodes as their node setup does (docs/self-hosting.md)`);
+    process.exit(1);
+}
+const rows: DatabaseRow[] = homeSite !== undefined ? platformRows(homeSite) : JSON.parse(readFileSync(rowsPath ?? '', 'utf8'));
 
 const result = await reconcileDatabases(kubeFrom(kubeConfig), rows, config, {
     backupCredentials: { namespace: 'openupstream-system', name: config.backup.credentialsSecret },

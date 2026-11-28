@@ -53,6 +53,7 @@ const fakeKube = (failing: readonly string[] = [], missing: readonly string[] = 
         deleteJob: async () => ok('not-found'),
         listPods: async () => ok([]),
         nodeSite: async () => ok(undefined),
+        listNodes: async () => ok([]),
         podLog: async () => err('not in this test'),
         remove: async () => ok(undefined),
         applySecret: async (secret) => {
@@ -163,7 +164,7 @@ test('the version the Services roll on moves only once the values are written', 
 test("a pass writes each role's Secret of the Project's live Databases, as CloudNativePG reads it (decision 126)", async () => {
     const projectId = await createProject();
     const databases = await db.pool.query<{ id: string }>(
-        `insert into databases (project_id, name, memory_mb, storage_gb) values ($1, 'main', 256, 1), ($1, 'gone', 256, 1) returning id`,
+        `insert into databases (project_id, name, home_site, memory_mb, storage_gb) values ($1, 'main', 'hetzner-fsn1', 256, 1), ($1, 'gone', 'hetzner-fsn1', 256, 1) returning id`,
         [projectId],
     );
     const [live, gone] = databases.rows.map((row) => ({ id: row.id, projectId })) as [{ id: string; projectId: string }, { id: string; projectId: string }];

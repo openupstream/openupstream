@@ -7,11 +7,11 @@ section 10, has what it needs outside the cluster.
 
 | File | |
 | --- | --- |
-| `kube-prometheus-stack-values.yaml` | Prometheus and Alertmanager once per compute Site, Grafana, node-exporter on all three Sites, kube-state-metrics; Alertmanager's routes: e-mail through SES, the `Watchdog` to healthchecks.io |
+| `kube-prometheus-stack-values.yaml` | Prometheus and Alertmanager twice, in two different compute Sites, Grafana, node-exporter on every node, kube-state-metrics; Alertmanager's routes: e-mail through SES, the `Watchdog` to healthchecks.io |
 | `scrape.yaml` | PodMonitors for every Database's instances and Poolers, Garage, Traefik and cert-manager |
 | `scrape.yaml` (`cpu-agent`) | the CPU agent's per-pod CPU totals, which metering reads (decision 115) |
-| `rules.yaml` | the platform's alerts beyond the stack's defaults: Databases (and their volumes filling or failing to grow), Garage, certificates, Traefik; `monitoring.sh` fills in `DATABASE_INSTANCES` (2, or 1 on a single-node dev cluster) |
-| `loki-values.yaml` | Loki single-binary once per Site, the third Site included (replication factor 3; once with factor 1 on a single-node dev cluster), its data in the Garage bucket `openupstream.platform-logs`, kept 14 days |
+| `rules.yaml` | the platform's alerts beyond the stack's defaults: Databases (and their volumes filling or failing to grow), Garage, certificates, Traefik, and the nodes' Site labels (ADR-0007; kube-state-metrics exports them, allowed in `kube-prometheus-stack-values.yaml`); `monitoring.sh` fills in `DATABASE_INSTANCES` (2, or 1 on a single-node dev cluster) |
+| `loki-values.yaml` | Loki single-binary three times in three different Sites, a non-compute Site included (replication factor 3; once with factor 1 on a single-node dev cluster), its data in the Garage bucket `openupstream.platform-logs`, kept 14 days |
 | `alloy-values.yaml` | Alloy on every node, shipping the logs of the platform's namespaces only |
 | `ses-smtp-password.mjs` | derives the SES SMTP password from the send-only key, for Alertmanager |
 

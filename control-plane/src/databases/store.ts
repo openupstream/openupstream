@@ -76,16 +76,16 @@ export type CreateDatabaseError = { readonly kind: 'name-taken'; readonly name: 
 export async function createDatabase(
     pool: pg.Pool,
     projectId: string,
-    input: DatabaseInput,
+    input: DatabaseInput & { readonly homeSite: Site },
 ): Promise<Result<Database, CreateDatabaseError>> {
     const inserted = await unlessCodes<pg.QueryResult<DatabaseRow>, CreateDatabaseError>(
         pool.query<DatabaseRow>(
             `insert into databases (project_id, name, home_site, memory_mb, storage_gb, restore_source_id, restore_target_time, auto_grow, max_storage_gb)
-             values ($1, $2, coalesce($3, 'hetzner-fsn1'), $4, $5, $6, $7, coalesce($8, true), $9) returning ${COLUMNS}`,
+             values ($1, $2, $3, $4, $5, $6, $7, coalesce($8, true), $9) returning ${COLUMNS}`,
             [
                 projectId,
                 input.name,
-                input.homeSite ?? null,
+                input.homeSite,
                 input.memoryMb,
                 input.storageGb,
                 input.restoreFrom?.databaseId ?? null,

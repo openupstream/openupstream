@@ -154,7 +154,7 @@ describe('meteringPass', () => {
         accountId = (await tdb.pool.query<{ id: string }>(`insert into accounts (name) values ('Acme') returning id`)).rows[0]?.id ?? '';
         projectId = (await tdb.pool.query<{ id: string }>(`insert into projects (account_id, name) values ($1, 'shop') returning id`, [accountId])).rows[0]?.id ?? '';
         databaseId = (
-            await tdb.pool.query<{ id: string }>(`insert into databases (project_id, name, memory_mb, storage_gb, created_at) values ($1, 'main', 512, 4, '2026-11-01') returning id`, [projectId])
+            await tdb.pool.query<{ id: string }>(`insert into databases (project_id, name, home_site, memory_mb, storage_gb, created_at) values ($1, 'main', 'hetzner-fsn1', 512, 4, '2026-11-01') returning id`, [projectId])
         ).rows[0]?.id ?? '';
         const created = await storage.createBucket('shop-assets');
         assert.ok(created.ok);

@@ -11,6 +11,7 @@ import {
     INTERNAL_ROUTES_PATH,
     INTERNAL_SERVICES_PATH,
     type JobRow,
+    SITE_ID,
     type ServiceRow,
 } from '@openupstream/sdk';
 import { type Result, err, ok } from './result.js';
@@ -21,6 +22,8 @@ export type FetchRowsError =
     | { readonly kind: 'malformed'; readonly message: string };
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
+/** A Site id; which Sites exist is the nodes' (ADR-0007). */
+const isSite = (value: unknown): boolean => typeof value === 'string' && SITE_ID.test(value);
 
 /** fetch reports only "fetch failed"; the reason (ECONNREFUSED, ENOTFOUND, …) is its cause. */
 const describe = (error: unknown): string =>
@@ -93,7 +96,7 @@ const isServiceRow = (value: unknown): value is ServiceRow =>
     (value['service']['port'] === null || typeof value['service']['port'] === 'number') &&
     typeof value['pinnedImage'] === 'string' &&
     /@sha256:[0-9a-f]{64}$/.test(value['pinnedImage']) &&
-    (value['site'] === 'hetzner-fsn1' || value['site'] === 'ovh-lim') &&
+    isSite(value['site']) &&
     typeof value['secretsVersion'] === 'string';
 
 export const parseServiceRows = (body: unknown): Result<ServiceRow[], FetchRowsError> =>
@@ -123,7 +126,7 @@ const isJobRow = (value: unknown): value is JobRow =>
     (value['job']['timeZone'] === null || typeof value['job']['timeZone'] === 'string') &&
     typeof value['pinnedImage'] === 'string' &&
     /@sha256:[0-9a-f]{64}$/.test(value['pinnedImage']) &&
-    (value['site'] === 'hetzner-fsn1' || value['site'] === 'ovh-lim');
+    isSite(value['site']);
 
 export const parseJobRows = (body: unknown): Result<JobRow[], FetchRowsError> =>
     Array.isArray(body) && body.every(isJobRow)

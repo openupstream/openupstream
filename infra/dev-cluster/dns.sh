@@ -85,13 +85,14 @@ monitor() { # ip → monitor type
   esac
 }
 
-# Each compute node's Site and IPv4 address, ExternalIP before InternalIP.
-nodes=$(kubectl get nodes -l "topology.kubernetes.io/zone in ($(IFS=,; echo "${COMPUTE_SITES[*]}"))" -o json | jq -r '.items[] |
-  [.metadata.labels["topology.kubernetes.io/zone"],
+# Each compute node's (check_sites) Site and IPv4 address, ExternalIP
+# before InternalIP.
+nodes=$(kubectl get nodes -l "$COMPUTE_LABEL=true" -o json | jq -r --arg zone "$ZONE_LABEL" '.items[] |
+  [(.metadata.labels[$zone] // "-"),
    ([.status.addresses[] | select(.type == "ExternalIP" and (.address | test("^[0-9.]+$"))) | .address] +
     [.status.addresses[] | select(.type == "InternalIP" and (.address | test("^[0-9.]+$"))) | .address])[0] // empty] |
   select(length == 2) | join(" ")')
-[[ -n $nodes ]] || { echo "no compute node with an IPv4 address" >&2; exit 1; }
+[[ -n $nodes ]] || { echo "no compute node ($COMPUTE_LABEL=true) with an IPv4 address" >&2; exit 1; }
 
 # New records first, then the stale ones, so the names always resolve.
 IPS=()

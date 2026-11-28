@@ -38,10 +38,11 @@ import { migrate } from './db/migrate.js';
 import { tokenReviewAuthenticator } from './internal/auth.js';
 import { createInternalServer } from './internal/server.js';
 import { controlPlaneKube } from './kube.js';
-import { seedPlatform } from './platform.js';
+import { siteReader } from './sites.js';
+import { platformRowsMissing, seedPlatform } from './platform.js';
 import { type Message, sesClient, sesSend } from './mail.js';
 import { registryDeps } from './registry.js';
-import { ok } from './result.js';
+import { err, ok } from './result.js';
 import { listDomainRoutings } from './routes/store.js';
 import { secretsPass } from './secrets/render.js';
 import { listServiceRows } from './services/store.js';
@@ -118,16 +119,27 @@ async function main(): Promise<void> {
     // A failover or switchover of our Database ends idle connections; without
     // a listener the pool's 'error' event would end the process.
     pool.on('error', (error) => log({ msg: 'idle database connection lost', error: error.message }));
+    const kubeConfig = new KubeConfig();
+    kubeConfig.loadFromDefault();
+    const kube = controlPlaneKube(kubeConfig);
+    const sites = siteReader(() => kube.listNodes(), undefined, undefined, log);
     // A billing service needs its Database (ARCHITECTURE.md, decision 79).
-    await seedPlatform(pool, { billing: config.value.billingCallers.size > 0 });
+    const billing = config.value.billingCallers.size > 0;
+    // The platform's Databases are seeded in the default Site (ADR-0007). Only
+    // a missing row needs it: a cluster whose nodes are not labelled yet still
+    // starts, and its requests that need a Site answer 503 until they are.
+    if (await platformRowsMissing(pool, { billing })) {
+        const startSites = await sites();
+        if (!startSites.ok || startSites.value.default === undefined) {
+            log({ msg: 'cannot seed the platform Databases: no default Site', error: startSites.ok ? 'no node carries the compute label' : startSites.error });
+            process.exit(1);
+        }
+        await seedPlatform(pool, { billing, homeSite: startSites.value.default });
+    }
     const domains = await ensureDefaultDomains(pool, config.value.customerDomain);
     if (domains > 0) {
         log({ msg: 'default Domains created for existing Projects', domains });
     }
-
-    const kubeConfig = new KubeConfig();
-    kubeConfig.loadFromDefault();
-    const kube = controlPlaneKube(kubeConfig);
     const storage = garageStorage(config.value.garage);
 
     const internal = createInternalServer({
@@ -140,8 +152,14 @@ async function main(): Promise<void> {
         madauthCallers: config.value.madauthCallers,
         listDatabaseRows: () => listDatabaseRows(pool, config.value.customerDomain),
         listDomainRoutings: () => listDomainRoutings(pool),
-        listServiceRows: () => listServiceRows(pool),
-        listJobRows: () => listJobRows(pool),
+        listServiceRows: async () => {
+            const site = await sites();
+            return site.ok && site.value.default !== undefined ? ok(await listServiceRows(pool, site.value.default)) : err('cannot read the default Site');
+        },
+        listJobRows: async () => {
+            const site = await sites();
+            return site.ok && site.value.default !== undefined ? ok(await listJobRows(pool, site.value.default)) : err('cannot read the default Site');
+        },
         getAccount: (id) => getAccountRecord(pool, id),
         accountUsage: (accountId, month) => accountUsage(pool, accountId, month),
         placeHold: (accountId, reason) => placeHold(pool, accountId, reason),
@@ -169,6 +187,7 @@ async function main(): Promise<void> {
     const api = createApi({
         pool,
         kube,
+        sites,
         storage,
         kek: config.value.kek,
         registry: registryDeps(),

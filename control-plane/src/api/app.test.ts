@@ -44,6 +44,7 @@ import { err, ok } from '../result.js';
 import { cpuQuery, diskQuery, memoryQuery } from '../usage/live.js';
 import { type TestDatabase, createTestDatabase } from '../testing/postgres.js';
 import { fakeStorage } from '../testing/storage.js';
+import { type NodeLabels, sitesOf } from '../sites.js';
 import { createApi, tunnelProjectOf } from './app.js';
 import { type Authenticate, SESSION_TOKEN_TYPE, madauthAuthenticator, sessionVerifier } from './auth.js';
 
@@ -134,6 +135,13 @@ const nodeSites = new Map([
     ['node-fsn', 'hetzner-fsn1'],
     ['node-lim', 'ovh-lim'],
 ]);
+/** The nodes' Site labels (ADR-0007): both compute nodes, the first the default Site; `nodesDown` makes listing them fail. */
+const nodeLabels: NodeLabels[] = [
+    { name: 'node-fsn', site: 'hetzner-fsn1', compute: true, default: true, description: 'Falkenstein (Hetzner)', createdAt: '2026-10-01T00:00:00Z' },
+    { name: 'node-lim', site: 'ovh-lim', compute: true, default: false, description: undefined, createdAt: '2026-10-01T00:00:00Z' },
+    { name: 'node-nbg', site: 'netcup-nbg', compute: false, default: false, description: undefined, createdAt: '2026-10-01T00:00:00Z' },
+];
+let nodesDown = false;
 const volumeNodes = new Map<string, string[]>();
 /** What a new pod could still request per node, in bytes. */
 const nodeFree = new Map<string, NodeFree>();
@@ -185,6 +193,7 @@ const kube: ControlPlaneKube = {
     deleteJob: async (_namespace, name) => ok(runs.delete(name) ? 'deleted' : 'not-found'),
     listPods: async (namespace, selector) => (kubeDown ? err('connection refused') : ok(pods.get(`${namespace} ${selector}`) ?? [])),
     nodeSite: async (node) => ok(nodeSites.get(node) ?? 'hetzner-fsn1'),
+    listNodes: async () => (nodesDown ? err('connection refused') : ok([...nodeLabels])),
     podLog: async (_namespace, pod, container, options) => {
         const lines = podLogs.get(`${pod}/${container}`) ?? [];
         const tail = options.tailLines === undefined ? lines : lines.slice(-options.tailLines);
@@ -240,6 +249,8 @@ before(async () => {
         logStream: { pollMs: 20, maxMs: 2_000 },
         prometheus: (query) => prometheusAnswers(query),
         databaseVolumes: 'shared',
+        // Read on every request, so a test can change the nodes.
+        sites: async () => (nodesDown ? err('connection refused') : ok(sitesOf(nodeLabels))),
     };
     api = createApi(apiDeps);
     const accounts = await db.pool.query<{ id: string }>(`insert into accounts (name) values ('A'), ('B') returning id`);
@@ -1105,6 +1116,42 @@ describe('Databases', () => {
         assert.equal((await post({ name: 'lim', homeSite: 'ovh-lim', memoryMb: 256, storageGb: 1 })).status, 201);
     });
 
+    test('the Sites are the compute nodes\' zones; a Site is checked against them and the default follows its label', async () => {
+        const sites = await call('GET', '/v1/sites', 'alice');
+        assert.equal(sites.status, 200);
+        assert.deepEqual(await sites.json(), [
+            { id: 'hetzner-fsn1', description: 'Falkenstein (Hetzner)', default: true },
+            { id: 'ovh-lim', description: null, default: false },
+        ]);
+        const post = (body: object) => call('POST', `/v1/projects/${projectId}/databases`, 'alice', { memoryMb: 256, storageGb: 1, ...body });
+        const unknown = await post({ name: 'elsewhere', homeSite: 'home-a' });
+        assert.equal(unknown.status, 400);
+        assert.deepEqual(await unknown.json(), { error: 'invalid request', issues: [{ path: 'homeSite', message: 'one of hetzner-fsn1, ovh-lim' }] });
+        const [fsn, lim] = nodeLabels;
+        assert.ok(fsn !== undefined && lim !== undefined);
+        nodeLabels.splice(0, 2, { ...fsn, default: false }, { ...lim, default: true });
+        try {
+            const moved = await post({ name: 'moved' });
+            assert.equal(moved.status, 201);
+            const created = (await moved.json()) as DatabaseDetails;
+            assert.equal(created.homeSite, 'ovh-lim');
+            assert.equal((await call('DELETE', `/v1/projects/${projectId}/databases/${created.id}`, 'alice')).status, 202);
+        } finally {
+            nodeLabels.splice(0, 2, fsn, lim);
+        }
+    });
+
+    test('without the node list a Site cannot be checked: 503, nothing created', async () => {
+        nodesDown = true;
+        try {
+            assert.equal((await call('GET', '/v1/sites', 'alice')).status, 503);
+            assert.equal((await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name: 'blind', memoryMb: 256, storageGb: 1 })).status, 503);
+        } finally {
+            nodesDown = false;
+        }
+        assert.ok(!(await listDatabaseRows(db.pool)).some((row) => row.database.name === 'blind'));
+    });
+
     test('its state comes from the Cluster, unknown when Kubernetes cannot be asked', async () => {
         const state = async () =>
             ((await (await call('GET', `/v1/projects/${projectId}/databases/${database.id}`, 'alice')).json()) as DatabaseDetails).state;
@@ -1289,7 +1336,7 @@ describe('Databases', () => {
             404,
         );
         await assert.rejects(
-            db.pool.query(`insert into databases (project_id, name, memory_mb, storage_gb) values ($1, 'sneaky', 256, 1)`, [projectId]),
+            db.pool.query(`insert into databases (project_id, name, home_site, memory_mb, storage_gb) values ($1, 'sneaky', 'hetzner-fsn1', 256, 1)`, [projectId]),
             /is deleted/,
         );
         assert.equal((await call('POST', '/v1/projects', 'alice', { accountId: accountA, name: 'db-tests' })).status, 201);
@@ -1885,7 +1932,7 @@ describe('Services', () => {
 
     test("the state is read from the Deployment, and is deploying until it carries the row's current spec", async () => {
         const stateNow = async () => ((await (await call('GET', path(`/${service.id}`), 'alice')).json()) as ServiceDetails).state;
-        const row = (await listServiceRows(db.pool, projectId)).find((candidate) => candidate.service.id === service.id);
+        const row = (await listServiceRows(db.pool, 'hetzner-fsn1', projectId)).find((candidate) => candidate.service.id === service.id);
         assert.ok(row);
         const status = { replicas: 1, generation: 1, observedGeneration: 1, updatedReplicas: 1, availableReplicas: 1, specVersion: serviceSpecVersion(row) };
         deployments.set(`svc-${service.id}`, status);
@@ -2020,14 +2067,14 @@ describe('Services', () => {
     });
 
     test('the operators get the pinned image, the site and a version of the Secrets', async () => {
-        const rows = (await listServiceRows(db.pool)).filter((row: ServiceRow) => row.project.id === projectId);
+        const rows = (await listServiceRows(db.pool, 'hetzner-fsn1')).filter((row: ServiceRow) => row.project.id === projectId);
         const api = rows.find((row) => row.service.name === 'api');
         assert.equal(api?.pinnedImage, `ghcr.io/acme/api@${digest('5')}`);
         assert.equal(api?.site, 'hetzner-fsn1');
         const before = api?.secretsVersion;
         assert.equal((await call('PUT', `/v1/projects/${projectId}/secrets/TOKEN`, 'alice', { value: 'x' })).status, 201);
         // The version moves once the new values are in the cluster, which the API writes right after answering.
-        const versionNow = async () => (await listServiceRows(db.pool)).find((row) => row.service.id === service.id)?.secretsVersion;
+        const versionNow = async () => (await listServiceRows(db.pool, 'hetzner-fsn1')).find((row) => row.service.id === service.id)?.secretsVersion;
         for (let attempt = 0; attempt < 50 && (await versionNow()) === before; attempt++) {
             await new Promise((resolve) => setTimeout(resolve, 20));
         }
@@ -2036,16 +2083,17 @@ describe('Services', () => {
 
     test('a single replica runs where the Project\'s oldest Database is, unless homeSite says otherwise', async () => {
         assert.equal((await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name: 'main', homeSite: 'ovh-lim', memoryMb: 256, storageGb: 1 })).status, 201);
-        const site = async () => (await listServiceRows(db.pool)).find((row) => row.service.id === service.id)?.site;
+        const site = async () => (await listServiceRows(db.pool, 'hetzner-fsn1')).find((row) => row.service.id === service.id)?.site;
         assert.equal(await site(), 'ovh-lim');
         assert.equal((await call('PATCH', path(`/${service.id}`), 'alice', { homeSite: 'hetzner-fsn1' })).status, 200);
+        assert.equal((await call('PATCH', path(`/${service.id}`), 'alice', { homeSite: 'netcup-nbg' })).status, 400, 'not a compute Site');
         assert.equal(await site(), 'hetzner-fsn1');
     });
 
     test("the Service's row names the Project's live Databases, oldest first", async () => {
         const created = await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name: 'events-db', memoryMb: 256, storageGb: 1 });
         const second = (await created.json()) as { id: string };
-        const databases = async () => (await listServiceRows(db.pool)).find((row) => row.service.id === service.id)?.databases.map((d) => d.name);
+        const databases = async () => (await listServiceRows(db.pool, 'hetzner-fsn1')).find((row) => row.service.id === service.id)?.databases.map((d) => d.name);
         assert.deepEqual(await databases(), ['main', 'events-db']);
         assert.equal((await call('DELETE', `/v1/projects/${projectId}/databases/${second.id}`, 'alice')).status, 202);
         assert.deepEqual(await databases(), ['main']);
@@ -2091,7 +2139,7 @@ describe('Services', () => {
         assert.equal((await call('GET', path(`/${service.id}`), 'bob')).status, 404);
         assert.equal((await call('DELETE', path(`/${service.id}`), 'alice')).status, 202);
         assert.equal((await call('GET', path(`/${service.id}`), 'alice')).status, 404);
-        assert.ok(!(await listServiceRows(db.pool)).some((row) => row.service.id === service.id));
+        assert.ok(!(await listServiceRows(db.pool, 'hetzner-fsn1')).some((row) => row.service.id === service.id));
     });
 });
 
@@ -2127,7 +2175,7 @@ describe('Jobs', () => {
 
     test("ready once the CronJob carries the row's current spec, deploying while it carries an older one", async () => {
         const stateNow = async () => ((await (await call('GET', path(`/${job.id}`), 'alice')).json()) as JobDetails).state;
-        const row = (await listJobRows(db.pool, projectId)).find((candidate) => candidate.job.id === job.id);
+        const row = (await listJobRows(db.pool, 'hetzner-fsn1', projectId)).find((candidate) => candidate.job.id === job.id);
         assert.ok(row);
         cronJobs.set(`job-${job.id}`, { specVersion: jobSpecVersion(row), uid: 'u', jobTemplate: undefined });
         assert.equal(await stateNow(), 'ready');
@@ -2139,7 +2187,7 @@ describe('Jobs', () => {
     });
 
     test("a new Database changes the Job's spec, so its runs get its DATABASE_URL only once applied", async () => {
-        const rowNow = async () => (await listJobRows(db.pool, projectId)).find((candidate) => candidate.job.id === job.id);
+        const rowNow = async () => (await listJobRows(db.pool, 'hetzner-fsn1', projectId)).find((candidate) => candidate.job.id === job.id);
         const before = await rowNow();
         assert.deepEqual(before?.databases, []);
         const created = await call('POST', `/v1/projects/${projectId}/databases`, 'alice', { name: 'jobs-db', memoryMb: 256, storageGb: 1 });
@@ -2173,7 +2221,7 @@ describe('Jobs', () => {
         const created = (await response.json()) as JobDetails;
         assert.equal(created.schedule, '*/15 * * * *');
         assert.equal(created.timeZone, 'Europe/Berlin');
-        const rows = await listJobRows(db.pool, projectId);
+        const rows = await listJobRows(db.pool, 'hetzner-fsn1', projectId);
         assert.deepEqual(rows.find((row) => row.job.id === created.id)?.job.schedule, '*/15 * * * *');
         // Removing the schedule removes its time zone; setting one alone again is refused.
         const unscheduled = await call('PATCH', path(`/${created.id}`), 'alice', { schedule: null });
@@ -2238,17 +2286,18 @@ describe('Jobs', () => {
     });
 
     test('the operator gets the pinned image and where the runs go', async () => {
-        const row = (await listJobRows(db.pool)).find((candidate) => candidate.job.id === job.id);
+        const row = (await listJobRows(db.pool, 'hetzner-fsn1')).find((candidate) => candidate.job.id === job.id);
         assert.equal(row?.pinnedImage, `ghcr.io/acme/api@${digest('5')}`);
         assert.equal(row?.site, 'hetzner-fsn1');
         assert.equal((await call('PATCH', path(`/${job.id}`), 'alice', { homeSite: 'ovh-lim' })).status, 200);
-        assert.equal((await listJobRows(db.pool)).find((candidate) => candidate.job.id === job.id)?.site, 'ovh-lim');
+        assert.equal((await call('PATCH', path(`/${job.id}`), 'alice', { homeSite: 'home-a' })).status, 400, 'no such Site');
+        assert.equal((await listJobRows(db.pool, 'hetzner-fsn1')).find((candidate) => candidate.job.id === job.id)?.site, 'ovh-lim');
     });
 
     test('a run starts only once the CronJob has the current template; a One-off job copies it with its own args and env', async () => {
         const runsPath = path(`/${job.id}/runs`);
         assert.equal((await call('POST', runsPath, 'alice')).status, 409, 'no CronJob yet');
-        const row = (await listJobRows(db.pool, projectId)).find((candidate) => candidate.job.id === job.id);
+        const row = (await listJobRows(db.pool, 'hetzner-fsn1', projectId)).find((candidate) => candidate.job.id === job.id);
         assert.ok(row);
         const jobTemplate = {
             metadata: { labels: { 'openupstream.io/job-id': job.id, 'openupstream.io/component': 'jobs' } },
@@ -2352,7 +2401,7 @@ describe('Jobs', () => {
         assert.equal((await call('DELETE', path(`/${job.id}`), 'alice')).status, 202);
         assert.equal((await call('GET', path(`/${job.id}`), 'alice')).status, 404);
         assert.equal((await call('DELETE', path(`/${job.id}`), 'alice')).status, 404);
-        assert.ok(!(await listJobRows(db.pool)).some((row) => row.job.id === job.id));
+        assert.ok(!(await listJobRows(db.pool, 'hetzner-fsn1')).some((row) => row.job.id === job.id));
     });
 });
 

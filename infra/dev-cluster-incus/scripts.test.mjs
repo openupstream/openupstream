@@ -69,6 +69,16 @@ test('instance names carry the remote only when INCUS_REMOTE is set', () => {
     assert.equal(run(names, { INCUS_REMOTE: 'mini' }).stdout, 'mini:oup-home-hetzner-fsn1\noup-home-ovh-lim-lvm\n');
 });
 
+test('SITES chooses the VMs\' Site ids, the third one without a volume', () => {
+    const sites = 'source ./lib.sh; echo "${SITES[*]} / $THIRD_SITE"';
+    assert.equal(run(sites).stdout, 'hetzner-fsn1 ovh-lim netcup-nbg / netcup-nbg\n');
+    assert.equal(run(sites, { SITES: 'home-a home-b home-c' }).stdout, 'home-a home-b home-c / home-c\n');
+    const { log } = run('YES=1 SKIP_DNS=1 ./down.sh', { SITES: 'home-a home-b home-c', STATE: mkdtempSync(join(tmpdir(), 'incus-state-')) });
+    assert.match(log, /incus delete --force oup-home-home-c/);
+    assert.match(log, /storage volume delete default oup-home-home-b-lvm/);
+    assert.doesNotMatch(log, /home-c-lvm/);
+});
+
 test('vm_ipv4 picks the global IPv4 address of the home network interface, not k3s\'s', () => {
     const state = {
         network: {

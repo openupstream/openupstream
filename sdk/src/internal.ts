@@ -19,7 +19,7 @@ export const clusterName = (database: Pick<Database, 'id'>): string => `db-${dat
 export const poolerName = (database: Pick<Database, 'id'>): string => `${clusterName(database)}-pooler`;
 
 /**
- * The CPU each instance of a Database is guaranteed (decision 150): one core
+ * The CPU each instance of a Database is guaranteed (decision 151): one core
  * per 4 GiB of its memory, the ratio of the compute servers (16 threads,
  * 64 GB), as a Kubernetes request with no limit, so it uses idle cores too.
  */
@@ -220,7 +220,7 @@ export interface ServiceRow {
     readonly service: Pick<Service, 'id' | 'name' | 'image' | 'imageDigest' | 'replicas' | 'memoryMb' | 'cpuMillicores' | 'port'>;
     /** What the Deployment runs: `<registry>/<repository>@<digest>`. */
     readonly pinnedImage: string;
-    /** Where a single replica runs: the Service's homeSite, else the Project's oldest Database's, else `hetzner-fsn1`. */
+    /** Where a single replica runs: the Service's homeSite, else the Project's oldest Database's, else the default Site. */
     readonly site: Site;
     /**
      * The version of the Project's Secrets in its Kubernetes Secret: it
@@ -235,6 +235,15 @@ export interface ServiceRow {
 
 /** A Database as a Service's or Job's row names it. */
 export type RowDatabase = Pick<Database, 'id' | 'name'>;
+
+/** Every node carries its Site's id in this label (ADR-0007). */
+export const ZONE_LABEL = 'topology.kubernetes.io/zone';
+/** `true` on the nodes of a compute Site, where Databases, Services and Jobs run. */
+export const COMPUTE_SITE_LABEL = 'openupstream.io/compute-site';
+/** `true` on the nodes of the one compute Site that is the default Home site. */
+export const DEFAULT_SITE_LABEL = 'openupstream.io/default-site';
+/** Free text on a Site's nodes saying where it is, e.g. `Falkenstein (Hetzner)`. */
+export const SITE_DESCRIPTION_ANNOTATION = 'openupstream.io/site-description';
 
 /** On a Service's Deployment and a Job's CronJob: the spec version it was applied from (serviceSpecVersion, jobSpecVersion). */
 export const SPEC_VERSION_ANNOTATION = 'openupstream.io/spec-version';
@@ -266,7 +275,7 @@ export interface JobRow {
     >;
     /** What its runs start: `<registry>/<repository>@<digest>`. */
     readonly pinnedImage: string;
-    /** Where its runs go: the Job's homeSite, else the Project's oldest Database's, else `hetzner-fsn1`. */
+    /** Where its runs go: the Job's homeSite, else the Project's oldest Database's, else the default Site. */
     readonly site: Site;
     /** The Project's live Databases, oldest first: its runs get a DATABASE_URL for each (decision 97). */
     readonly databases: readonly RowDatabase[];
@@ -317,8 +326,9 @@ export interface DatabaseRow {
  * The platform's own Account, Project and Databases: the control plane's
  * state (`database`) and madAuth's users (`authDatabase`). The bootstrap
  * creates these Databases once; the control plane seeds these rows at
- * startup, and from then on the operator reconciles them like any
- * customer's. Fixed ids, so bootstrap and control plane agree.
+ * startup, in the default Site (ADR-0007), and from then on the operator
+ * reconciles them like any customer's. Fixed ids, so bootstrap and control
+ * plane agree.
  */
 export const PLATFORM = {
     account: {
@@ -336,7 +346,6 @@ export const PLATFORM = {
         id: '00000000-0000-4000-8000-000000000003',
         projectId: '00000000-0000-4000-8000-000000000002',
         name: 'control-plane',
-        homeSite: 'hetzner-fsn1',
         memoryMb: 512,
         storageGb: 5,
         autoGrow: true,
@@ -347,7 +356,6 @@ export const PLATFORM = {
         id: '00000000-0000-4000-8000-000000000004',
         projectId: '00000000-0000-4000-8000-000000000002',
         name: 'auth',
-        homeSite: 'hetzner-fsn1',
         memoryMb: 512,
         storageGb: 2,
         autoGrow: true,
@@ -359,7 +367,6 @@ export const PLATFORM = {
         id: '00000000-0000-4000-8000-000000000005',
         projectId: '00000000-0000-4000-8000-000000000002',
         name: 'billing',
-        homeSite: 'hetzner-fsn1',
         memoryMb: 512,
         storageGb: 2,
         autoGrow: true,
@@ -369,13 +376,13 @@ export const PLATFORM = {
 } as const satisfies {
     account: Omit<Account, 'holds'>;
     project: Project;
-    database: Database;
-    authDatabase: Database;
-    billingDatabase: Database;
+    database: Omit<Database, 'homeSite'>;
+    authDatabase: Omit<Database, 'homeSite'>;
+    billingDatabase: Omit<Database, 'homeSite'>;
 };
 
-/** The platform's Database rows, as the operator gets them. */
-export const PLATFORM_ROWS: readonly DatabaseRow[] = [
-    { project: PLATFORM.project, database: PLATFORM.database },
-    { project: PLATFORM.project, database: PLATFORM.authDatabase },
+/** The platform's Database rows, as the bootstrap gives them to the operator: in `homeSite`, the default Site. */
+export const platformRows = (homeSite: Site): DatabaseRow[] => [
+    { project: PLATFORM.project, database: { ...PLATFORM.database, homeSite } },
+    { project: PLATFORM.project, database: { ...PLATFORM.authDatabase, homeSite } },
 ];

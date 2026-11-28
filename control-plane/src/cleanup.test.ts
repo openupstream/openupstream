@@ -34,6 +34,7 @@ const fakes = () => {
         deleteJob: async () => ok('not-found'),
         listPods: async () => ok([]),
         nodeSite: async () => ok(undefined),
+        listNodes: async () => ok([]),
         podLog: async () => err('not in this test'),
         remove: async (ref: ObjectRef) => {
             if (failKinds.has(ref.kind)) {
@@ -93,7 +94,7 @@ beforeEach(async () => {
     );
     projectId = project.rows[0]?.id ?? '';
     const database = await db.pool.query<{ id: string }>(
-        `insert into databases (project_id, name, memory_mb, storage_gb) values ($1, 'orders', 256, 1) returning id`,
+        `insert into databases (project_id, name, home_site, memory_mb, storage_gb) values ($1, 'orders', 'hetzner-fsn1', 256, 1) returning id`,
         [projectId],
     );
     databaseId = database.rows[0]?.id ?? '';
@@ -154,7 +155,7 @@ test('an unfinished restore keeps its source from being purged; a ready instance
     const { prefixes, deps } = fakes();
     await db.pool.query(`update databases set deleted_at = now() - interval '8 days', objects_removed_at = now() where id = $1`, [databaseId]);
     const inserted = await db.pool.query<{ id: string }>(
-        `insert into databases (project_id, name, memory_mb, storage_gb, restore_source_id) values ($1, 'copy', 256, 1, $2) returning id`,
+        `insert into databases (project_id, name, home_site, memory_mb, storage_gb, restore_source_id) values ($1, 'copy', 'hetzner-fsn1', 256, 1, $2) returning id`,
         [projectId, databaseId],
     );
     const restoredId = inserted.rows[0]?.id ?? '';
@@ -183,7 +184,7 @@ test('a restore that never finished stops holding its source back after a day', 
     const { prefixes, deps } = fakes();
     await db.pool.query(`update databases set deleted_at = now() - interval '8 days', objects_removed_at = now() where id = $1`, [databaseId]);
     await db.pool.query(
-        `insert into databases (project_id, name, memory_mb, storage_gb, restore_source_id, created_at) values ($1, 'stuck', 256, 1, $2, now() - interval '25 hours')`,
+        `insert into databases (project_id, name, home_site, memory_mb, storage_gb, restore_source_id, created_at) values ($1, 'stuck', 'hetzner-fsn1', 256, 1, $2, now() - interval '25 hours')`,
         [projectId, databaseId],
     );
     await cleanupPass(deps());

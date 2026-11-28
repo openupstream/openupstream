@@ -65,7 +65,8 @@ that can fail. openupstream runs in three, all in Germany:
 | third Site | Nuremberg | a copy of every object, and the deciding vote when the other two disagree |
 
 A Database's **Home site** is where its primary runs when nothing has
-failed, `hetzner-fsn1` unless you choose `ovh-lim`.
+failed, `hetzner-fsn1` unless you choose `ovh-lim`. `oup sites` lists the
+Sites you can choose from. A self-hosted installation names its own Sites.
 
 ## When a Site fails
 

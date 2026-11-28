@@ -24,7 +24,7 @@ test('a Job form: an empty schedule for a Job only started, whole numbers within
     assert.match(String(jobWanted({ ...jobFieldsOf(job), timeoutSeconds: '86401' })), /timeout/);
     assert.match(String(jobWanted({ ...jobFieldsOf(job), memoryMb: '1.5' })), /Memory/);
     assert.match(String(jobWanted({ ...jobFieldsOf(job), cpuMillicores: '' })), /CPU/);
-    assert.match(String(jobWanted({ ...jobFieldsOf(job), homeSite: 'mars' })), /Site/);
+    assert.match(String(jobWanted({ ...jobFieldsOf(job), homeSite: 'not a site' })), /Site/);
 });
 
 test('a Job name is a DNS label the Project does not have yet', () => {

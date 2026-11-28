@@ -8,9 +8,10 @@
 # node loses every Database, Bucket and Service on it; only the Databases'
 # backups (Hetzner Object Storage) survive.
 #
-# The node stands in for every Site: it carries the label of the compute
-# Site hetzner-fsn1, and a Database or Service with the Home site ovh-lim
-# runs there as well. k3s-single-node.sh installs k3s that way.
+# The node stands in for every Site: its Site (topology.kubernetes.io/zone)
+# is the only compute Site and the default Site, labelled so when it joined
+# (check_sites in lib.sh checks it, ADR-0007). k3s-single-node.sh installs
+# k3s that way.
 #
 #   PLATFORM_DOMAIN=home.example.com CUSTOMER_DOMAIN=home.example.app ./install-single-node.sh
 #
@@ -26,20 +27,15 @@ source ./lib.sh
 : "${PLATFORM_DOMAIN:?set PLATFORM_DOMAIN, e.g. home.example.com}"
 : "${CUSTOMER_DOMAIN:?set CUSTOMER_DOMAIN, e.g. home.example.app}"
 
-nodes=$(kubectl get nodes -o name | wc -l | tr -d ' ')
-if [[ $nodes -ne 1 ]]; then
-  echo "the cluster has $nodes nodes; install-single-node.sh needs exactly one" \
-    "(install-multi-node.sh is for one node per Site)" >&2
-  exit 1
-fi
-if [[ -z $(kubectl get nodes -l "topology.kubernetes.io/zone=$SINGLE_NODE_SITE,openupstream.io/gvisor=true" -o name) ]]; then
-  echo "the node needs the labels topology.kubernetes.io/zone=$SINGLE_NODE_SITE and" \
-    "openupstream.io/gvisor=true, and gVisor installed; k3s-single-node.sh sets it up so" >&2
+if [[ -z $(kubectl get nodes -l openupstream.io/gvisor=true -o name) ]]; then
+  echo "the node needs the label openupstream.io/gvisor=true and gVisor installed;" \
+    "k3s-single-node.sh sets it up so" >&2
   exit 1
 fi
 [[ -n $(kubectl get runtimeclass gvisor --ignore-not-found -o name) ]] ||
   { echo "no RuntimeClass gvisor: kubectl apply -f ../gvisor/runtimeclass.yaml" >&2; exit 1; }
 
+check_sites single-node
 record_layout single-node
 ./operators.sh
 ./ingress.sh

@@ -1,6 +1,7 @@
 # Garage, our object storage (ARCHITECTURE.md, "Object storage"; decision
-# 83): one node per Site, replication factor 3, so every object is stored
-# once in each Site. The nodes find each other through Kubernetes
+# 83): three nodes in three different Sites, replication factor 3, so every
+# object is stored once in each of them (one copy per Site up to three,
+# ADR-0007; multi-node has at least three Sites). The nodes find each other through Kubernetes
 # (GarageNode objects in this namespace); the layout, which zone each node
 # is, is assigned once by infra/dev-cluster/garage.sh.
 #
@@ -209,7 +210,7 @@ spec:
       annotations: {kubectl.kubernetes.io/default-container: garage}
     spec:
       serviceAccountName: garage
-      # One node per Site, the third Site included.
+      # At most one node per Site, a non-compute Site's included.
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:

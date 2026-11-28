@@ -6,8 +6,8 @@
 # operators/crds, and makes the cluster survive a dark Site (ARCHITECTURE.md,
 # "Sites and failure handling"):
 #
-# - CoreDNS and the CloudNativePG operator run twice, one per compute Site
-#   (once on a single node, ARCHITECTURE.md, decision 112);
+# - CoreDNS and the CloudNativePG operator run twice, in two different
+#   compute Sites (once on a single node, ARCHITECTURE.md, decision 112);
 #   the Barman Cloud Plugin stays at one replica (only archiving waits for it).
 #   With one replica each, a Site failure took DNS and failover down until
 #   the pod was evicted (measured 2026-10-17).
@@ -48,9 +48,10 @@ fi
 kubectl -n cnpg-system rollout status deploy/cnpg-controller-manager --timeout=5m
 apply "https://github.com/cloudnative-pg/plugin-barman-cloud/releases/download/$BARMAN_CLOUD/manifest.yaml"
 
-# One replica per compute Site. nodeTaintsPolicy Honor leaves out tainted
-# nodes: the third Site, and a dead node (tainted unreachable), so the
-# replacement of a pod from a dark Site still starts in the other one.
+# SITE_REPLICAS replicas, each in another Site. nodeTaintsPolicy Honor
+# leaves out tainted nodes: the non-compute Sites, and a dead node (tainted
+# unreachable), so the replacement of a pod from a dark Site still starts in
+# another one.
 # matchLabelKeys counts only the new revision's pods during a rollout. The
 # operator elects a leader (--leader-elect is in its default args).
 spread() { # namespace, deployment, pod label

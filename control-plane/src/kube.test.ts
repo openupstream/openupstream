@@ -53,7 +53,7 @@ test("a pod's CPU request as the scheduler counts it", () => {
     const container = (cpu: string) => ({ name: 'c', resources: { requests: { cpu } } });
     assert.equal(podCpuRequest({ spec: { containers: [container('250m'), container('1')] } }), 1250);
     assert.equal(podCpuRequest({ spec: { containers: [container('100m')], initContainers: [container('500m')], overhead: { cpu: '10m' } } }), 510);
-    assert.equal(podCpuRequest({ spec: { containers: [{ name: 'c' }] } }), 0, 'a Database before decision 150');
+    assert.equal(podCpuRequest({ spec: { containers: [{ name: 'c' }] } }), 0, 'a Database before decision 151');
     const sidecar = { ...container('200m'), restartPolicy: 'Always' };
     assert.equal(podCpuRequest({ spec: { containers: [container('100m')], initContainers: [sidecar] } }), 300, 'a sidecar runs with the containers');
     assert.equal(podCpuRequest({ spec: { containers: [container('100m')], initContainers: [sidecar, container('500m')] } }), 700, 'an init container after a sidecar runs next to it');

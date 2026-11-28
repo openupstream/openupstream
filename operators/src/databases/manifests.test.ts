@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Database, Project, Site } from '@openupstream/sdk';
-import { LABELS, THIRD_SITE, THIRD_SITE_TAINT, ZONE_LABEL } from '../kubernetes.js';
+import { COMPUTE_SITE_LABEL, LABELS, THIRD_SITE_TAINT, ZONE_LABEL } from '../kubernetes.js';
 import {
     BACKUP_CREDENTIAL_KEYS,
     BACKUP_ENDPOINT,
@@ -64,15 +64,23 @@ const tolerates = (toleration: Toleration, taint: { key: string; value: string; 
         ? toleration.key === undefined || toleration.key === '' || toleration.key === taint.key
         : toleration.key === taint.key && (toleration.value ?? '') === taint.value);
 
-/** The Sites a required node affinity admits, given every node's zone label. */
+/** Nodes as the install labels them (ADR-0007): three compute Sites, whatever their names, and one that is not. */
+const NODE_LABELS: Record<string, Record<string, string>> = {
+    'home-a': { [ZONE_LABEL]: 'home-a', [COMPUTE_SITE_LABEL]: 'true' },
+    'home-b': { [ZONE_LABEL]: 'home-b', [COMPUTE_SITE_LABEL]: 'true' },
+    'home-c': { [ZONE_LABEL]: 'home-c', [COMPUTE_SITE_LABEL]: 'true' },
+    witness: { [ZONE_LABEL]: 'witness' },
+};
+
+/** The Sites a required node affinity admits, given every node's labels. */
 const admittedSites = (affinity: unknown): string[] => {
     const terms = (affinity as { nodeSelectorTerms: { matchExpressions: { key: string; operator: string; values: string[] }[] }[] })
         .nodeSelectorTerms;
-    return ['hetzner-fsn1', 'ovh-lim', THIRD_SITE].filter((site) =>
-        terms.some((term) =>
-            term.matchExpressions.every((e) => e.key === ZONE_LABEL && e.operator === 'In' && e.values.includes(site)),
-        ),
-    );
+    return Object.entries(NODE_LABELS)
+        .filter(([, labels]) =>
+            terms.some((term) => term.matchExpressions.every((e) => e.operator === 'In' && e.values.includes(labels[e.key] ?? ''))),
+        )
+        .map(([site]) => site);
 };
 
 test('a Database runs as a Cluster of two instances', () => {
@@ -90,7 +98,7 @@ test('the two instances never share a Site', () => {
     assert.equal(affinity?.topologyKey, 'topology.kubernetes.io/zone');
 });
 
-for (const homeSite of ['hetzner-fsn1', 'ovh-lim'] as const satisfies readonly Site[]) {
+for (const homeSite of ['hetzner-fsn1', 'ovh-lim', 'home-a'] as const satisfies readonly Site[]) {
     test(`the primary is placed in the Home site ${homeSite}`, () => {
         const preferred = manifestsFor({ homeSite }).cluster.spec.affinity?.nodeAffinity
             ?.preferredDuringSchedulingIgnoredDuringExecution;
@@ -104,8 +112,8 @@ test('instances and poolers may only run in the compute Sites', () => {
     const { cluster, pooler } = manifestsFor();
     const clusterRequired = cluster.spec.affinity?.nodeAffinity?.requiredDuringSchedulingIgnoredDuringExecution;
     const poolerRequired = pooler.spec.template?.spec?.affinity?.nodeAffinity?.requiredDuringSchedulingIgnoredDuringExecution;
-    assert.deepEqual(admittedSites(clusterRequired), ['hetzner-fsn1', 'ovh-lim']);
-    assert.deepEqual(admittedSites(poolerRequired), ['hetzner-fsn1', 'ovh-lim']);
+    assert.deepEqual(admittedSites(clusterRequired), ['home-a', 'home-b', 'home-c']);
+    assert.deepEqual(admittedSites(poolerRequired), ['home-a', 'home-b', 'home-c']);
 });
 
 test("nothing tolerates the third Site's taint", () => {
@@ -279,7 +287,7 @@ test('names stay within the Kubernetes and CloudNativePG limits', () => {
 });
 
 test('a Home site outside the compute Sites is rejected', () => {
-    assert.deepEqual(errorsFor({ homeSite: THIRD_SITE as Site }), [{ kind: 'not-a-compute-site', value: THIRD_SITE }]);
+    assert.deepEqual(errorsFor({ homeSite: 'not a site' }), [{ kind: 'invalid-site', value: 'not a site' }]);
 });
 
 test('ids must be lowercase UUIDs and the Database must belong to the Project', () => {
@@ -298,8 +306,8 @@ test('names must be usable as label values', () => {
 });
 
 test('every problem is reported at once', () => {
-    const kinds = errorsFor({ memoryMb: 128, storageGb: -1, homeSite: THIRD_SITE as Site }).map((e) => e.kind);
-    assert.deepEqual(kinds, ['not-a-compute-site', 'memory-below-floor', 'invalid-storage']);
+    const kinds = errorsFor({ memoryMb: 128, storageGb: -1, homeSite: '-x' }).map((e) => e.kind);
+    assert.deepEqual(kinds, ['invalid-site', 'memory-below-floor', 'invalid-storage']);
 });
 
 test('the same Database always gives the same objects and is left untouched', () => {

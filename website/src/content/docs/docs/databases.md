@@ -17,7 +17,7 @@ oup pg create main --memory 512 --storage 10
 | --- | --- | --- |
 | `--memory <MB>` | 256 | Memory of each instance. It also sets the CPU each instance is guaranteed: a quarter core per GB. 256 MB is the smallest. |
 | `--storage <GB>` | 1 | Size of each instance's volume. |
-| `--site hetzner-fsn1\|ovh-lim` | `hetzner-fsn1` | The Home site. The standby runs in the other one. |
+| `--site <site>` | the default Site | The Home site, one of `oup sites`. The standby runs in another one. |
 | `--max-storage <GB>` | none | How far storage may grow by itself. |
 | `--no-auto-grow` | | Storage only changes when you resize it. |
 | `--no-wait` | | Return before the instances are ready. |
