@@ -397,7 +397,7 @@ const clusterFor = (
             initdb: {
                 postInitApplicationSQL: [...POST_INIT_SQL],
                 // The `app` user's password as a SCRAM verifier, from the control plane
-                // (decision 155): CloudNativePG applies it unchanged whenever an
+                // (decision 156): CloudNativePG applies it unchanged whenever an
                 // instance becomes primary, where it would salt a password of its own
                 // anew and so break the Pooler's next login. Read while the Cluster
                 // runs, too, so it may be added to one that exists.
@@ -595,7 +595,7 @@ export function restoredDatabaseManifests(
  * The Kubernetes objects that run `database` with the callers' `roles`, or
  * every reason it cannot run. `live` is its Cluster as it is now, absent
  * for a new one; with `appCredentials` the Cluster reads the `app` user's
- * password from the control plane's Secret (decision 155).
+ * password from the control plane's Secret (decision 156).
  */
 export function databaseManifests(
     project: Project,

@@ -186,7 +186,7 @@ test("a pass writes each role's Secret of the Project's live Databases, as Cloud
     assert.equal(applied.get(`project-${projectId}/pg-role-${goneRole.value.id}`), undefined);
 });
 
-test("a pass writes the app user's password and verifier of each live Database that has one of ours (decision 155)", async () => {
+test("a pass writes the app user's password and verifier of each live Database that has one of ours (decision 156)", async () => {
     const projectId = await createProject();
     const databases = await db.pool.query<{ id: string }>(
         `insert into databases (project_id, name, home_site, memory_mb, storage_gb)

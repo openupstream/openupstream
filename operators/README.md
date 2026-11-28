@@ -63,7 +63,7 @@ Traefik already implements is configured, not reimplemented.
   operators give a container for the Project's Databases,
   `DATABASE_URL_<NAME>` per Database and `DATABASE_URL` for the oldest,
   with the password from the Database's `db-<id>-app` Secret (written by
-  the control plane, decision 155) through a `secretKeyRef`; no operator
+  the control plane, decision 156) through a `secretKeyRef`; no operator
   reads that Secret.
 - `src/jobs/`: the Jobs operator (ARCHITECTURE.md, decision 95,
   ADR-0003). `planJobs` (pure) turns the Jobs into, per Project, its

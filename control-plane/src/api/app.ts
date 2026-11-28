@@ -1063,7 +1063,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
                 return c.json({ error: restoreCheckMessage(source.id, checked.error) }, checked.error.kind === 'no-backup' ? 409 : 400);
             }
         }
-        // The `app` user's password goes in with the row (decision 155). Without one the
+        // The `app` user's password goes in with the row (decision 156). Without one the
         // Database still runs, with a password of CloudNativePG's as before.
         const id = randomUUID();
         const sealed = await sealNewAppPassword(pool, deps.kek, { id, projectId: project.id });

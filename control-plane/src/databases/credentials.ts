@@ -1,5 +1,5 @@
 /**
- * A Database's `app` user (ARCHITECTURE.md, decision 155).
+ * A Database's `app` user (ARCHITECTURE.md, decision 156).
  *
  * The control plane generates its password when the Database is created,
  * seals it with the Project's data key and renders two Secrets from it

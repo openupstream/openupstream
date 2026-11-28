@@ -94,7 +94,7 @@ async function registryCredentials(
 
 /**
  * Writes the Project's two Secrets with what it has now, empty ones when it
- * has nothing left, the `app` user's two of each Database (decision 155)
+ * has nothing left, the `app` user's two of each Database (decision 156)
  * and one per role of its Databases (decision 126).
  * `no-namespace` until an operator has created the Project's namespace.
  */
