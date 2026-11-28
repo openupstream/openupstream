@@ -14,6 +14,7 @@ import { PROJECT_REGISTRY_AUTH, PROJECT_SECRETS, type RegistryAuth, databaseRole
 import type pg from 'pg';
 import type { ControlPlaneKube, SecretManifest } from '../kube.js';
 import { type Result, err, ok } from '../result.js';
+import { appSecretManifests, projectAppCredentials } from '../databases/credentials.js';
 import { endDroppedOwnerSessions, projectRoles, recentlyDroppedRoles, roleSecretManifest } from '../databases/roles.js';
 import { jobRegistryAuthName } from '../jobs/store.js';
 import { credentialKey, parseImageReference } from '../registry.js';
@@ -93,7 +94,8 @@ async function registryCredentials(
 
 /**
  * Writes the Project's two Secrets with what it has now, empty ones when it
- * has nothing left, and one per role of its Databases (decision 126).
+ * has nothing left, the `app` user's two of each Database (decision 155)
+ * and one per role of its Databases (decision 126).
  * `no-namespace` until an operator has created the Project's namespace.
  */
 export async function syncProjectSecrets(
@@ -117,6 +119,16 @@ export async function syncProjectSecrets(
     const registry = await deps.kube.applySecret(registryAuthManifest(projectId, credentials.value));
     if (!registry.ok || registry.value === 'no-namespace') {
         return registry;
+    }
+    const apps = await projectAppCredentials(deps.pool, deps.kek, projectId);
+    if (!apps.ok) {
+        return err(`cannot read the Databases' app passwords: ${apps.error.kind}`);
+    }
+    for (const manifest of apps.value.flatMap((credentials) => appSecretManifests(projectId, credentials))) {
+        const written = await deps.kube.applySecret(manifest);
+        if (!written.ok) {
+            return written;
+        }
     }
     const roles = await projectRoles(deps.pool, deps.kek, projectId);
     if (!roles.ok) {

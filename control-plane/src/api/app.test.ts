@@ -1110,8 +1110,18 @@ describe('Databases', () => {
         assert.equal(response.headers.get('location'), `/v1/projects/${projectId}/databases/${database.id}`);
     });
 
-    test('the operator sees it at once', async () => {
-        assert.ok((await listDatabaseRows(db.pool)).some((row) => row.database.id === database.id));
+    test("the operator sees it at once, with the app user's password ours and its Secrets written (decision 155)", async () => {
+        const row = (await listDatabaseRows(db.pool)).find((candidate) => candidate.database.id === database.id);
+        assert.equal(row?.appCredentials, true);
+        const written = () =>
+            appliedSecrets.filter((secret) => secret.metadata.namespace === `project-${projectId}`).map((secret) => secret.metadata.name);
+        for (let attempt = 0; attempt < 50 && !written().includes(`db-${database.id}-app-scram`); attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        assert.ok(written().includes(`db-${database.id}-app`));
+        assert.ok(written().includes(`db-${database.id}-app-scram`));
+        const stored = await db.pool.query<{ app_password: Buffer }>('select app_password from databases where id = $1', [database.id]);
+        assert.ok(stored.rows[0]?.app_password.length, 'sealed in the row');
     });
 
     test('input is checked: memory floor, Sites, names, duplicates', async () => {
@@ -2324,13 +2334,13 @@ describe('Jobs', () => {
             appliedSecrets
                 .filter((secret) => secret.metadata.namespace === `project-${projectId}` && secret.metadata.name === 'project-registry-auth')
                 .at(-1);
-        for (let attempt = 0; attempt < 50 && (await rendered()) === undefined; attempt++) {
+        const configOf = async () =>
+            JSON.parse(Buffer.from((await rendered())?.data['.dockerconfigjson'] ?? 'e30=', 'base64').toString()) as { auths?: Record<string, { username: string }> };
+        // An earlier write of this Project (a Database's app password) left one without the entry.
+        for (let attempt = 0; attempt < 50 && (await configOf()).auths?.['ghcr.io/acme/private'] === undefined; attempt++) {
             await new Promise((resolve) => setTimeout(resolve, 20));
         }
-        const config = JSON.parse(Buffer.from((await rendered())?.data['.dockerconfigjson'] ?? '', 'base64').toString()) as {
-            auths: Record<string, { username: string }>;
-        };
-        assert.equal(config.auths['ghcr.io/acme/private']?.username, 'ci');
+        assert.equal((await configOf()).auths?.['ghcr.io/acme/private']?.username, 'ci');
         // A deploy pulls with the stored credentials.
         assert.equal((await call('POST', path(`/${body.id}/deploy`), 'alice')).status, 200);
         assert.equal((await call('DELETE', path(`/${body.id}`), 'alice')).status, 202);

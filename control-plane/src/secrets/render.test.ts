@@ -8,6 +8,7 @@ import type { KeyEncryptionKey } from './envelope.js';
 import { registryAuthManifest, projectSecretManifest, secretsPass, syncProjectSecrets } from './render.js';
 import { deleteSecret, putSecret, sealProjectValue } from './store.js';
 import { registryAuthName } from '../services/store.js';
+import { createAppPassword } from '../databases/credentials.js';
 import { roleFor } from '../databases/roles.js';
 
 let db: TestDatabase;
@@ -183,4 +184,33 @@ test("a pass writes each role's Secret of the Project's live Databases, as Cloud
         password: Buffer.from(role.value.password).toString('base64'),
     });
     assert.equal(applied.get(`project-${projectId}/pg-role-${goneRole.value.id}`), undefined);
+});
+
+test("a pass writes the app user's password and verifier of each live Database that has one of ours (decision 155)", async () => {
+    const projectId = await createProject();
+    const databases = await db.pool.query<{ id: string }>(
+        `insert into databases (project_id, name, home_site, memory_mb, storage_gb)
+         values ($1, 'main', 'hetzner-fsn1', 256, 1), ($1, 'before', 'hetzner-fsn1', 256, 1), ($1, 'gone', 'hetzner-fsn1', 256, 1) returning id`,
+        [projectId],
+    );
+    const [main, before, gone] = databases.rows.map((row) => ({ id: row.id, projectId })) as [{ id: string; projectId: string }, { id: string; projectId: string }, { id: string; projectId: string }];
+    assert.ok((await createAppPassword(db.pool, kek, main)).ok);
+    assert.ok((await createAppPassword(db.pool, kek, gone)).ok);
+    await db.pool.query('update databases set deleted_at = now() where id = $1', [gone.id]);
+    const first = fakeKube();
+    await secretsPass({ pool: db.pool, kube: first.kube, kek, log: () => undefined });
+    const decoded = (secret: SecretManifest | undefined) => Buffer.from(secret?.data['password'] ?? '', 'base64').toString('utf8');
+    const password = decoded(first.applied.get(`project-${projectId}/db-${main.id}-app`));
+    assert.match(password, /^[A-Za-z0-9_-]{32}$/);
+    const verifier = decoded(first.applied.get(`project-${projectId}/db-${main.id}-app-scram`));
+    assert.match(verifier, /^SCRAM-SHA-256\$4096:/);
+    assert.equal(first.applied.get(`project-${projectId}/db-${before.id}-app`), undefined, "a Database from before keeps CloudNativePG's own Secret");
+    assert.equal(first.applied.get(`project-${projectId}/db-${gone.id}-app`), undefined);
+
+    // A second ask changes nothing: the Services run with the first password.
+    assert.ok((await createAppPassword(db.pool, kek, main)).ok);
+    const second = fakeKube();
+    await secretsPass({ pool: db.pool, kube: second.kube, kek, log: () => undefined });
+    assert.equal(decoded(second.applied.get(`project-${projectId}/db-${main.id}-app`)), password);
+    assert.equal(decoded(second.applied.get(`project-${projectId}/db-${main.id}-app-scram`)), verifier);
 });

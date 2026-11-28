@@ -27,7 +27,7 @@
  * Every step is idempotent and only recorded after it succeeded, so a failed
  * step is retried by the next pass.
  */
-import { backupPrefix, clusterName, poolerName, projectNamespace } from '@openupstream/sdk';
+import { backupPrefix, clusterName, databaseAppSecret, databaseAppVerifierSecret, poolerName, projectNamespace } from '@openupstream/sdk';
 import type pg from 'pg';
 import type { BackupStore } from './backups.js';
 import type { ObjectStorage } from './garage.js';
@@ -72,6 +72,9 @@ const runningObjects = (database: { id: string; projectId: string }): ObjectRef[
         { apiVersion: CNPG, kind: 'ScheduledBackup', namespace, name: clusterName(database) },
         { apiVersion: CNPG, kind: 'Pooler', namespace, name: poolerName(database) },
         { apiVersion: CNPG, kind: 'Cluster', namespace, name: clusterName(database) },
+        // The `app` user's Secrets, which the control plane wrote (decision 155); gone already for a Database from before.
+        { apiVersion: 'v1', kind: 'Secret', namespace, name: databaseAppSecret(database) },
+        { apiVersion: 'v1', kind: 'Secret', namespace, name: databaseAppVerifierSecret(database) },
     ];
 };
 

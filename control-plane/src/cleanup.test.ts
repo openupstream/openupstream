@@ -122,6 +122,8 @@ test('a deleted Database loses its running objects at once, keeps its backups un
         `ScheduledBackup ${namespace}/db-${databaseId}`,
         `Pooler ${namespace}/db-${databaseId}-pooler`,
         `Cluster ${namespace}/db-${databaseId}`,
+        `Secret ${namespace}/db-${databaseId}-app`,
+        `Secret ${namespace}/db-${databaseId}-app-scram`,
     ];
     assert.deepEqual(removed, running);
     assert.deepEqual(prefixes, []);

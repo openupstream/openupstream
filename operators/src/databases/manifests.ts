@@ -26,6 +26,7 @@ import {
     type Project,
     type Site,
     clusterName,
+    databaseAppVerifierSecret,
     databaseCpuMillicores,
     databaseRoleName,
     databaseRoleSecret,
@@ -339,7 +340,14 @@ const objectStoreFor = (meta: ObjectMeta, config: DatabaseConfig): ObjectStoreMa
     },
 });
 
-const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig, roles: readonly DatabaseRoleRow[], live?: LiveCluster): ClusterManifest => ({
+const clusterFor = (
+    meta: ObjectMeta,
+    database: Database,
+    config: DatabaseConfig,
+    roles: readonly DatabaseRoleRow[],
+    live: LiveCluster | undefined,
+    appCredentials: boolean,
+): ClusterManifest => ({
     apiVersion: 'postgresql.cnpg.io/v1',
     kind: 'Cluster',
     metadata: meta,
@@ -386,7 +394,15 @@ const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig
             resizeInUseVolumes: true,
         },
         bootstrap: {
-            initdb: { postInitApplicationSQL: [...POST_INIT_SQL] },
+            initdb: {
+                postInitApplicationSQL: [...POST_INIT_SQL],
+                // The `app` user's password as a SCRAM verifier, from the control plane
+                // (decision 155): CloudNativePG applies it unchanged whenever an
+                // instance becomes primary, where it would salt a password of its own
+                // anew and so break the Pooler's next login. Read while the Cluster
+                // runs, too, so it may be added to one that exists.
+                ...(appCredentials ? { secret: { name: databaseAppVerifierSecret(database) } } : {}),
+            },
         },
         ...(roles.length === 0 ? {} : { managed: { roles: roles.map(managedRoleFor) } }),
         plugins: [
@@ -526,6 +542,7 @@ export function restoredDatabaseManifests(
     source: RestoreSource,
     roles: readonly DatabaseRoleRow[] = [],
     live?: LiveCluster,
+    appCredentials = false,
 ): Result<DatabaseManifests, RestoreError[]> {
     const checks: [boolean, RestoreError][] = [
         [UUID.test(source.database.id), { kind: 'invalid-id', field: 'source.databaseId', value: source.database.id }],
@@ -540,7 +557,7 @@ export function restoredDatabaseManifests(
         ],
     ];
     const sourceErrors = checks.filter(([valid]) => !valid).map(([, error]) => error);
-    const result = databaseManifests(project, database, config, roles, live);
+    const result = databaseManifests(project, database, config, roles, live, appCredentials);
     const errors = [...(result.ok ? [] : result.error), ...sourceErrors];
     if (!result.ok || errors.length > 0) {
         return err(errors);
@@ -577,7 +594,8 @@ export function restoredDatabaseManifests(
 /**
  * The Kubernetes objects that run `database` with the callers' `roles`, or
  * every reason it cannot run. `live` is its Cluster as it is now, absent
- * for a new one.
+ * for a new one; with `appCredentials` the Cluster reads the `app` user's
+ * password from the control plane's Secret (decision 155).
  */
 export function databaseManifests(
     project: Project,
@@ -585,6 +603,7 @@ export function databaseManifests(
     config: DatabaseConfig,
     roles: readonly DatabaseRoleRow[] = [],
     live?: LiveCluster,
+    appCredentials = false,
 ): Result<DatabaseManifests, DatabaseManifestError[]> {
     const errors = validate(project, database, roles);
     if (errors.length > 0) {
@@ -596,7 +615,7 @@ export function databaseManifests(
     const cluster = clusterName(database);
     return ok({
         objectStore: objectStoreFor(meta(cluster), config),
-        cluster: clusterFor(meta(cluster), database, config, roles, live),
+        cluster: clusterFor(meta(cluster), database, config, roles, live, appCredentials),
         pooler: poolerFor(meta(poolerName(database)), cluster, config),
         scheduledBackup: scheduledBackupFor(meta(cluster), config),
     });

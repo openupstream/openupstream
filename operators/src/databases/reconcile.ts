@@ -75,7 +75,7 @@ const manifestsFor = (row: DatabaseRow, config: DatabaseConfig, live: LiveCluste
     const restore = row.database.restoredFrom;
     const roles = row.roles ?? [];
     return restore === undefined || row.restoring !== true
-        ? databaseManifests(row.project, row.database, config, roles, live)
+        ? databaseManifests(row.project, row.database, config, roles, live, row.appCredentials === true)
         : restoredDatabaseManifests(
               row.project,
               row.database,
@@ -83,6 +83,7 @@ const manifestsFor = (row: DatabaseRow, config: DatabaseConfig, live: LiveCluste
               { database: { id: restore.databaseId, projectId: row.project.id }, targetTime: restore.targetTime },
               roles,
               live,
+              row.appCredentials === true,
           );
 };
 
