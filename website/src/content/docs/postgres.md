@@ -17,7 +17,7 @@ standby runs in the Frankfurt region.
   location that runs neither instance. You restore to any moment within the
   retention window, into a new Database, also for a Database you deleted.
 - **Resizing without a migration.** Memory and storage change through one
-  command. Each instance is guaranteed a quarter core per GB of memory and
+  command, and both grow without a restart. Each instance is guaranteed a quarter core per GB of memory and
   uses idle cores beyond that, with no CPU limit. Storage grows online, and by itself as the Database fills up,
   unless you turn that off or set a maximum.
 - **pgvector** is enabled in every Database.
@@ -37,8 +37,8 @@ standby runs in the Frankfurt region.
   port 443. Nothing faces the internet on Postgres's port, so tools that
   cannot run `oup`, such as a hosted BI tool, cannot connect.
 - **Storage only grows.** It cannot be made smaller again.
-- **Changing memory restarts both instances** one after the other. Writes
-  pause for seconds.
+- **Reducing memory restarts both instances** one after the other. Writes
+  pause for seconds. Adding memory does not restart them.
 - **CPU follows memory.** There is no separate CPU size: for more
   guaranteed CPU, give the Database more memory.
 - **No scale to zero.** An idle Database costs its memory and storage.

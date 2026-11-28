@@ -86,7 +86,9 @@ Other names that are ours today and need yours:
 [infra/dev-cluster](../infra/dev-cluster/README.md) installs the platform
 onto a k3s cluster with nodes in three or more Sites, or onto a single node
 (#112, [ADR-0004](adr/0004-single-node-dev-cluster.md)). Either needs
-sections 4 to 6 (backups, DNS, e-mail, or `MAIL=log` instead of 6).
+sections 4 to 6 (backups, DNS, e-mail, or `MAIL=log` instead of 6), and
+Kubernetes 1.33 or later: a Database gets more memory by an in-place pod
+resize (the scripts install k3s 1.36).
 
 The Sites are what the nodes say
 ([ADR-0007](adr/0007-sites-from-node-labels.md)); name them after your own
