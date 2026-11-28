@@ -2,7 +2,22 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Kube, KubeError, KubeObject } from '../kube.js';
 import { type Result, err, ok } from '../result.js';
-import { GUARD_FIELD_MANAGER, type GuardState, type GuardStates, IDLE, MAX_PAUSE_MS, PAUSED_BY_ANNOTATION, guardTick, pausePatch, primaryPodOf, resumeLeftovers, step } from './pause.js';
+import {
+    GUARD_FIELD_MANAGER,
+    type GuardState,
+    type GuardStates,
+    IDLE,
+    MAX_PAUSE_MS,
+    PAUSED_BY_ANNOTATION,
+    guardClusters,
+    guardTick,
+    pausePatch,
+    pausedOf,
+    primaryPodOf,
+    resumeLeftovers,
+    runGuard,
+    step,
+} from './pause.js';
 
 const RESTART = 'Primary instance is being restarted without a switchover';
 const HEALTHY = 'Cluster in healthy state';
@@ -165,4 +180,37 @@ test('on start, Poolers a guard left paused are resumed; one paused by hand is l
     assert.deepEqual(applied.map(({ object }) => object.metadata.name), ['db-a-pooler']);
     assert.deepEqual(applied[0]?.object['spec'], { pgbouncer: { paused: false } });
     assert.equal(logs[0]?.msg, 'restart guard: resumed a Pooler left paused');
+});
+
+test('between two lists only the paused Databases are looked at, by their pods', async () => {
+    const { kube, world, applied, reads } = fake();
+    const states: GuardStates = new Map();
+    const listed = [cluster('db-a', RESTART), cluster('db-b', HEALTHY)];
+    world.clusters = ok(listed);
+    world.pods.set('db-a-1', ok(podObject('old', true)));
+    await guardTick(kube, states, 0);
+    assert.deepEqual(pausedOf(listed, states).map((c) => c.metadata.name), ['db-a']);
+    world.pods.set('db-a-1', ok(podObject('new', true)));
+    const logs = await guardClusters(kube, states, pausedOf(listed, states), 9000);
+    assert.equal(logs[0]?.msg, 'restart guard: Pooler resumed');
+    assert.deepEqual(applied.map(({ object }) => (object['spec'] as { pgbouncer: { paused: boolean } }).pgbouncer.paused), [true, false]);
+    assert.deepEqual(reads, ['db-a-1', 'db-a-1']);
+    assert.deepEqual(pausedOf(listed, states), [], 'resumed: back to the slow rhythm');
+});
+
+test('the loop lists the Clusters once per interval and reads only pods in between', async () => {
+    const { kube, world, applied } = fake();
+    let lists = 0;
+    const counting: typeof kube = { ...kube, listObjects: async (apiVersion, kind, selector) => { lists += kind === 'Cluster' ? 1 : 0; return kube.listObjects(apiVersion, kind, selector); } };
+    world.clusters = ok([cluster('db-a', RESTART)]);
+    world.pods.set('db-a-1', ok(podObject('old', true)));
+    const stop = new AbortController();
+    const running = runGuard(counting, () => undefined, stop.signal);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    world.pods.set('db-a-1', ok(podObject('new', true)));
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    stop.abort();
+    await running;
+    assert.equal(lists, 1, 'one list in the first 1.2 s');
+    assert.deepEqual(applied.map(({ object }) => (object['spec'] as { pgbouncer: { paused: boolean } }).pgbouncer.paused), [true, false]);
 });

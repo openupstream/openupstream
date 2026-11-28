@@ -8,7 +8,7 @@ import type { KeyEncryptionKey } from './envelope.js';
 import { registryAuthManifest, projectSecretManifest, secretsPass, syncProjectSecrets } from './render.js';
 import { deleteSecret, putSecret, sealProjectValue } from './store.js';
 import { registryAuthName } from '../services/store.js';
-import { createAppPassword } from '../databases/credentials.js';
+import { sealNewAppPassword } from '../databases/credentials.js';
 import { roleFor } from '../databases/roles.js';
 
 let db: TestDatabase;
@@ -194,8 +194,13 @@ test("a pass writes the app user's password and verifier of each live Database t
         [projectId],
     );
     const [main, before, gone] = databases.rows.map((row) => ({ id: row.id, projectId })) as [{ id: string; projectId: string }, { id: string; projectId: string }, { id: string; projectId: string }];
-    assert.ok((await createAppPassword(db.pool, kek, main)).ok);
-    assert.ok((await createAppPassword(db.pool, kek, gone)).ok);
+    const givePassword = async (database: { id: string; projectId: string }) => {
+        const sealed = await sealNewAppPassword(db.pool, kek, database);
+        assert.ok(sealed.ok);
+        await db.pool.query('update databases set app_password = $2 where id = $1', [database.id, sealed.value]);
+    };
+    await givePassword(main);
+    await givePassword(gone);
     await db.pool.query('update databases set deleted_at = now() where id = $1', [gone.id]);
     const first = fakeKube();
     await secretsPass({ pool: db.pool, kube: first.kube, kek, log: () => undefined });
@@ -207,8 +212,7 @@ test("a pass writes the app user's password and verifier of each live Database t
     assert.equal(first.applied.get(`project-${projectId}/db-${before.id}-app`), undefined, "a Database from before keeps CloudNativePG's own Secret");
     assert.equal(first.applied.get(`project-${projectId}/db-${gone.id}-app`), undefined);
 
-    // A second ask changes nothing: the Services run with the first password.
-    assert.ok((await createAppPassword(db.pool, kek, main)).ok);
+    // Every render gives the same two: a new verifier would make PgBouncer fail its next login.
     const second = fakeKube();
     await secretsPass({ pool: db.pool, kube: second.kube, kek, log: () => undefined });
     assert.equal(decoded(second.applied.get(`project-${projectId}/db-${main.id}-app`)), password);

@@ -84,7 +84,7 @@ import { type BucketRecord, createBucket, deleteBucket, getBucket, listBuckets }
 import { GiB, MiB, databaseMemoryRoom, roomForGrowth, roomForNew } from '../databases/capacity.js';
 import { checkRestore, restoreCheckMessage } from '../databases/restore.js';
 import { forgetDroppedRoles, roleFor, roleSecretManifest } from '../databases/roles.js';
-import { createAppPassword } from '../databases/credentials.js';
+import { sealNewAppPassword } from '../databases/credentials.js';
 import { createDatabase, deleteDatabase, getDatabase, getRestoreSource, listDatabases, updateDatabase } from '../databases/store.js';
 import type { TxtLookup } from '../domains/dns.js';
 import { createCustomDomain, deleteDomain, getDomain, isReserved, listDomains, verifyDomain } from '../domains/store.js';
@@ -1021,7 +1021,17 @@ export function createApi(deps: ApiDeps): Hono<Env> {
                 return c.json({ error: restoreCheckMessage(source.id, checked.error) }, checked.error.kind === 'no-backup' ? 409 : 400);
             }
         }
-        const created = await createDatabase(pool, project.id, {
+        // The `app` user's password goes in with the row (decision 155). Without one the
+        // Database still runs, with a password of CloudNativePG's as before.
+        const id = randomUUID();
+        const sealed = await sealNewAppPassword(pool, deps.kek, { id, projectId: project.id });
+        if (!sealed.ok) {
+            deps.log?.({ msg: "cannot seal a Database's app password; CloudNativePG generates one", project: project.id, error: sealed.error.kind });
+        }
+        const created = await createDatabase(
+            pool,
+            project.id,
+            {
             ...rest,
             homeSite: site.value.site,
             ...(autoGrow === undefined ? {} : { autoGrow }),
@@ -1034,18 +1044,16 @@ export function createApi(deps: ApiDeps): Hono<Env> {
                           ...(restoreFrom.targetTime === undefined ? {} : { targetTime: new Date(restoreFrom.targetTime).toISOString() }),
                       },
                   }),
-        });
+            },
+            sealed.ok ? { id, sealedPassword: sealed.value } : undefined,
+        );
         if (!created.ok) {
             return created.error.kind === 'held'
                 ? held(c, await holdsOf(pool, project.accountId))
                 : c.json({ error: `a Database named ${created.error.name} exists` }, 409);
         }
-        // Its `app` user's password, before the operator first sees the row (decision 155). Without
-        // one the Database still runs, with a password of CloudNativePG's as before.
-        const password = await createAppPassword(pool, deps.kek, created.value);
-        if (!password.ok) {
-            deps.log?.({ msg: "cannot store a Database's app password; CloudNativePG generates one", database: created.value.id, error: password.error.kind });
-        } else {
+        if (sealed.ok) {
+            // Its Secrets at once, if the Project has its namespace; the secrets pass writes them otherwise.
             syncSecrets(project.id);
         }
         c.header('location', `/v1/projects/${project.id}/databases/${created.value.id}`);

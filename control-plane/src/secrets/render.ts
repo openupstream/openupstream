@@ -120,11 +120,9 @@ export async function syncProjectSecrets(
     if (!registry.ok || registry.value === 'no-namespace') {
         return registry;
     }
+    // A password that cannot be opened is reported at the end: the roles' Secrets do not wait for it.
     const apps = await projectAppCredentials(deps.pool, deps.kek, projectId);
-    if (!apps.ok) {
-        return err(`cannot read the Databases' app passwords: ${apps.error.kind}`);
-    }
-    for (const manifest of apps.value.flatMap((credentials) => appSecretManifests(projectId, credentials))) {
+    for (const manifest of (apps.ok ? apps.value : []).flatMap((credentials) => appSecretManifests(projectId, credentials))) {
         const written = await deps.kube.applySecret(manifest);
         if (!written.ok) {
             return written;
@@ -154,7 +152,7 @@ export async function syncProjectSecrets(
     }
     // Only now may the Services roll: their pods will read these values.
     await deps.pool.query('update projects set secrets_version = $2 where id = $1 and secrets_version is distinct from $2', [projectId, version]);
-    return registry;
+    return apps.ok ? registry : err(`cannot read the Databases' app passwords: ${apps.error.kind}`);
 }
 
 /** Changes whenever a Secret is created, changed or deleted: names and update times, no values. */

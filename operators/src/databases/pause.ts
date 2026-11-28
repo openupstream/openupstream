@@ -137,13 +137,36 @@ export async function guardTick(kube: Kube, states: GuardStates, nowMs: number):
     if (!clusters.ok) {
         return [{ msg: 'restart guard: cannot list the Clusters', error: clusters.error }];
     }
-    const seen = new Set<string>();
+    return guardListed(kube, states, clusters.value, nowMs);
+}
+
+/** `guardTick` for a list of all Clusters already read: Clusters that are gone are forgotten. */
+async function guardListed(kube: Kube, states: GuardStates, all: readonly KubeObject[], nowMs: number): Promise<PassLog[]> {
+    const logs = await guardClusters(kube, states, all, nowMs);
+    const seen = new Set(all.map(keyOf));
+    for (const key of [...states.keys()].filter((known) => !seen.has(known))) {
+        states.delete(key);
+    }
+    return logs;
+}
+
+const keyOf = (cluster: KubeObject): string => `${cluster.metadata.namespace ?? ''}/${cluster.metadata.name}`;
+
+/** The Clusters of `clusters` whose Pooler is paused now: all that a look between two lists needs. */
+export const pausedOf = (clusters: readonly KubeObject[], states: GuardStates): KubeObject[] =>
+    clusters.filter((cluster) => states.get(keyOf(cluster))?.kind === 'paused');
+
+/**
+ * The same look at the given Clusters only, as they were when last listed:
+ * between two lists, the ones with a paused Pooler, whose primary's pod is
+ * what matters then.
+ */
+export async function guardClusters(kube: Kube, states: GuardStates, clusters: readonly KubeObject[], nowMs: number): Promise<PassLog[]> {
     const logs: PassLog[] = [];
-    for (const cluster of clusters.value) {
+    for (const cluster of clusters) {
         const namespace = cluster.metadata.namespace ?? '';
         const name = cluster.metadata.name;
-        const key = `${namespace}/${name}`;
-        seen.add(key);
+        const key = keyOf(cluster);
         const status = (cluster as ClusterFields).status;
         const state = states.get(key) ?? IDLE;
         const restarting = RESTART_PHASES.includes(status?.phase ?? '');
@@ -178,9 +201,6 @@ export async function guardTick(kube: Kube, states: GuardStates, nowMs: number):
             });
         }
         states.set(key, next.state);
-    }
-    for (const key of [...states.keys()].filter((known) => !seen.has(known))) {
-        states.delete(key);
     }
     return logs;
 }
@@ -222,9 +242,24 @@ export const PAUSED_INTERVAL_MS = 250;
 export async function runGuard(kube: Kube, log: (entry: PassLog) => void, signal: AbortSignal, now: () => number = Date.now): Promise<void> {
     (await resumeLeftovers(kube)).forEach(log);
     const states: GuardStates = new Map();
+    const wait = (ms: number) => sleep(ms, undefined, { signal }).catch(() => undefined);
     while (!signal.aborted) {
-        (await guardTick(kube, states, now())).forEach(log);
-        const paused = [...states.values()].some((state) => state.kind === 'paused');
-        await sleep(paused ? PAUSED_INTERVAL_MS : WATCH_INTERVAL_MS, undefined, { signal }).catch(() => undefined);
+        const listedAt = now();
+        const clusters = await kube.listObjects('postgresql.cnpg.io/v1', 'Cluster', OURS);
+        if (clusters.ok) {
+            (await guardListed(kube, states, clusters.value, listedAt)).forEach(log);
+        } else {
+            log({ msg: 'restart guard: cannot list the Clusters', error: clusters.error });
+        }
+        // Until the next list, only the paused Databases' pods are read: one request each, not every Cluster.
+        while (!signal.aborted && now() - listedAt < WATCH_INTERVAL_MS) {
+            const paused = clusters.ok ? pausedOf(clusters.value, states) : [];
+            if (paused.length === 0) {
+                await wait(WATCH_INTERVAL_MS - (now() - listedAt));
+                break;
+            }
+            await wait(PAUSED_INTERVAL_MS);
+            (await guardClusters(kube, states, paused, now())).forEach(log);
+        }
     }
 }

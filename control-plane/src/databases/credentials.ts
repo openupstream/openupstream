@@ -56,21 +56,13 @@ export const appVerifierSalt = (databaseId: Id): Buffer => createHash('sha256').
 const sealedName = (databaseId: Id): string => `database-app/${databaseId}`;
 
 /**
- * Gives a new Database its `app` password. Nothing changes for one that
- * has a password, nor could it: the Services already run with it.
+ * A new `app` password for the Database with this id, sealed: stored with
+ * the row when it is inserted (`createDatabase`), so the operator never
+ * sees the Database without it. A Database keeps the password it was
+ * created with: its Services run with it.
  */
-export async function createAppPassword(
-    pool: pg.Pool,
-    kek: KeyEncryptionKey,
-    database: { readonly id: Id; readonly projectId: Id },
-): Promise<Result<void, SecretStoreError>> {
-    const sealed = await sealProjectValue(pool, kek, database.projectId, sealedName(database.id), generatePassword());
-    if (!sealed.ok) {
-        return sealed;
-    }
-    await pool.query('update databases set app_password = $2 where id = $1 and app_password is null', [database.id, sealed.value]);
-    return ok(undefined);
-}
+export const sealNewAppPassword = (pool: pg.Pool, kek: KeyEncryptionKey, database: { readonly id: Id; readonly projectId: Id }): Promise<Result<Buffer, SecretStoreError>> =>
+    sealProjectValue(pool, kek, database.projectId, sealedName(database.id), generatePassword());
 
 export interface AppCredentials {
     readonly databaseId: Id;
