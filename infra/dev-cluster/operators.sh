@@ -10,7 +10,8 @@
 #   compute Sites (once on a single node, ARCHITECTURE.md, decision 112);
 #   the Barman Cloud Plugin stays at one replica (only archiving waits for it).
 #   With one replica each, a Site failure took DNS and failover down until
-#   the pod was evicted (measured 2026-10-17).
+#   the pod was evicted (measured 2026-10-17). Each gets a
+#   PodDisruptionBudget, so a drain stops one of them at a time.
 #
 # Then creates the platform's backup credentials Secret from the AWS CLI
 # profile `openupstream-backup` (Hetzner Object Storage, separate project).
@@ -65,6 +66,18 @@ spread cnpg-system cnpg-controller-manager '{"app.kubernetes.io/name": "cloudnat
 # so the scale survives k3s re-applying it.
 kubectl -n kube-system scale deployment coredns --replicas="$SITE_REPLICAS" >/dev/null
 kubectl -n kube-system rollout status deployment coredns --timeout=5m
+
+# A drain stops one of them at a time, the next only once the first one's
+# replacement is ready (ARCHITECTURE.md, decision 157). A pod that is not
+# ready may always go, so a broken one never blocks a drain.
+budget() { # namespace, name, pod labels
+  kubectl -n "$1" apply -f - >/dev/null <<EOF
+{"apiVersion": "policy/v1", "kind": "PodDisruptionBudget", "metadata": {"name": "$2"},
+ "spec": {"maxUnavailable": 1, "unhealthyPodEvictionPolicy": "AlwaysAllow", "selector": {"matchLabels": $3}}}
+EOF
+}
+budget cnpg-system cnpg-controller-manager '{"app.kubernetes.io/name": "cloudnative-pg"}'
+budget kube-system coredns '{"k8s-app": "kube-dns"}'
 
 # set -e does not see a failure inside $(…) in an argument; read first.
 ACCESS_KEY_ID=$(aws configure get aws_access_key_id --profile openupstream-backup)

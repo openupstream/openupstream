@@ -96,6 +96,13 @@ alertmanager:
             send_resolved: false
     templates:
       - /etc/alertmanager/config/*.tmpl
+  # A drain stops one replica at a time (ARCHITECTURE.md, decision 157);
+  # maxUnavailable instead of the chart's minAvailable, which would block
+  # the drain of a single node's only replica.
+  podDisruptionBudget: &budget
+    enabled: true
+    minAvailable: null
+    maxUnavailable: 1
   alertmanagerSpec:
     replicas: 2
     # SMTP password and ping URL, written by monitoring.sh.
@@ -118,6 +125,7 @@ alertmanager:
       limits: {memory: 128Mi}
 
 prometheus:
+  podDisruptionBudget: *budget
   prometheusSpec:
     replicas: 2
     retention: 15d

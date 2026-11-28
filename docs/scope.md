@@ -4,7 +4,8 @@ Terms are defined in [GLOSSARY.md](../GLOSSARY.md). Customer data stays in
 the EU; today everything runs in Germany, in three Sites at three providers
 (Falkenstein, Frankfurt region, Nuremberg). Losing any one of them does not
 stop your Databases or Buckets, nor Services with two or more replicas;
-single-replica Services restart in the other Site. A self-hosted
+single-replica Services restart in the other Site. Updates of the
+platform and its nodes do not stop them either (decision 160). A self-hosted
 installation runs in Sites of its own choosing, two compute Sites or more
 (decision 150); `oup sites` and the dashboard list them, and the
 dashboard's "Sites & nodes" page shows its admins every node and what is
@@ -25,7 +26,9 @@ deletes it all.
    that follows the memory (a quarter core per GB, no CPU limit), storage growing by itself as it fills (unless the customer
    turns that off or sets a maximum), backups and point-in-time
    recovery into a new Database (also of a deleted one, within the backup
-   retention window), pgvector enabled.
+   retention window), pgvector enabled. Minor versions are updated for you;
+   the major version is shown and changes only when you ask (minutes of
+   downtime), or after notice before it reaches end of life.
 2. **Object storage**: S3-compatible Buckets (Garage), every object stored in
    three Sites. Reads and writes keep working when one Site is down. Each
    Bucket has an access key of its own and is reached at its own hostname,
@@ -37,7 +40,9 @@ deletes it all.
    separate product.
 4. **Containers**: the customer's image from any registry, in three modes:
    Service (HTTP), Cron job, One-off job. gVisor sandbox. Scales 1..N, no
-   scale-to-zero. Each pod has 2 GiB of scratch disk and 300 Mbit/s each
+   scale-to-zero. A deploy starts the new version before it stops the old
+   one, unless the Service is set to stop first (for apps that must never
+   run twice). Each pod has 2 GiB of scratch disk and 300 Mbit/s each
    way, less while its node's uplink is nearly full.
 5. **Routing**: `Domain → [(path prefix → Bucket | Service)]` per Project,
    automatic TLS. Every Project gets a default hostname; custom domains are

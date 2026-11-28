@@ -198,6 +198,40 @@ whose nodes do not match it.
   until DNS changes. A front with an address that outlives a Site is the
   preferred way to shorten this after v1 (open question 2).
 
+### Updates and node maintenance
+
+How a new version reaches a running installation without customers
+noticing (decisions 157–160):
+
+- openupstream's own components (control plane, operators, dashboard,
+  billing service) are images: an update is a new digest, which Kubernetes
+  rolls out one pod at a time. The control plane, dashboard and madAuth run
+  two replicas, so one serves while the other is replaced. Old and new
+  versions run side by side during the rollout, against the same Database,
+  so a release's migrations must work with the release before it: expand
+  first, contract in a later release, e.g. add a column now and drop the
+  old one only once no running version reads it (decision 160).
+- Components from elsewhere (CloudNativePG, Traefik, Garage, cert-manager,
+  TopoLVM, the monitoring charts) are pinned and upgraded with their
+  manifests or charts, also one pod at a time. A new Postgres minor image
+  restarts each Database, standby first, then the primary in place
+  (decision 110), while the restart guard holds the clients' connections
+  (decision 156).
+- Nodes are updated in place (k3s, the operating system, gVisor), never
+  reinstalled, one at a time: out of DNS, cordoned, single-replica Services
+  restarted elsewhere first, drained, updated, back, and the primaries
+  switched back to their Home site
+  (`docs/runbooks/node-maintenance.md`, a draft until its first run). Each
+  Site has one node, so that is a planned Site outage: what the failover
+  test proves, with the moves made before instead of after.
+- PodDisruptionBudgets (decision 157) keep a drain from stopping two pods
+  of one group at once: it waits until the first one's replacement is
+  ready.
+- What still means downtime: a Postgres major upgrade, minutes at a time
+  the customer picks (decision 159); a Service set to stop first, seconds
+  per deploy (decision 158); every k3s restart on a single-node
+  installation.
+
 ## Control plane (`control-plane/`)
 
 Node.js/TypeScript API. Owns the data model: Accounts, Members, Projects,
@@ -590,6 +624,17 @@ digest (#55).
 - Failback is a declarative switchover back to the Home site once it is
   healthy, done from a runbook, not automatically. Writes pause for about
   15 s.
+- Postgres versions (decision 159, designed, not built): a new minor
+  version comes with the platform's image, as a rolling restart. A
+  Database's major version is shown in the API, CLI and dashboard, next to
+  the newest one the platform offers, and changes only when the customer
+  asks. The upgrade is CloudNativePG's offline in-place one (`pg_upgrade
+  --link`): both instances stop for minutes, the standby is cloned again
+  afterwards, and a failed upgrade goes back to the old image without a
+  restore. Point-in-time recovery does not cross a major version, so the
+  new major's backups go to a folder of their own, with a base backup
+  right after. Before a major's end of life customers are told months
+  ahead, then upgraded in an announced window.
 - Storage is local NVMe through TopoLVM (`infra/topolvm`), as thick
   logical volumes in the volume group `openupstream` on each compute Site
   (decision 109), which lies on a RAID 1 of the server's two disks
@@ -839,7 +884,9 @@ digest (#55).
   preferred node affinity for its Site, so it moves to the other when that
   one fails; two or more have a hard topology spread over the compute
   Sites that leaves out a dark Site's tainted node (as in decision 46).
-  Rollouts start the new pod before stopping the old one (decision 146):
+  Rollouts start the new pod before stopping the old one (decision 146;
+  designed, not built: a Service may choose to stop first instead,
+  decision 158):
   an old pod with a port keeps serving for 5 s after it leaves its Service's
   endpoints (a `preStop` sleep, done by the kubelet), so Traefik has
   stopped sending to it before it gets SIGTERM, and every pod has 120 s
@@ -853,7 +900,9 @@ digest (#55).
   Job's run ends. Nothing a container writes there outlives its pod
   anyway; data belongs in a Database or a Bucket. The scheduler counts
   100 MiB of it per pod, so the limit is not reserved on the node's disk.
-  Pods mount no
+  A Service with two or more replicas also gets a PodDisruptionBudget
+  `svc-<id>` (decision 157), so draining a node stops one of its pods at a
+  time. Pods mount no
   ServiceAccount token, read `project-secrets` with `envFrom` and do not
   start before it exists; a version of the Project's Secrets on the pod
   template rolls the Service when they change. The control plane records
@@ -1506,6 +1555,10 @@ Short form here; longer ADRs go in `docs/adr/` and are linked from their row.
 | 154 | The predefined roles `pg_read_all_data` and `pg_write_all_data` get `CONNECT` on the application database when a Cluster is created (`postInitApplicationSQL`, next to pgvector) | `CONNECT` for `PUBLIC` again; a CloudNativePG `Database` resource with `permissions` per role; granting each caller's role as it is created | CloudNativePG 1.31 revokes `CONNECT` from `PUBLIC` on the databases it creates, and a caller's `read` or `write` role (decision 126) is only a member of those predefined roles, so on a new Database it was refused with `permission denied for database` (`owner` roles inherit from `app`, which owns it). One statement at bootstrap covers every such role, now and later, where a `Database` resource would be a fifth object per Database with a list to keep in step with the roles, and CloudNativePG runs no SQL after bootstrap. Tried on the dev cluster (2026-11-28): `PUBLIC` cannot connect, a member of `pg_read_all_data` connects and reads, a role without it is refused. Costs: any role put into those predefined roles may connect, which only our roles are; a restored Database keeps its source's privileges, so one whose source was created by 1.31 before this change would lack the grant (no such Database exists) |
 | 155 | A Site's description is stored in the control plane's Postgres (`site_descriptions`) and set by the installation's admins on the "Sites & nodes" page (`PUT /v1/admin/sites/{id}`, any Site with a node); the annotation `openupstream.io/site-description` is gone. Site ids are permanent: the Incus scripts default to `site-1` … `site-3` (VMs `oup-site-1` …), a single node to `site-1`, and the docs say to choose ids once ([ADR-0009](docs/adr/0009-site-names-in-the-control-plane.md)) | the page patching the annotation (needs `patch` on nodes and an admission policy); only showing the `kubectl annotate` command; defaults named after production's providers or the host machine | labels say where things run and belong to the node setup; a name is display text and belongs with everything else people edit through the API, so the control plane keeps read-only access to nodes. A name survives its Site's nodes being replaced. An id is in labels, rows, placement rules and Garage's layout, so it cannot follow a move: a default that names a place is wrong wherever the scripts run elsewhere. Costs: a table and an admin endpoint; renaming an id stays unsupported |
 | 156 | The control plane generates the `app` user's password of a new Database, seals it with the Project's data key (`databases.app_password`, written in the row's own insert, so the operator never sees the Database without it) and writes two Secrets from it in the secrets pass and right after the create: `db-<id>-app` with the password, under the name CloudNativePG gave its own, and `db-<id>-app-scram` with its SCRAM-SHA-256 verifier, salted from the Database's id; the row tells the operator (`appCredentials`), and the Cluster names the verifier Secret as its application Secret (`bootstrap.initdb.secret`). Both Secrets go with the Database | CloudNativePG's generated password (until now); the same with `cnpg.io/passwordPassthrough`; a `cert` rule in `pg_hba` for the Pooler's client certificate, mapped to every role; the operator deriving the verifier from CloudNativePG's Secret; setting the old verifier again with SQL after each restart; a fix in CloudNativePG; found afterwards in CloudNativePG's own issue and not tried here: Services logging in as a managed role that is a member of `app` (a managed role's applied password is recorded in the Cluster's status, so it is not set again; it would change the user every Service connects as), and the Pooler's `authQuerySecret` with the cleartext password (deprecated) | CloudNativePG's instance manager sets the password from the application Secret whenever an instance becomes primary (it remembers the Secret's version only in memory) and encodes a cleartext one with a new random salt, also with pass-through, where Postgres salts it. PgBouncer logs in to Postgres with the SCRAM keys of the client's own login, so after a new salt its next login failed with `password authentication failed`: the client whose query caused it was disconnected and the others got `server login has been failing`, after every restart, switchover and failover. That made holding connections behind a paused Pooler pointless (decision 152). A value that already is a verifier is applied unchanged (`EnsureEncryptedPassword`). Measured on the dev cluster (2026-11-28): the salt changed with a restart and with a switchover, and with neither once the Secret held a verifier; a held connection then survived both. `pg_hba` cannot tell the Pooler from a direct client of the same user, and the operator has no business reading Secrets in every namespace. The control plane already seals and renders the callers' role passwords the same way (decision 126). Costs: one more secret the control plane holds, and a lost key-encryption key now also loses the `app` passwords (the Databases keep running; a new password would have to be set); only new Databases get it: one from before keeps CloudNativePG's password, since its Services already run with it, and the platform's own two are created before the control plane exists; a restored Database gets a password of its own, applied once its restore has finished; between the create and the first Secrets write the Cluster waits for its Secret (49 s to `ready` for the first Database of a new Project on the dev cluster, as before); the verifier's salt is derived, not random, which a salt may be; the passwords must need no SASLprep, which ours (URL-safe base64) do not; CloudNativePG has it as [issue 11676](https://github.com/cloudnative-pg/cloudnative-pg/issues/11676), open since 2026-10-16 and reproduced there on 1.30.0 and 1.30.1, with a fix proposed (skip the `ALTER ROLE` when the stored verifier still matches the Secret) and no release yet: once one has it, CloudNativePG's own password would do again, also for the Databases from before and the platform's own |
+| 157 | Every group of pods that must stay up while a node drains gets a PodDisruptionBudget with `maxUnavailable: 1` and `unhealthyPodEvictionPolicy: AlwaysAllow`: each customer Service with two or more replicas (`svc-<id>`, written and pruned by the Services operator), the control plane, dashboard and madAuth (next to their Deployments), Prometheus, Alertmanager and Loki (chart values), CoreDNS and the CloudNativePG operator (`infra/dev-cluster/operators.sh`). Databases keep CloudNativePG's own (`enablePDB`, on by default), which switch a primary over before its node drains. Built 2026-11-28, unit-tested and rendered, not yet run on a cluster | none; `minAvailable: 1`; a budget for single replicas too | without one, a drain may stop the second replica while the first one's replacement is still starting; `minAvailable: 1` blocks the drain of a single replica forever, `maxUnavailable: 1` never does; `AlwaysAllow` lets a crash-looping pod go, so no customer's broken Service blocks a node's maintenance ([Kubernetes: disruptions](https://kubernetes.io/docs/concepts/workloads/pods/disruptions/)) |
+| 158 | A Service's rollout is `overlap` (the default, as today: the new pod starts before the old one stops) or `stopFirst` (Kubernetes `Recreate`: the old pods stop, then the new ones start, so seconds of downtime per deploy and per node maintenance), a field of the Service in the API, CLI and dashboard. Designed, not built | overlap only, with the app's own lock where it must run once; stop first by default for single replicas | overlap is not slower than stopping first: the old pod's shutdown (up to 120 s, decision 146) runs after the new one is ready. But some apps must never run twice, such as a bot polling one chat or a scheduler without a lock; as [Fly.io](https://fly.io/docs/reference/configuration/) (`strategy = "immediate"`), [Railway](https://docs.railway.com/reference/deployments) (overlap seconds) and [Heroku](https://devcenter.heroku.com/articles/preboot) (Preboot) let a customer choose |
+| 159 | A Database's Postgres major version is shown in the API, CLI and dashboard with the newest one offered, and is upgraded only when the customer asks (a button, an API call), by CloudNativePG's offline in-place upgrade (`pg_upgrade --link`); new Databases get the newest major; minor versions follow the platform's image without asking (decision 110). Backups of the new major go to a folder of their own, with a base backup right after. Before a major's end of life (PostgreSQL supports each for five years) customers are told months ahead in the dashboard and by e-mail, then upgraded in an announced window. Designed, not built | upgrading majors without asking; logical replication into a new Database (online, but new connection details and more moving parts); end-of-life majors kept with a warning, or for a surcharge like [AWS RDS Extended Support](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/extended-support.html) | a major upgrade means minutes of downtime and can change behaviour, so the customer picks the time, as on [Supabase](https://supabase.com/docs/guides/platform/upgrading) and [Heroku](https://devcenter.heroku.com/articles/heroku-postgres-version-support), which also upgrade after notice at end of life; carrying two or three majors keeps the images and CloudNativePG versions we support few, and no Database runs without security fixes ([PostgreSQL versioning policy](https://www.postgresql.org/support/versioning/)) |
+| 160 | Platform updates reach a running installation without downtime: our own components roll one pod at a time, a release's migrations work with the release before it (expand, then contract in a later release), and nodes are updated in place, one at a time, by `docs/runbooks/node-maintenance.md` (a draft until its first run), never reinstalled | maintenance windows with downtime; migrations as a separate step before the rollout; replacing nodes with new ones (immutable images) | old and new replicas share one Database during a rollout; replacing a node needs a spare server per Site and a new copy of every Database volume on it, while an in-place update keeps the volumes and needs only the moves the failover test already proves |
 
 ## Open questions
 
@@ -1780,6 +1833,15 @@ Decisions table once it is settled.
     Sites, default 2, billed per instance, changeable later, as
     DigitalOcean's standby nodes or Aiven's plans), what one instance
     without failover costs, and whether synchronous replication is offered.
+29. **Automating node maintenance.** `docs/runbooks/node-maintenance.md`
+    is done by hand for now. Rancher's
+    [system-upgrade-controller](https://github.com/rancher/system-upgrade-controller)
+    upgrades k3s one node at a time (cordon, drain, upgrade, uncordon), and
+    [kured](https://kured.dev/docs/) reboots nodes after operating system
+    updates, one at a time; neither takes a node out of DNS, restarts
+    single-replica Services first or switches primaries back. Open: whether
+    to adopt them once the runbook has run a few times, and `dns.sh`
+    leaving out cordoned nodes, so step 2 becomes a script.
 
 ## Build order
 
@@ -2014,6 +2076,12 @@ Decisions table once it is settled.
    own keep CloudNativePG's password; the guard pausing a failback
    switchover by itself; an in-place restart of Postgres for a changed
    parameter, not tried; dropping our own `app` password again once CloudNativePG's issue 11676 is fixed in a release we run.
+7. Updates without downtime (decisions 157–160). PodDisruptionBudgets
+   built (2026-11-28), not yet run on a cluster. Open: the first run of
+   `docs/runbooks/node-maintenance.md` on the dev cluster, which turns the
+   draft into a runbook; a Service's `stopFirst` rollout (decision 158);
+   Postgres major versions in the API and dashboard, the upgrade, and the
+   end-of-life notice (decision 159).
 
 ### After v1: ProjectMatch
 

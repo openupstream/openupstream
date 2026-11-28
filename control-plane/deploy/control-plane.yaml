@@ -187,6 +187,19 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
 ---
+# A drain stops one replica at a time, the next only once the first one's
+# replacement is ready (ARCHITECTURE.md, decision 157).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: control-plane
+  namespace: project-00000000-0000-4000-8000-000000000002
+spec:
+  maxUnavailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels: {app.kubernetes.io/name: control-plane}
+---
 apiVersion: v1
 kind: Service
 metadata:

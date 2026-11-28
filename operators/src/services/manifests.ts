@@ -10,7 +10,9 @@
  * Per Service: a Deployment `svc-<id>` running the image pinned by digest
  * under the `gvisor` RuntimeClass, with a disk limit and a bandwidth limit
  * (decisions 121 and 122), and a Kubernetes Service of the same name, which
- * the Routes operator sends its Routes to.
+ * the Routes operator sends its Routes to. A Service with two or more
+ * replicas also gets a PodDisruptionBudget of the same name, so draining a
+ * node for maintenance stops one of its pods at a time (decision 157).
  *
  * Two or more replicas are spread over both compute Sites; a single one
  * prefers its Site (the row's `site`) and moves to the other when that
@@ -59,8 +61,9 @@ export const PRE_STOP_SLEEP_SECONDS = 5;
 /** From deletion to SIGKILL, the preStop sleep included: what a pod has to finish its requests or work. */
 export const TERMINATION_GRACE_PERIOD_SECONDS = 120;
 
-/** The kinds this operator prunes, a Deployment before the Service that fronts it. */
+/** The kinds this operator prunes: a PodDisruptionBudget before its Deployment, a Deployment before the Service that fronts it. */
 export const PRUNED_KINDS = [
+    { apiVersion: 'policy/v1', kind: 'PodDisruptionBudget' },
     { apiVersion: 'apps/v1', kind: 'Deployment' },
     { apiVersion: 'v1', kind: 'Service' },
     { apiVersion: 'networking.k8s.io/v1', kind: 'NetworkPolicy' },
@@ -167,8 +170,31 @@ const kubernetesService = (row: ServiceRow, port: number): KubeObject => ({
 });
 
 /**
+ * Lets a drain evict one pod of a Service with two or more replicas at a
+ * time, the next only once the replacement is ready. A pod that is not
+ * ready (a crash loop) may always be evicted, so a customer's broken
+ * Service never blocks a node's maintenance. A single replica gets none:
+ * there is nothing to keep running while it moves.
+ */
+const disruptionBudget = (row: ServiceRow): KubeObject => ({
+    apiVersion: 'policy/v1',
+    kind: 'PodDisruptionBudget',
+    metadata: {
+        name: serviceObjectName(row.service),
+        namespace: projectNamespace(row.project.id),
+        labels: { ...labels(row.project.id), [SERVICE_ID_LABEL]: row.service.id },
+    },
+    spec: {
+        maxUnavailable: 1,
+        selector: { matchLabels: { [SERVICE_ID_LABEL]: row.service.id } },
+        unhealthyPodEvictionPolicy: 'AlwaysAllow',
+    },
+});
+
+/**
  * Applied in this order, per Project: its namespace, NetworkPolicies, then
- * each Service's Deployment and, when it has a port, its Kubernetes Service.
+ * each Service's Deployment, its PodDisruptionBudget when it has two or
+ * more replicas and, when it has a port, its Kubernetes Service.
  */
 export function planServices(rows: readonly ServiceRow[], nodes: NodeBlocks): KubeObject[] {
     const projects = [...new Map(rows.map((row) => [row.project.id, row.project])).values()];
@@ -177,6 +203,10 @@ export function planServices(rows: readonly ServiceRow[], nodes: NodeBlocks): Ku
             ...projectObjectsFor(project),
             customerEgressPolicy(project.id, 'service-egress', SERVICES_COMPONENT, labels(project.id), nodes),
         ]),
-        ...rows.flatMap((row) => [deployment(row), ...(row.service.port === null ? [] : [kubernetesService(row, row.service.port)])]),
+        ...rows.flatMap((row) => [
+            deployment(row),
+            ...(row.service.replicas < 2 ? [] : [disruptionBudget(row)]),
+            ...(row.service.port === null ? [] : [kubernetesService(row, row.service.port)]),
+        ]),
     ];
 }

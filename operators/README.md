@@ -56,7 +56,8 @@ Traefik already implements is configured, not reimplemented.
   nodes on 80 and 443 only, decision 105); per Service, a Deployment
   `svc-<id>` with the image pinned by digest under the `gvisor`
   RuntimeClass and, unless it is a worker without a port, a readiness
-  probe and a Kubernetes Service.
+  probe and a Kubernetes Service; with two or more replicas, a
+  PodDisruptionBudget, so a drain stops one pod at a time (decision 157).
   `reconcileServices` applies them and deletes the objects labelled
   `openupstream.io/component=services` that are no longer wanted.
 - `databaseEnv` (`src/kubernetes.ts`, decision 97): the environment both
