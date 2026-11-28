@@ -440,7 +440,7 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         }
         // A grow resizes the running pods (decision 152): the Cluster has
         // the new size at once, its pods once their node gave it to them.
-        const resizing = await kube.podsResizing(projectNamespace(database.projectId), clusterName(database));
+        const resizing = await kube.podsResizing(projectNamespace(database.projectId), clusterName(database), database.memoryMb);
         if (!resizing.ok) {
             deps.log?.({ msg: "cannot read the Cluster's pods", database: database.id, error: resizing.error });
             return 'unknown';

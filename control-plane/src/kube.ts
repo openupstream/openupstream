@@ -152,12 +152,12 @@ export interface ControlPlaneKube {
     /** undefined when the Cluster does not exist (yet). */
     readCluster(namespace: string, name: string): Promise<Result<ClusterStatus | undefined, string>>;
     /**
-     * How many pods of the Cluster `name` have not got the resources their
-     * spec asks for yet: a grow resizes them in place (decision 152), and
-     * one the node has no room for waits on the pod, where the Cluster's
-     * status does not show it.
+     * How many instances of the Cluster `name` do not run with `memoryMb`
+     * yet: a grow resizes the pods in place (decision 152), and one the
+     * node has no room for waits on the pod, where the Cluster's status
+     * does not show it.
      */
-    podsResizing(namespace: string, name: string): Promise<Result<number, string>>;
+    podsResizing(namespace: string, name: string, memoryMb: number): Promise<Result<number, string>>;
     /** The recovery window of the archive of the Cluster `name` in its ObjectStore of that name; undefined when there is no ObjectStore. */
     readRecoveryWindow(namespace: string, name: string): Promise<Result<RecoveryWindow | undefined, string>>;
     /** undefined when the Deployment does not exist (yet). */
@@ -334,16 +334,34 @@ interface PodObject {
     status?: {
         phase?: string;
         startTime?: Date | string;
-        containerStatuses?: { name: string; restartCount?: number; state?: { running?: unknown; terminated?: unknown; waiting?: unknown } }[];
+        containerStatuses?: {
+            name: string;
+            restartCount?: number;
+            state?: { running?: unknown; terminated?: unknown; waiting?: unknown };
+            /** What the container runs with now, which lags its spec during an in-place resize. */
+            resources?: { limits?: Record<string, string> };
+        }[];
         conditions?: { type: string; status: string }[];
     };
 }
 
 /** The kubelet's conditions on a pod whose in-place resize is not done: waiting for room, or being applied. */
 const RESIZE_CONDITIONS: readonly string[] = ['PodResizePending', 'PodResizeInProgress'];
+/** The container of an instance pod that runs Postgres, as CloudNativePG names it. */
+const POSTGRES_CONTAINER = 'postgres';
 
-export const isResizing = (pod: Pick<PodObject, 'status'>): boolean =>
-    (pod.status?.conditions ?? []).some((condition) => RESIZE_CONDITIONS.includes(condition.type) && condition.status === 'True');
+/**
+ * Whether an instance pod does not run with `memoryMb` yet: its Postgres
+ * container reports another memory limit, or the kubelet says a resize is
+ * under way. The limit is compared because, right after a grow, a pod has
+ * neither its new spec nor a condition for a moment (dev cluster,
+ * 2026-11-28). A container that reports no limit counts by its conditions.
+ */
+export const isResizing = (pod: Pick<PodObject, 'status'>, memoryMb: number): boolean => {
+    const limit = pod.status?.containerStatuses?.find((container) => container.name === POSTGRES_CONTAINER)?.resources?.limits?.['memory'];
+    const differs = limit !== undefined && bytesOf(limit) !== memoryMb * 1024 ** 2;
+    return differs || (pod.status?.conditions ?? []).some((condition) => RESIZE_CONDITIONS.includes(condition.type) && condition.status === 'True');
+};
 
 
 type Amounts = Record<string, string> | undefined;
@@ -434,12 +452,12 @@ export function controlPlaneKube(config: KubeConfig, { timeoutMs = KUBE_CALL_TIM
                 phase: cluster.status?.phase,
             });
         },
-        podsResizing: async (namespace, name) => {
+        podsResizing: async (namespace, name, memoryMb) => {
             const result = await within(
-                api.list<PodObject>('v1', 'Pod', namespace, undefined, undefined, undefined, undefined, `cnpg.io/cluster=${name}`),
+                api.list<PodObject>('v1', 'Pod', namespace, undefined, undefined, undefined, undefined, `cnpg.io/cluster=${name},cnpg.io/podRole=instance`),
                 timeoutMs,
             );
-            return result.ok ? ok(result.value.items.filter(isResizing).length) : err(result.error.message);
+            return result.ok ? ok(result.value.items.filter((pod) => isResizing(pod, memoryMb)).length) : err(result.error.message);
         },
         readRecoveryWindow: async (namespace, name) => {
             const result = await within(
