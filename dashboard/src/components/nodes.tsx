@@ -152,8 +152,8 @@ export function NodesPage() {
             <h2>Sites</h2>
             <p>
                 <small>
-                    A Site is a place that can fail as a whole, not a machine; for example, one data centre of one provider. A Site&apos;s id can only be set
-                    during creation. Its name is what everyone sees next to the id; change it here anytime.
+                    A Site is a place that can fail as a whole, not a machine; for example, one datacenter of one provider. A Site&apos;s id is set when its
+                    first node joins and can&apos;t be changed. Its name is what everyone sees next to the id; change it here anytime.
                 </small>
             </p>
             <table>
