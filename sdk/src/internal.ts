@@ -18,6 +18,15 @@ export const clusterName = (database: Pick<Database, 'id'>): string => `db-${dat
 /** Cannot share the Cluster's name, nor `<cluster>-rw`, which the Cluster's own Service takes. */
 export const poolerName = (database: Pick<Database, 'id'>): string => `${clusterName(database)}-pooler`;
 
+/**
+ * The CPU each instance of a Database is guaranteed (decision 151): one core
+ * per 4 GiB of its memory, the ratio of the compute servers (16 threads,
+ * 64 GB), as a Kubernetes request with no limit, so it uses idle cores too.
+ */
+export const DATABASE_MILLICORES_PER_GIB = 250;
+
+export const databaseCpuMillicores = (memoryMb: number): number => Math.ceil((memoryMb * DATABASE_MILLICORES_PER_GIB) / 1024);
+
 /** The Cluster's own Service to its primary, which CloudNativePG names. */
 export const primaryServiceName = (database: Pick<Database, 'id'>): string => `${clusterName(database)}-rw`;
 

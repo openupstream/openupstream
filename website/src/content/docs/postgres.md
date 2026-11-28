@@ -17,7 +17,8 @@ standby runs in the Frankfurt region.
   location that runs neither instance. You restore to any moment within the
   retention window, into a new Database, also for a Database you deleted.
 - **Resizing without a migration.** Memory and storage change through one
-  command. Storage grows online, and by itself as the Database fills up,
+  command. Each instance is guaranteed a quarter core per GB of memory and
+  uses idle cores beyond that, with no CPU limit. Storage grows online, and by itself as the Database fills up,
   unless you turn that off or set a maximum.
 - **pgvector** is enabled in every Database.
 - **Always on.** A Database never sleeps, so the first query is as fast as
@@ -38,6 +39,8 @@ standby runs in the Frankfurt region.
 - **Storage only grows.** It cannot be made smaller again.
 - **Changing memory restarts both instances** one after the other. Writes
   pause for seconds.
+- **CPU follows memory.** There is no separate CPU size: for more
+  guaranteed CPU, give the Database more memory.
 - **No scale to zero.** An idle Database costs its memory and storage.
 
 ## Billing

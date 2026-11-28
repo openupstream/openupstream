@@ -103,7 +103,7 @@ compute Sites and three Sites, exactly one default Site) and names the
 plane checks the same rules: the dashboard's "Sites & nodes" page (for
 madAuth's admins) marks every node that needs attention with the command
 that fixes it, and an alert per rule fires after 10 minutes (decision
-151). The
+153). The
 [infra/dev-cluster](../infra/dev-cluster/README.md#sites) README has the
 details and how to move the default Site. A cluster set up before needs
 the labels once:

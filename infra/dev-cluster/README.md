@@ -77,7 +77,7 @@ Loki keep three copies in three Sites. `single-node` needs exactly one
 node, labelled compute and default.
 
 While the cluster runs, the control plane checks the same rules (decision
-151): the dashboard's "Sites & nodes" page (`/nodes`, for madAuth's admins)
+153): the dashboard's "Sites & nodes" page (`/nodes`, for madAuth's admins)
 shows every node and marks the ones that need attention with the command
 that fixes them, e.g. a node joined by hand without its labels, and the
 alerts of the group `sites` in `infra/monitoring/rules.yaml` fire after 10

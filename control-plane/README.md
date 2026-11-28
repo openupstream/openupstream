@@ -59,7 +59,7 @@ waitlist, see below). At startup it applies pending migrations, seeds the
 platform's own Account, Project and Database rows (`src/platform.ts`) and
 gives every Project without one its default Domain, then listens on `PORT`
 (8080, public API), `INTERNAL_PORT` (8081) and `METRICS_PORT` (8083, the
-Site checks for Prometheus, decision 151), and with `WAITLIST_URL` on
+Site checks for Prometheus, decision 153), and with `WAITLIST_URL` on
 `WAITLIST_PORT` (8082).
 
 In the cluster it runs from the image built by `Dockerfile` (GitHub Actions

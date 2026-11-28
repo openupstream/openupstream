@@ -81,7 +81,7 @@ import {
 } from '../accounts/tokens.js';
 import { type CallerGrant, changeRole, grantsOf, listMembers, memberOf, removeGrant, removeMember, setGrant } from '../accounts/members.js';
 import { type BucketRecord, createBucket, deleteBucket, getBucket, listBuckets } from '../buckets/store.js';
-import { GiB, MiB, roomForGrowth, roomForNew } from '../databases/capacity.js';
+import { GiB, MiB, databaseMemoryRoom, roomForGrowth, roomForNew } from '../databases/capacity.js';
 import { checkRestore, restoreCheckMessage } from '../databases/restore.js';
 import { forgetDroppedRoles, roleFor, roleSecretManifest } from '../databases/roles.js';
 import { createDatabase, deleteDatabase, getDatabase, getRestoreSource, listDatabases, updateDatabase } from '../databases/store.js';
@@ -438,9 +438,10 @@ export function createApi(deps: ApiDeps): Hono<Env> {
     };
     /**
      * Whether the compute Sites have room for the Database at `wanted`
-     * (decisions 109 and 110): a new one needs its storage and memory on a
-     * node in its Home site and in one other compute Site; a grow needs the
-     * extra on the nodes holding its instances. A message for the 507 when not; undefined when there is
+     * (decisions 109, 110 and 151): a new one needs its storage, memory and
+     * the CPU share that comes with it on a node in its Home site and in one
+     * other compute Site; a grow needs the extra on the nodes holding its
+     * instances. A message for the 507 when not; undefined when there is
      * room, the storage is not TopoLVM (then the compute nodes are not
      * known), or Kubernetes cannot be asked: then the size is accepted, as
      * without the check, so a slow API server does not stop Databases from
@@ -454,12 +455,14 @@ export function createApi(deps: ApiDeps): Hono<Env> {
         return { value: checked.ok ? checked.value : undefined };
     };
     const memoryRoom = async (nodes: readonly string[]): Promise<Result<Map<string, number>, string>> => {
-        const free = await Promise.all(nodes.map(async (node) => [node, await kube.memoryFree(node)] as const));
-        const failed = free.find(([, bytes]) => !bytes.ok);
+        const free = await Promise.all(nodes.map(async (node) => [node, await kube.nodeFree(node)] as const));
+        const failed = free.find(([, room]) => !room.ok);
         if (failed !== undefined && !failed[1].ok) {
             return err(failed[1].error);
         }
-        return ok(new Map(free.flatMap(([node, bytes]): [string, number][] => (bytes.ok && bytes.value !== undefined ? [[node, bytes.value]] : []))));
+        return ok(
+            new Map(free.flatMap(([node, room]): [string, number][] => (room.ok && room.value !== undefined ? [[node, databaseMemoryRoom(room.value)]] : []))),
+        );
     };
     const roomCheck = async (wanted: { readonly storageGb: number; readonly memoryMb: number }, target: RoomTarget): Promise<Result<string | undefined, string>> => {
         const { existing, home, sites } = target;
