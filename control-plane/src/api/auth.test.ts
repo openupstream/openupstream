@@ -9,6 +9,7 @@ import {
     accessTokenVerifier,
     apiKeyVerifier,
     madauthAuthenticator,
+    rolesOf,
     sessionVerifier,
 } from './auth.js';
 
@@ -109,7 +110,7 @@ describe('access tokens from the CLI\'s device sign-in', async () => {
     test("the CLI's access token acts for its user like a session", async () => {
         assert.deepEqual(await authenticate(await jwt(ACCESS_TOKEN_TYPE, CLI)), {
             ok: true,
-            value: { subject: 'usr_abc', email: undefined, scopes: undefined },
+            value: { subject: 'usr_abc', email: undefined, scopes: undefined, roles: [] },
         });
     });
 
@@ -131,4 +132,11 @@ describe('access tokens from the CLI\'s device sign-in', async () => {
         const result = await none(await jwt(ACCESS_TOKEN_TYPE, CLI));
         assert.equal(result.ok ? 'ok' : result.error.kind, 'invalid');
     });
+});
+
+test("a token's madAuth roles are its claims' roles, strings only; none without claims", () => {
+    assert.deepEqual(rolesOf({ claims: { roles: ['admin', 7, 'support'] } }), ['admin', 'support']);
+    assert.deepEqual(rolesOf({ claims: { tier: 'gold' } }), []);
+    assert.deepEqual(rolesOf({ claims: 'admin' }), []);
+    assert.deepEqual(rolesOf({}), []);
 });

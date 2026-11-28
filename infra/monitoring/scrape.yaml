@@ -90,3 +90,19 @@ spec:
     - port: metrics
       interval: 30s
       honorLabels: true
+---
+# The control plane's Site checks (ADR-0008): one series per problem with
+# the nodes' Site labels, for the alerts of the group `sites`. Both
+# replicas report the same; the alerts take the max.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: control-plane
+  namespace: monitoring
+spec:
+  namespaceSelector: {matchNames: [project-00000000-0000-4000-8000-000000000002]}
+  selector:
+    matchLabels: {app.kubernetes.io/name: control-plane}
+  podMetricsEndpoints:
+    - port: metrics
+      interval: 60s

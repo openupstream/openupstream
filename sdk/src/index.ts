@@ -8,7 +8,7 @@
  * The API surface is defined here first and implemented in control-plane/.
  */
 
-export const SDK_VERSION = '0.6.0';
+export const SDK_VERSION = '0.7.0';
 
 export * from './model.js';
 export * from './internal.js';
@@ -34,6 +34,7 @@ import type {
     JobRunInput,
     LogEntry,
     LogQuery,
+    NodesReport,
     AccountToken,
     AccountTokenInput,
     AccountTokenPatch,
@@ -189,6 +190,11 @@ export class OpenUpstreamClient {
     /** The compute Sites, where Databases, Services and Jobs can run; one is the default. */
     listSites(): Promise<ApiResult<SiteInfo[]>> {
         return this.#call('GET', '/v1/sites');
+    }
+
+    /** Every node and what is wrong with the Site labels; only for madAuth's `admin` role, signed in (ADR-0008). */
+    listNodes(): Promise<ApiResult<NodesReport>> {
+        return this.#call('GET', '/v1/admin/nodes');
     }
 
     listProjects(): Promise<ApiResult<Project[]>> {

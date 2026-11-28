@@ -25,6 +25,7 @@ test('a complete environment, with defaults for the rest', () => {
     assert.ok(config.ok);
     assert.equal(config.value.port, 8080);
     assert.equal(config.value.internalPort, 8081);
+    assert.equal(config.value.metricsPort, 8083);
     assert.equal(config.value.backup.endpoint, 'https://nbg1.your-objectstorage.com');
     assert.equal(config.value.backup.retention, '30 days');
     assert.deepEqual(config.value.auth, { issuer: env.AUTH_ISSUER, madauthUrl: env.MADAUTH_URL });
@@ -95,7 +96,7 @@ test('every problem is reported at once', () => {
         'SECRETS_KEK is not set',
         'CUSTOMER_DOMAIN is not set',
         'PLATFORM_DOMAIN is not set',
-        'PORT and INTERNAL_PORT must be port numbers',
+        'PORT, INTERNAL_PORT and METRICS_PORT must be port numbers',
     ]);
 });
 

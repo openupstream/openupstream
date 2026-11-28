@@ -5,6 +5,7 @@
 import {
     COMPUTE_SITE_LABEL,
     DEFAULT_SITE_LABEL,
+    QUORUM_ONLY_TAINT as QUORUM_ONLY_TAINT_KEY,
     ZONE_LABEL,
     type Id,
     type Project,
@@ -23,7 +24,7 @@ export { COMPUTE_SITE_LABEL, ZONE_LABEL };
  * only what tolerates it (etcd, Garage, Loki) runs there. Customer facing
  * workloads never tolerate it.
  */
-export const THIRD_SITE_TAINT = { key: 'openupstream.io/third-site', value: 'true', effect: 'NoSchedule' } as const;
+export const QUORUM_ONLY_TAINT = { key: QUORUM_ONLY_TAINT_KEY, value: 'true', effect: 'NoSchedule' } as const;
 
 export const LABELS = {
     projectId: 'openupstream.io/project-id',

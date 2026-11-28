@@ -45,7 +45,7 @@ Nothing here names a Site: the nodes say which there are
 | label `openupstream.io/compute-site=true` | its Site is a compute Site: Databases, Services, Jobs, Traefik, TopoLVM and the platform's pods run there |
 | label `openupstream.io/default-site=true` | its Site is the default Home site, exactly one compute Site |
 | annotation `openupstream.io/site-description` | free text shown next to the id, e.g. `Home VM A` |
-| taint `openupstream.io/third-site=true:NoSchedule` | on every node outside the compute Sites: only etcd, Garage, Loki and the node agents run there |
+| taint `openupstream.io/quorum-only=true:NoSchedule` | on every node outside the compute Sites: only etcd, Garage, Loki and the node agents run there |
 
 The node setup sets them, and nothing else does: the labels and the taint
 as k3s flags when the node joins (k3s applies them only at its first
@@ -76,10 +76,12 @@ CloudNativePG operator) runs in two different compute Sites; Garage and
 Loki keep three copies in three Sites. `single-node` needs exactly one
 node, labelled compute and default.
 
-While the cluster runs, the alerts `SiteNodeWithoutRole` (a node with
-neither the compute label nor the taint, e.g. one joined by hand) and
-`DefaultSiteNotOne` (`infra/monitoring/rules.yaml`) catch labels that
-drifted.
+While the cluster runs, the control plane checks the same rules (decision
+153): the dashboard's "Sites & nodes" page (`/nodes`, for madAuth's admins)
+shows every node and marks the ones that need attention with the command
+that fixes them, e.g. a node joined by hand without its labels, and the
+alerts of the group `sites` in `infra/monitoring/rules.yaml` fire after 10
+minutes.
 
 To move the default Site, label the new one and take the label off the
 old one:

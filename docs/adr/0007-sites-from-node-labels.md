@@ -1,7 +1,9 @@
 # ADR-0007: Sites read from the nodes' labels
 
 Date: 2026-11-27
-Status: accepted
+Status: accepted; amended by ADR-0008 (the taint is now
+`openupstream.io/quorum-only`, the alerts come from the control plane's
+Site checks)
 
 ## Context
 

@@ -10,12 +10,12 @@
 #
 #   hetzner-fsn1  fsn1  compute Site, the default Site
 #   ovh-lim       hel1  compute Site (stand-in; Hetzner Cloud has no Limburg)
-#   netcup-nbg    nbg1  third Site, tainted openupstream.io/third-site
+#   netcup-nbg    nbg1  no compute Site, tainted openupstream.io/quorum-only
 #
 # The node setup is the only place that labels the nodes (ADR-0007): the
 # compute nodes join with openupstream.io/compute-site=true (the first also
 # openupstream.io/default-site=true), the third with the taint
-# openupstream.io/third-site=true:NoSchedule, and every node without a
+# openupstream.io/quorum-only=true:NoSchedule, and every node without a
 # description gets one (openupstream.io/site-description) once it has
 # joined. install-multi-node.sh only checks them. k3s sets labels only when
 # a node first registers: a node that already runs k3s keeps its own.
@@ -146,7 +146,7 @@ COMPUTE="--node-label openupstream.io/compute-site=true --node-label openupstrea
 install_k3s "${SITES[0]}" "$FIRST" --cluster-init $COMPUTE --node-label openupstream.io/default-site=true
 install_k3s "${SITES[1]}" "${IPS[1]}" --server "https://$FIRST:6443" $COMPUTE
 install_k3s "${SITES[2]}" "${IPS[2]}" --server "https://$FIRST:6443" \
-  --node-taint openupstream.io/third-site=true:NoSchedule
+  --node-taint openupstream.io/quorum-only=true:NoSchedule
 
 "${SSH[@]}" "root@$FIRST" cat /etc/rancher/k3s/k3s.yaml |
   sed "s/127.0.0.1/$FIRST/; s/: default$/: $PREFIX/" >"$STATE/kubeconfig"

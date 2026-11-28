@@ -83,4 +83,4 @@ controller:
   type: daemonset
   # Every node: Garage runs on the non-compute Sites too.
   tolerations:
-    - {key: openupstream.io/third-site, operator: Exists, effect: NoSchedule}
+    - {key: openupstream.io/quorum-only, operator: Exists, effect: NoSchedule}
