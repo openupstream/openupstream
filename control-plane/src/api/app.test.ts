@@ -129,6 +129,8 @@ const podLogs = new Map<string, string[]>();
 
 /** What the fake Kubernetes reports per Cluster name; a string is an error. */
 const clusters = new Map<string, ClusterStatus | string>();
+/** Pods still waiting for their in-place resize, by Cluster; a string is an error. */
+const podsResizing = new Map<string, number | string>();
 
 /** TopoLVM's free bytes per node in the fake Kubernetes (undefined: no TopoLVM), the nodes' Sites, and each Cluster's volume nodes. */
 let storageCapacity: Map<string, number> | undefined;
@@ -166,6 +168,10 @@ const kube: ControlPlaneKube = {
     storageCapacity: async () => ok(storageCapacity),
     volumeNodes: async (_namespace, name) => ok(volumeNodes.get(name) ?? []),
     nodeFree: async (node) => ok(nodeFree.get(node)),
+    podsResizing: async (_namespace, name) => {
+        const resizing = podsResizing.get(name) ?? 0;
+        return typeof resizing === 'string' ? err(resizing) : ok(resizing);
+    },
     growVolumes: async () => ok([]),
     readRecoveryWindow: async (_namespace, name) => {
         const window = recoveryWindows.get(name);
@@ -1197,6 +1203,11 @@ describe('Databases', () => {
             ((await (await call('GET', `/v1/projects/${projectId}/databases/${database.id}`, 'alice')).json()) as DatabaseDetails).state;
         clusters.set(`db-${database.id}`, { instances: 2, readyInstances: 2, ready: true });
         assert.equal(await state(), 'ready');
+        podsResizing.set(`db-${database.id}`, 1);
+        assert.equal(await state(), 'resizing', 'a pod still waits for its in-place resize');
+        podsResizing.set(`db-${database.id}`, 'connect ETIMEDOUT');
+        assert.equal(await state(), 'unknown');
+        podsResizing.delete(`db-${database.id}`);
         clusters.set(`db-${database.id}`, { instances: 2, readyInstances: 1, ready: false });
         assert.equal(await state(), 'degraded');
         clusters.set(`db-${database.id}`, 'connect ETIMEDOUT');

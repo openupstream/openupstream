@@ -2,6 +2,8 @@
 # Server-side apply is a PATCH that creates missing objects, so every applied
 # kind needs both `patch` and `create`. Nothing here may delete: removing a
 # Database is the control plane's explicit step (ARCHITECTURE.md, decision 48).
+# Clusters are also listed: a running one keeps its `shared_buffers` through
+# a grow (decision 152), so the pass reads what each asks for now.
 #
 # Secrets are cluster-wide because Project namespaces are created at run
 # time and RBAC cannot select namespaces by name pattern. The same goes for
@@ -35,6 +37,9 @@ rules:
   - apiGroups: [postgresql.cnpg.io]
     resources: [clusters, poolers, scheduledbackups]
     verbs: [create, patch]
+  - apiGroups: [postgresql.cnpg.io]
+    resources: [clusters]
+    verbs: [list]
   - apiGroups: [barmancloud.cnpg.io]
     resources: [objectstores]
     verbs: [create, patch]

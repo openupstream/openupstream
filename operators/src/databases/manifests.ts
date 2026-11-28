@@ -101,6 +101,65 @@ export const POOLER_LOGIN_RETRY = { server_login_retry: '1' } as const;
 export const PRIMARY_RESTART = { primaryUpdateMethod: 'restart', smartShutdownTimeout: 30 } as const;
 
 /**
+ * A grow of memory, and of the CPU share that follows it, resizes the
+ * running pods (decision 152): no restart, no switchover. CloudNativePG
+ * recreates them as before where Kubernetes cannot resize in place, a
+ * lower memory limit among it.
+ */
+export const RESIZE_IN_PLACE = { resourcesUpdateStrategy: 'inPlace' } as const;
+
+/** The application database and its owner, as CloudNativePG names them. */
+const APP_DATABASE = 'app';
+
+/**
+ * Run once in the application database when a Cluster is created.
+ * CloudNativePG 1.31 no longer lets every role connect to it, and a `read`
+ * or `write` role (ROLE_GRANTS) neither owns it nor inherits from its
+ * owner, so the predefined roles they are members of get CONNECT.
+ */
+export const POST_INIT_SQL = ['CREATE EXTENSION IF NOT EXISTS vector', `GRANT CONNECT ON DATABASE ${APP_DATABASE} TO pg_read_all_data, pg_write_all_data`] as const;
+
+/** What a Database's Cluster asks for now, read from Kubernetes; a field it does not state, or states in another form, is absent. */
+export interface LiveCluster {
+    readonly memoryMb?: number;
+    readonly sharedBuffersMb?: number;
+}
+
+const numberIn = (value: unknown, unit: string): number | undefined => {
+    const match = typeof value === 'string' ? new RegExp(`^(\\d+)${unit}$`).exec(value) : null;
+    return match === null ? undefined : Number(match[1]);
+};
+
+/** The fields of a Cluster, as this module writes them, that the next one depends on. */
+export const liveClusterOf = (cluster: Readonly<Record<string, unknown>>): LiveCluster => {
+    const spec = cluster['spec'] as Cluster['spec'] | undefined;
+    const memoryMb = numberIn(spec?.resources?.limits?.['memory'], 'Mi');
+    const sharedBuffersMb = numberIn(spec?.postgresql?.parameters?.['shared_buffers'], 'MB');
+    return {
+        ...(memoryMb === undefined ? {} : { memoryMb }),
+        ...(sharedBuffersMb === undefined ? {} : { sharedBuffersMb }),
+    };
+};
+
+/**
+ * `shared_buffers` is a quarter of the memory, but Postgres takes a new
+ * value only with a restart, which a grow in place must not cause (decision
+ * 152). So a running Cluster keeps its value, and gets the quarter of its
+ * memory when its instances restart anyway, for less memory. Not with a new
+ * image, which restarts them too: CloudNativePG refuses an image and a
+ * configuration change in one update where the primary is switched over,
+ * and it is not tried where it is restarted, as here. Never more than the
+ * quarter, so a value that is too large is corrected.
+ */
+export const sharedBuffersMbFor = (database: Pick<Database, 'memoryMb'>, live?: LiveCluster): number => {
+    const quarter = Math.floor(database.memoryMb / 4);
+    if (live?.memoryMb === undefined || live.sharedBuffersMb === undefined) {
+        return quarter;
+    }
+    return database.memoryMb < live.memoryMb ? quarter : Math.min(live.sharedBuffersMb, quarter);
+};
+
+/**
  * What a caller's role is granted at each level (decision 126): Postgres's
  * predefined roles for reading and writing every table, or membership in
  * `app`. An `owner` role also sets `app` as its own default role, through
@@ -280,7 +339,7 @@ const objectStoreFor = (meta: ObjectMeta, config: DatabaseConfig): ObjectStoreMa
     },
 });
 
-const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig, roles: readonly DatabaseRoleRow[]): ClusterManifest => ({
+const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig, roles: readonly DatabaseRoleRow[], live?: LiveCluster): ClusterManifest => ({
     apiVersion: 'postgresql.cnpg.io/v1',
     kind: 'Cluster',
     metadata: meta,
@@ -288,6 +347,7 @@ const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig
         instances: instancesFor(config.layout).database,
         imageName: config.postgresImage,
         ...PRIMARY_RESTART,
+        ...RESIZE_IN_PLACE,
         // Pods, Services and PVCs carry the labels too, so usage can be
         // attributed to the Database.
         inheritedMetadata: { labels: inheritedLabels(meta) },
@@ -318,7 +378,7 @@ const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig
         },
         postgresql: {
             // Postgres' default of 128 MB would be half the memory floor.
-            parameters: { shared_buffers: `${Math.floor(database.memoryMb / 4)}MB` },
+            parameters: { shared_buffers: `${sharedBuffersMbFor(database, live)}MB` },
         },
         storage: {
             storageClass: config.storageClass,
@@ -326,7 +386,7 @@ const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig
             resizeInUseVolumes: true,
         },
         bootstrap: {
-            initdb: { postInitApplicationSQL: ['CREATE EXTENSION IF NOT EXISTS vector'] },
+            initdb: { postInitApplicationSQL: [...POST_INIT_SQL] },
         },
         ...(roles.length === 0 ? {} : { managed: { roles: roles.map(managedRoleFor) } }),
         plugins: [
@@ -465,6 +525,7 @@ export function restoredDatabaseManifests(
     config: DatabaseConfig,
     source: RestoreSource,
     roles: readonly DatabaseRoleRow[] = [],
+    live?: LiveCluster,
 ): Result<DatabaseManifests, RestoreError[]> {
     const checks: [boolean, RestoreError][] = [
         [UUID.test(source.database.id), { kind: 'invalid-id', field: 'source.databaseId', value: source.database.id }],
@@ -479,7 +540,7 @@ export function restoredDatabaseManifests(
         ],
     ];
     const sourceErrors = checks.filter(([valid]) => !valid).map(([, error]) => error);
-    const result = databaseManifests(project, database, config, roles);
+    const result = databaseManifests(project, database, config, roles, live);
     const errors = [...(result.ok ? [] : result.error), ...sourceErrors];
     if (!result.ok || errors.length > 0) {
         return err(errors);
@@ -513,12 +574,17 @@ export function restoredDatabaseManifests(
     });
 }
 
-/** The Kubernetes objects that run `database` with the callers' `roles`, or every reason it cannot run. */
+/**
+ * The Kubernetes objects that run `database` with the callers' `roles`, or
+ * every reason it cannot run. `live` is its Cluster as it is now, absent
+ * for a new one.
+ */
 export function databaseManifests(
     project: Project,
     database: Database,
     config: DatabaseConfig,
     roles: readonly DatabaseRoleRow[] = [],
+    live?: LiveCluster,
 ): Result<DatabaseManifests, DatabaseManifestError[]> {
     const errors = validate(project, database, roles);
     if (errors.length > 0) {
@@ -530,7 +596,7 @@ export function databaseManifests(
     const cluster = clusterName(database);
     return ok({
         objectStore: objectStoreFor(meta(cluster), config),
-        cluster: clusterFor(meta(cluster), database, config, roles),
+        cluster: clusterFor(meta(cluster), database, config, roles, live),
         pooler: poolerFor(meta(poolerName(database)), cluster, config),
         scheduledBackup: scheduledBackupFor(meta(cluster), config),
     });

@@ -94,9 +94,13 @@ oup pg resize main --storage 20
 ```
 
 - **Storage** only grows. It grows online, without a restart.
-- **Memory** restarts the standby, then the primary. Writes pause for
-  seconds; plan for about two minutes in all. The guaranteed CPU changes
-  with it, a quarter core per GB.
+- **More memory** needs no restart: both instances get it while they
+  run, connections stay open, and the guaranteed CPU grows with it, a
+  quarter core per GB. Postgres's `shared_buffers` keeps its size until
+  the next restart; until then the added memory is used as the operating
+  system's file cache.
+- **Less memory** restarts the standby, then the primary. Writes pause for
+  seconds; plan for about a minute in all.
 - The Database reads `resizing` until both instances have the new size.
 
 ## Storage that grows by itself

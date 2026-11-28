@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { millicoresOf, podCpuRequest, podMemoryRequest, quantityIn, stateOf } from './kube.js';
+import { isResizing, millicoresOf, podCpuRequest, podMemoryRequest, quantityIn, stateOf } from './kube.js';
 
 const healthy = { instances: 2, readyInstances: 2, ready: true, memoryMb: 512, storageGb: 5 };
 const wanted = { memoryMb: 512, storageGb: 5 };
@@ -57,4 +57,26 @@ test("a pod's CPU request as the scheduler counts it", () => {
     const sidecar = { ...container('200m'), restartPolicy: 'Always' };
     assert.equal(podCpuRequest({ spec: { containers: [container('100m')], initContainers: [sidecar] } }), 300, 'a sidecar runs with the containers');
     assert.equal(podCpuRequest({ spec: { containers: [container('100m')], initContainers: [sidecar, container('500m')] } }), 700, 'an init container after a sidecar runs next to it');
+});
+
+test('an instance pod is resizing until its Postgres container runs with the wanted memory', () => {
+    const pod = (limit: string | undefined, ...conditions: { type: string; status: string }[]) => ({
+        status: {
+            conditions,
+            containerStatuses: [
+                { name: 'postgres', ...(limit === undefined ? {} : { resources: { limits: { memory: limit } } }) },
+                { name: 'plugin-barman-cloud', resources: { limits: { memory: '64Mi' } } },
+            ],
+        },
+    });
+    assert.equal(isResizing(pod('2Gi', { type: 'Ready', status: 'True' }), 2048), false, 'the form the kubelet reports');
+    assert.equal(isResizing(pod('2048Mi'), 2048), false);
+    assert.equal(isResizing(pod('512Mi'), 2048), true, 'right after a grow: the old limit and no condition yet');
+    assert.equal(isResizing(pod('512Mi', { type: 'PodResizePending', status: 'True' }), 2048), true, 'deferred: the node has no room now');
+    assert.equal(isResizing(pod('2Gi', { type: 'PodResizeInProgress', status: 'True' }), 2048), true);
+    assert.equal(isResizing(pod('2Gi', { type: 'PodResizeInProgress', status: 'False' }), 2048), false);
+    assert.equal(isResizing(pod(undefined), 2048), false, 'no limit reported: by its conditions');
+    assert.equal(isResizing(pod('1.5Gi'), 2048), false, 'a limit in a form that is not read: by its conditions too');
+    assert.equal(isResizing(pod(undefined, { type: 'PodResizePending', status: 'True' }), 2048), true);
+    assert.equal(isResizing({}, 2048), false);
 });

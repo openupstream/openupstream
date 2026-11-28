@@ -110,7 +110,8 @@ oup site deploy dist --bucket my-site
   oldest base backup and at least 5 minutes in the past (WAL reaches the
   archive up to that late).
 - `oup pg resize <name> [--memory <MB>] [--storage <GB>] [--max-storage <GB> | --no-max-storage] [--auto-grow | --no-auto-grow] [--no-wait]`:
-  storage only grows, online; a new memory size restarts the two instances
+  storage only grows, online; more memory is given to the running
+  instances without a restart, less memory restarts the two instances
   one after the other, the standby first (writes pause for seconds). Waits
   until the Database is ready again, unless `--no-wait`; a change of the
   growth settings alone takes effect at once.

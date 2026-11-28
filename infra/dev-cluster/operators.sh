@@ -23,7 +23,7 @@ source ./lib.sh
 load_layout
 
 CERT_MANAGER=v1.21.2
-CNPG=1.30.1
+CNPG=1.31.0-rc1
 BARMAN_CLOUD=v0.15.1
 TOPOLVM_CHART=17.3.1
 ROOT=$(git rev-parse --show-toplevel)

@@ -434,7 +434,18 @@ export function createApi(deps: ApiDeps): Hono<Env> {
             deps.log?.({ msg: 'cannot read Cluster', database: database.id, error: cluster.error });
             return 'unknown';
         }
-        return stateOf(cluster.value, database);
+        const state = stateOf(cluster.value, database);
+        if (state !== 'ready') {
+            return state;
+        }
+        // A grow resizes the running pods (decision 152): the Cluster has
+        // the new size at once, its pods once their node gave it to them.
+        const resizing = await kube.podsResizing(projectNamespace(database.projectId), clusterName(database), database.memoryMb);
+        if (!resizing.ok) {
+            deps.log?.({ msg: "cannot read the Cluster's pods", database: database.id, error: resizing.error });
+            return 'unknown';
+        }
+        return resizing.value > 0 ? 'resizing' : 'ready';
     };
     /**
      * Whether the compute Sites have room for the Database at `wanted`

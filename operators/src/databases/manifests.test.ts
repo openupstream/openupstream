@@ -8,9 +8,12 @@ import {
     BARMAN_CLOUD_PLUGIN,
     type DatabaseConfig,
     type DatabaseManifests,
+    type LiveCluster,
     databaseConfigProblem,
     databaseManifests,
+    liveClusterOf,
     restoredDatabaseManifests,
+    sharedBuffersMbFor,
 } from './manifests.js';
 
 const project: Project = {
@@ -153,9 +156,11 @@ test('storage is a resizable TopoLVM volume of the configured size', () => {
     assert.deepEqual(errorsFor({ storageGb: 0 }), [{ kind: 'invalid-storage', storageGb: 0 }]);
 });
 
-test('pgvector is created in the application database', () => {
+test('pgvector is created in the application database, and the read and write roles may connect to it', () => {
     assert.deepEqual(manifestsFor().cluster.spec.bootstrap?.initdb?.postInitApplicationSQL, [
         'CREATE EXTENSION IF NOT EXISTS vector',
+        // CloudNativePG 1.31 revokes CONNECT from PUBLIC; `read` and `write` roles are members of these.
+        'GRANT CONNECT ON DATABASE app TO pg_read_all_data, pg_write_all_data',
     ]);
 });
 
@@ -412,4 +417,32 @@ test('a DatabaseConfig without a valid backup prefix is refused, so clusters nev
         const backup = { ...config.backup, prefix } as unknown as DatabaseConfig['backup'];
         assert.match(databaseConfigProblem({ ...config, backup }) ?? '', /backup.prefix must be the cluster id/, String(prefix));
     }
+});
+
+test('a grow resizes the pods in place', () => {
+    assert.equal(manifestsFor().cluster.spec.resourcesUpdateStrategy, 'inPlace');
+});
+
+test('shared_buffers stays through a grow and follows the memory when less of it restarts the instances', () => {
+    const live: LiveCluster = { memoryMb: 1024, sharedBuffersMb: 256 };
+    const buffers = (memoryMb: number, now?: LiveCluster) => sharedBuffersMbFor({ memoryMb }, now);
+    assert.equal(buffers(1024), 256, 'a new Database: a quarter');
+    assert.equal(buffers(4096, live), 256, 'a grow: no new value, so no restart');
+    assert.equal(buffers(4096, { ...live, memoryMb: 4096 }), 256, 'and it stays on the passes after');
+    assert.equal(buffers(2048, { ...live, memoryMb: 4096 }), 512, 'less memory restarts the instances: the quarter');
+    assert.equal(buffers(512, live), 128, 'a shrink below the old size');
+    assert.equal(buffers(1024, { ...live, sharedBuffersMb: 512 }), 256, 'never more than the quarter');
+    assert.equal(buffers(4096, { memoryMb: 1024 }), 1024, 'a Cluster that states none gets the quarter');
+
+    const grown = databaseManifests(project, { ...database, memoryMb: 4096 }, config, [], live);
+    assert.ok(grown.ok);
+    assert.equal(grown.value.cluster.spec.postgresql?.parameters?.['shared_buffers'], '256MB');
+    assert.equal(grown.value.cluster.spec.resources?.limits?.['memory'], '4096Mi');
+});
+
+test('what a Cluster asks for now is read from the form the manifests write', () => {
+    const { cluster } = manifestsFor({ memoryMb: 1024 });
+    assert.deepEqual(liveClusterOf(cluster), { memoryMb: 1024, sharedBuffersMb: 256 });
+    assert.deepEqual(liveClusterOf({ spec: { resources: { limits: { memory: '1Gi' } }, postgresql: { parameters: { shared_buffers: '1GB' } } } }), {}, 'other units: absent');
+    assert.deepEqual(liveClusterOf({}), {});
 });
