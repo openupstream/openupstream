@@ -365,11 +365,13 @@ const POSTGRES_CONTAINER = 'postgres';
  * container reports another memory limit, or the kubelet says a resize is
  * under way. The limit is compared because, right after a grow, a pod has
  * neither its new spec nor a condition for a moment (dev cluster,
- * 2026-11-28). A container that reports no limit counts by its conditions.
+ * 2026-11-28). A container that reports no limit, or one in a form
+ * `bytesOf` does not read, counts by its conditions.
  */
 export const isResizing = (pod: Pick<PodObject, 'status'>, memoryMb: number): boolean => {
     const limit = pod.status?.containerStatuses?.find((container) => container.name === POSTGRES_CONTAINER)?.resources?.limits?.['memory'];
-    const differs = limit !== undefined && bytesOf(limit) !== memoryMb * 1024 ** 2;
+    const bytes = limit === undefined ? undefined : bytesOf(limit);
+    const differs = bytes !== undefined && bytes !== memoryMb * 1024 ** 2;
     return differs || (pod.status?.conditions ?? []).some((condition) => RESIZE_CONDITIONS.includes(condition.type) && condition.status === 'True');
 };
 

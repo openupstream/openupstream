@@ -423,17 +423,16 @@ test('a grow resizes the pods in place', () => {
     assert.equal(manifestsFor().cluster.spec.resourcesUpdateStrategy, 'inPlace');
 });
 
-test('shared_buffers stays through a grow and follows the memory when the instances restart anyway', () => {
-    const live: LiveCluster = { memoryMb: 1024, sharedBuffersMb: 256, image: config.postgresImage };
-    const buffers = (memoryMb: number, now?: LiveCluster, image = config.postgresImage) => sharedBuffersMbFor({ memoryMb }, { postgresImage: image }, now);
+test('shared_buffers stays through a grow and follows the memory when less of it restarts the instances', () => {
+    const live: LiveCluster = { memoryMb: 1024, sharedBuffersMb: 256 };
+    const buffers = (memoryMb: number, now?: LiveCluster) => sharedBuffersMbFor({ memoryMb }, now);
     assert.equal(buffers(1024), 256, 'a new Database: a quarter');
     assert.equal(buffers(4096, live), 256, 'a grow: no new value, so no restart');
     assert.equal(buffers(4096, { ...live, memoryMb: 4096 }), 256, 'and it stays on the passes after');
     assert.equal(buffers(2048, { ...live, memoryMb: 4096 }), 512, 'less memory restarts the instances: the quarter');
     assert.equal(buffers(512, live), 128, 'a shrink below the old size');
-    assert.equal(buffers(4096, { ...live, memoryMb: 4096 }, 'ghcr.io/openupstream/postgres@sha256:1111'), 1024, 'a new image restarts them too');
     assert.equal(buffers(1024, { ...live, sharedBuffersMb: 512 }), 256, 'never more than the quarter');
-    assert.equal(buffers(4096, { memoryMb: 1024, image: config.postgresImage }), 1024, 'a Cluster that states none gets the quarter');
+    assert.equal(buffers(4096, { memoryMb: 1024 }), 1024, 'a Cluster that states none gets the quarter');
 
     const grown = databaseManifests(project, { ...database, memoryMb: 4096 }, config, [], live);
     assert.ok(grown.ok);
@@ -443,7 +442,7 @@ test('shared_buffers stays through a grow and follows the memory when the instan
 
 test('what a Cluster asks for now is read from the form the manifests write', () => {
     const { cluster } = manifestsFor({ memoryMb: 1024 });
-    assert.deepEqual(liveClusterOf(cluster), { memoryMb: 1024, sharedBuffersMb: 256, image: config.postgresImage });
+    assert.deepEqual(liveClusterOf(cluster), { memoryMb: 1024, sharedBuffersMb: 256 });
     assert.deepEqual(liveClusterOf({ spec: { resources: { limits: { memory: '1Gi' } }, postgresql: { parameters: { shared_buffers: '1GB' } } } }), {}, 'other units: absent');
     assert.deepEqual(liveClusterOf({}), {});
 });

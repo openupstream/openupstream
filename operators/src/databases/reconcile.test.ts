@@ -236,9 +236,15 @@ test('a grown Database keeps the shared_buffers its Cluster has; the pass reads 
     assert.equal(spec(`db-${invoices.id}`)?.postgresql.parameters.shared_buffers, '128MB', 'no Cluster yet: a quarter of its 512 MB');
 });
 
-test('when the Clusters cannot be listed nothing is applied: a guess would restart grown Databases', async () => {
+test('when the Clusters cannot be listed no Cluster is applied, as a guess would restart grown Databases; the rest is', async () => {
     const { kube, applied } = fakeKube(credentials, [], err({ status: 0, message: 'no answer' }));
     const result = await reconcileDatabases(kube, [{ project, database: orders }], config, options);
-    assert.deepEqual(result, { ok: false, error: { kind: 'kube', error: { status: 0, message: 'no answer' } } });
-    assert.equal(applied.length, 0);
+    assert.ok(result.ok);
+    assert.deepEqual(
+        result.value.failed.map(({ ref, error }) => [ref.kind, error.message]),
+        [['Cluster', 'no answer']],
+    );
+    const kindsApplied = applied.map(({ object }) => object.kind);
+    assert.equal(kindsApplied.includes('Cluster'), false);
+    assert.deepEqual(kindsApplied.slice(-3), ['ObjectStore', 'Pooler', 'ScheduledBackup']);
 });

@@ -14,4 +14,6 @@ typecheck and test run it first.
 
 Both projects are Apache-2.0. Upgrade by replacing the files with the ones of
 the version installed on the cluster, updating this table and fixing whatever
-no longer typechecks.
+no longer typechecks. On a running cluster, upgrade CloudNativePG first
+(`infra/dev-cluster/operators.sh`), then the operators (`platform.sh`): an
+object with a field the installed CRD does not know yet is refused.

@@ -123,7 +123,6 @@ export const POST_INIT_SQL = ['CREATE EXTENSION IF NOT EXISTS vector', `GRANT CO
 export interface LiveCluster {
     readonly memoryMb?: number;
     readonly sharedBuffersMb?: number;
-    readonly image?: string;
 }
 
 const numberIn = (value: unknown, unit: string): number | undefined => {
@@ -139,7 +138,6 @@ export const liveClusterOf = (cluster: Readonly<Record<string, unknown>>): LiveC
     return {
         ...(memoryMb === undefined ? {} : { memoryMb }),
         ...(sharedBuffersMb === undefined ? {} : { sharedBuffersMb }),
-        ...(typeof spec?.imageName === 'string' ? { image: spec.imageName } : {}),
     };
 };
 
@@ -147,16 +145,18 @@ export const liveClusterOf = (cluster: Readonly<Record<string, unknown>>): LiveC
  * `shared_buffers` is a quarter of the memory, but Postgres takes a new
  * value only with a restart, which a grow in place must not cause (decision
  * 152). So a running Cluster keeps its value, and gets the quarter of its
- * memory when its instances restart anyway: for less memory, or a new image.
- * Never more than the quarter, so a value that is too large is corrected.
+ * memory when its instances restart anyway, for less memory. Not with a new
+ * image, which restarts them too: CloudNativePG refuses an image and a
+ * configuration change in one update where the primary is switched over,
+ * and it is not tried where it is restarted, as here. Never more than the
+ * quarter, so a value that is too large is corrected.
  */
-export const sharedBuffersMbFor = (database: Pick<Database, 'memoryMb'>, config: Pick<DatabaseConfig, 'postgresImage'>, live?: LiveCluster): number => {
+export const sharedBuffersMbFor = (database: Pick<Database, 'memoryMb'>, live?: LiveCluster): number => {
     const quarter = Math.floor(database.memoryMb / 4);
     if (live?.memoryMb === undefined || live.sharedBuffersMb === undefined) {
         return quarter;
     }
-    const restartsAnyway = database.memoryMb < live.memoryMb || live.image !== config.postgresImage;
-    return restartsAnyway ? quarter : Math.min(live.sharedBuffersMb, quarter);
+    return database.memoryMb < live.memoryMb ? quarter : Math.min(live.sharedBuffersMb, quarter);
 };
 
 /**
@@ -378,7 +378,7 @@ const clusterFor = (meta: ObjectMeta, database: Database, config: DatabaseConfig
         },
         postgresql: {
             // Postgres' default of 128 MB would be half the memory floor.
-            parameters: { shared_buffers: `${sharedBuffersMbFor(database, config, live)}MB` },
+            parameters: { shared_buffers: `${sharedBuffersMbFor(database, live)}MB` },
         },
         storage: {
             storageClass: config.storageClass,

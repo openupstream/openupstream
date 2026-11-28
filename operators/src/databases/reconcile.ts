@@ -180,12 +180,13 @@ export async function reconcileDatabases(
         return err({ kind: 'incomplete-backup-credentials', namespace, name, missingKeys });
     }
     // Read before planning: without it every Cluster would be given the
-    // `shared_buffers` of a new one, and a grown Database would restart.
+    // `shared_buffers` of a new one, and a grown Database would restart. So
+    // when they cannot be listed, no Cluster is applied in this pass; the
+    // rest (namespaces, credentials, tunnels, Poolers) is.
     const clusters = await kube.listObjects('postgresql.cnpg.io/v1', 'Cluster', `${LABELS.managedBy}=${MANAGED_BY}`);
-    if (!clusters.ok) {
-        return err({ kind: 'kube', error: clusters.error });
-    }
-    const live = new Map(clusters.value.map((cluster) => [liveClusterKey(cluster.metadata.namespace ?? '', cluster.metadata.name), liveClusterOf(cluster)]));
+    const live = new Map(
+        (clusters.ok ? clusters.value : []).map((cluster) => [liveClusterKey(cluster.metadata.namespace ?? '', cluster.metadata.name), liveClusterOf(cluster)]),
+    );
     const plan = planDatabases(rows, config, credentials.value, options.tunnel, live);
     const dryRun = options.dryRun ?? false;
 
@@ -195,7 +196,8 @@ export async function reconcileDatabases(
     const applyChain = async (chain: ApplyChain) => {
         const results: { ref: ObjectRef; result: Result<void, KubeError> }[] = [];
         for (const object of chain) {
-            results.push({ ref: refOf(object), result: await kube.apply(object, { dryRun }) });
+            const held = object.kind === 'Cluster' && !clusters.ok;
+            results.push({ ref: refOf(object), result: held ? err(clusters.error) : await kube.apply(object, { dryRun }) });
         }
         return results;
     };

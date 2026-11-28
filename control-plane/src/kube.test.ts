@@ -76,6 +76,7 @@ test('an instance pod is resizing until its Postgres container runs with the wan
     assert.equal(isResizing(pod('2Gi', { type: 'PodResizeInProgress', status: 'True' }), 2048), true);
     assert.equal(isResizing(pod('2Gi', { type: 'PodResizeInProgress', status: 'False' }), 2048), false);
     assert.equal(isResizing(pod(undefined), 2048), false, 'no limit reported: by its conditions');
+    assert.equal(isResizing(pod('1.5Gi'), 2048), false, 'a limit in a form that is not read: by its conditions too');
     assert.equal(isResizing(pod(undefined, { type: 'PodResizePending', status: 'True' }), 2048), true);
     assert.equal(isResizing({}, 2048), false);
 });
